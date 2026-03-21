@@ -1,0 +1,25 @@
+{
+  "name": "playshare-server",
+  "version": "1.0.0",
+  "description": "PlayShare WebSocket signaling server for synchronized streaming",
+  "main": "server.js",
+  "scripts": {
+    "sync-streaming": "node scripts/sync-streaming.js",
+    "build:content": "esbuild content/src/entry.js --bundle --outfile=content/content.bundle.js --format=iife --platform=browser --target=chrome109 --legal-comments=none --charset=utf8",
+    "build:content:watch": "esbuild content/src/entry.js --bundle --outfile=content/content.bundle.js --format=iife --platform=browser --target=chrome109 --legal-comments=none --charset=utf8 --watch",
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node test-sync.js",
+    "icons": "node scripts/build-extension-icons.mjs",
+    "postinstall": "mkdir -p lib && cp node_modules/@supabase/supabase-js/dist/umd/supabase.js lib/supabase.min.js 2>/dev/null || true"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "ws": "^8.16.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "sharp": "^0.33.5"
+  }
+}

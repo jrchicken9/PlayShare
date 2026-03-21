@@ -1,0 +1,109 @@
+{
+  "manifest_version": 3,
+  "name": "PlayShare",
+  "version": "1.0.0",
+  "description": "Watch Netflix, Disney+, Prime Video, Crave and more in perfect sync with friends — with built-in chat.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "PlayShare"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.netflix.com/*",
+        "*://*.disneyplus.com/*",
+        "*://*.primevideo.com/*",
+        "*://*.amazon.com/*",
+        "*://*.amazon.ca/*",
+        "*://*.atv-ext.amazon.com/*",
+        "*://*.media-amazon.com/*",
+        "*://*.crave.ca/*",
+        "*://*.hulu.com/*",
+        "*://*.hbomax.com/*",
+        "*://*.max.com/*",
+        "*://*.peacocktv.com/*",
+        "*://*.paramountplus.com/*",
+        "*://*.appletv.apple.com/*",
+        "*://*.tv.apple.com/*",
+        "*://*.youtube.com/*",
+        "*://youtu.be/*"
+      ],
+      "js": [
+        "shared/streaming-hosts.generated.js",
+        "content/content.bundle.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "permissions": [
+    "storage",
+    "tabs",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://*.supabase.co/*",
+    "*://*.netflix.com/*",
+    "*://*.disneyplus.com/*",
+    "*://*.primevideo.com/*",
+    "*://*.amazon.com/*",
+    "*://*.amazon.ca/*",
+    "*://*.atv-ext.amazon.com/*",
+    "*://*.media-amazon.com/*",
+    "*://*.crave.ca/*",
+    "*://*.hulu.com/*",
+    "*://*.hbomax.com/*",
+    "*://*.max.com/*",
+    "*://*.peacocktv.com/*",
+    "*://*.paramountplus.com/*",
+    "*://*.appletv.apple.com/*",
+    "*://*.tv.apple.com/*",
+    "*://*.youtube.com/*",
+    "*://youtu.be/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "sidebar/sidebar.html",
+        "shared/brand-mark.png",
+        "icons/*",
+        "join/join.html",
+        "join/join.js"
+      ],
+      "matches": [
+        "*://*.netflix.com/*",
+        "*://*.disneyplus.com/*",
+        "*://*.primevideo.com/*",
+        "*://*.amazon.com/*",
+        "*://*.amazon.ca/*",
+        "*://*.atv-ext.amazon.com/*",
+        "*://*.media-amazon.com/*",
+        "*://*.crave.ca/*",
+        "*://*.hulu.com/*",
+        "*://*.hbomax.com/*",
+        "*://*.max.com/*",
+        "*://*.peacocktv.com/*",
+        "*://*.paramountplus.com/*",
+        "*://*.appletv.apple.com/*",
+        "*://*.tv.apple.com/*",
+        "*://*.youtube.com/*",
+        "*://youtu.be/*"
+      ]
+    }
+  ]
+}

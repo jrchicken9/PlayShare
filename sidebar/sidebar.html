@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PlayShare Chat</title>
+  <link rel="stylesheet" href="sidebar.css" />
+</head>
+<body>
+  <div class="ws-sidebar">
+
+    <!-- Header -->
+    <div class="ws-sidebar-header">
+      <div class="ws-header-top">
+        <div class="ws-sidebar-brand" aria-label="PlayShare">
+          <div class="ws-brand-mark" aria-hidden="true">
+            <img
+              class="ws-brand-mark-svg"
+              src="../shared/brand-mark.png"
+              width="40"
+              height="40"
+              alt=""
+              decoding="async"
+            />
+          </div>
+          <div class="ws-brand-text">
+            <div class="ws-brand-name" aria-hidden="true">
+              <span class="ws-brand-play">Play</span><span class="ws-brand-share">Share</span>
+            </div>
+            <p class="ws-brand-tagline">Watch together</p>
+          </div>
+        </div>
+        <div class="ws-connection-badge-wrap">
+          <div
+            class="ws-sync-badge ws-sync-idle"
+            id="sSyncBadge"
+            role="status"
+            aria-live="polite"
+            aria-label="Connection status"
+            title="Not in a room"
+          >
+            <span class="ws-connection-badge-label" id="sConnectionBadgeLabel">No room</span>
+          </div>
+          <div
+            class="ws-connection-detail hidden"
+            id="sConnectionDetail"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="sConnectionDetailHeading"
+          >
+            <div class="ws-connection-detail-top">
+              <span class="ws-connection-detail-heading" id="sConnectionDetailHeading"></span>
+              <button type="button" class="ws-connection-detail-close" id="sConnectionDetailClose" aria-label="Close details">×</button>
+            </div>
+            <p class="ws-connection-detail-body" id="sConnectionDetailBody"></p>
+            <button type="button" class="ws-connection-detail-members" id="sConnectionDetailMembers">
+              Open Sync Status (Members)
+            </button>
+          </div>
+        </div>
+      </div>
+      <button type="button" class="ws-invite-cta ws-invite-ghost" id="sInviteBtn" title="Copy invite link">
+        <span class="ws-invite-cta-icon-wrap" aria-hidden="true">
+          <svg class="ws-invite-cta-glyph" width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="8.5" cy="7" r="4" stroke="currentColor" stroke-width="2"/>
+            <path d="M20 8v6M23 11h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <span class="ws-invite-cta-copy">
+          <span class="ws-invite-cta-title">Invite friends</span>
+          <span class="ws-invite-cta-hint" id="sInviteHint">Join a room to share a link</span>
+        </span>
+        <span class="ws-invite-cta-pill" aria-hidden="true">Copy</span>
+      </button>
+    </div>
+
+    <!-- Tabs -->
+    <div class="ws-tabs">
+      <button class="ws-tab active" data-tab="chat">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        Chat
+        <span class="ws-tab-badge hidden" id="chatBadge">0</span>
+      </button>
+      <button class="ws-tab" data-tab="members">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Members
+        <span class="ws-member-count" id="memberCount">0</span>
+      </button>
+    </div>
+
+    <!-- Host-only: play countdown — single compact row; hover for details -->
+    <div
+      class="ws-host-pref-countdown hidden"
+      id="sHostCountdownPref"
+      aria-hidden="true"
+      title="When on, everyone sees a synced 3-2-1 in chat before play goes live."
+    >
+      <div class="ws-countdown-pref-visual" aria-hidden="true">
+        <span class="ws-countdown-pref-chip" data-n="3">3</span>
+        <span class="ws-countdown-pref-chip" data-n="2">2</span>
+        <span class="ws-countdown-pref-chip" data-n="1">1</span>
+        <span class="ws-countdown-pref-play" title="Play">▶</span>
+      </div>
+      <span class="ws-countdown-pref-label">Play countdown</span>
+      <button
+        type="button"
+        class="ws-countdown-pref-switch"
+        id="sCountdownToggle"
+        role="switch"
+        aria-checked="false"
+        aria-label="Play countdown before synced play"
+      >
+        <span class="ws-countdown-pref-thumb" aria-hidden="true"></span>
+      </button>
+    </div>
+
+    <!-- Chat tab -->
+    <div class="ws-tab-content active" id="tabChat">
+      <div class="ws-chat-area">
+      <div class="ws-messages" id="sMessages">
+        <div class="ws-welcome">
+          <div class="ws-welcome-icon">🎬</div>
+          <div class="ws-welcome-text">Watch together, chat together.</div>
+          <div class="ws-welcome-sub">Messages appear here in real time.</div>
+        </div>
+      </div>
+      <div class="ws-countdown-chat-overlay" id="sCountdownOverlay" aria-hidden="true"></div>
+      </div>
+
+      <!-- Reactions bar -->
+      <div class="ws-reactions-bar">
+        <button class="ws-reaction-btn" data-emoji="😂">😂</button>
+        <button class="ws-reaction-btn" data-emoji="😮">😮</button>
+        <button class="ws-reaction-btn" data-emoji="❤️">❤️</button>
+        <button class="ws-reaction-btn" data-emoji="👏">👏</button>
+        <button class="ws-reaction-btn" data-emoji="😭">😭</button>
+        <button class="ws-reaction-btn" data-emoji="🔥">🔥</button>
+        <button class="ws-reaction-btn" data-emoji="💀">💀</button>
+        <button class="ws-reaction-btn" data-emoji="🤯">🤯</button>
+      </div>
+
+      <!-- Typing indicator -->
+      <div class="ws-typing-indicator" id="sTypingIndicator"></div>
+
+      <!-- Input -->
+      <div class="ws-input-area">
+        <input type="text" id="sChatInput" class="ws-chat-input" placeholder="Say something…" maxlength="500" />
+        <button class="ws-send-btn" id="sSendBtn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Members tab -->
+    <div class="ws-tab-content" id="tabMembers">
+      <div class="ws-members-panel" id="sMembersList">
+        <div class="ws-empty-state">No members yet</div>
+      </div>
+
+      <!-- Sync status card -->
+      <div class="ws-sync-card" id="sSyncCard">
+        <div class="ws-sync-card-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M23 4v6h-6M1 20v-6h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Sync Status
+        </div>
+        <div class="ws-sync-info" id="sSyncInfo">Waiting for video…</div>
+        <div class="ws-sync-quality" id="sSyncQuality"></div>
+        <div class="ws-sync-cluster" id="sClusterSync"></div>
+        <div class="ws-platform-info" id="sPlatformInfo"></div>
+      </div>
+
+      <div class="ws-ad-card hidden" id="sAdBreakCard" aria-hidden="true">
+        <div class="ws-ad-card-title">Ad breaks</div>
+        <p class="ws-ad-card-hint" id="sAdBreakHint">Auto-detect on supported sites, or mark manually.</p>
+        <div class="ws-ad-card-actions">
+          <button type="button" class="ws-ad-btn" id="sAdBreakWatching">Watching ad</button>
+          <button type="button" class="ws-ad-btn ws-ad-btn-secondary" id="sAdBreakDone" disabled>Ad finished</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <script src="sidebar.js"></script>
+</body>
+</html>

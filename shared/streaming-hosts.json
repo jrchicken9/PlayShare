@@ -1,0 +1,43 @@
+{
+  "hostSubstrings": [
+    "netflix.com",
+    "disneyplus.com",
+    "primevideo.com",
+    "amazon.com",
+    "amazon.ca",
+    "atv-ext.amazon.com",
+    "media-amazon.com",
+    "crave.ca",
+    "hulu.com",
+    "hbomax.com",
+    "max.com",
+    "peacocktv.com",
+    "paramountplus.com",
+    "appletv.apple.com",
+    "tv.apple.com",
+    "youtube.com",
+    "youtu.be"
+  ],
+  "contentScriptMatches": [
+    "*://*.netflix.com/*",
+    "*://*.disneyplus.com/*",
+    "*://*.primevideo.com/*",
+    "*://*.amazon.com/*",
+    "*://*.amazon.ca/*",
+    "*://*.atv-ext.amazon.com/*",
+    "*://*.media-amazon.com/*",
+    "*://*.crave.ca/*",
+    "*://*.hulu.com/*",
+    "*://*.hbomax.com/*",
+    "*://*.max.com/*",
+    "*://*.peacocktv.com/*",
+    "*://*.paramountplus.com/*",
+    "*://*.appletv.apple.com/*",
+    "*://*.tv.apple.com/*",
+    "*://*.youtube.com/*",
+    "*://youtu.be/*"
+  ],
+  "extraHostPermissions": [
+    "https://*.supabase.co/*"
+  ]
+}

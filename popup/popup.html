@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PlayShare</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="ws-popup">
+    <!-- Header -->
+    <div class="ws-header">
+      <div class="ws-header-main">
+        <div class="ws-popup-brand" aria-label="PlayShare">
+          <div class="ws-brand-mark" aria-hidden="true">
+            <img
+              class="ws-brand-mark-svg"
+              src="../shared/brand-mark.png"
+              width="32"
+              height="32"
+              alt=""
+              decoding="async"
+            />
+          </div>
+          <div class="ws-brand-text">
+            <div class="ws-brand-name" aria-hidden="true">
+              <span class="ws-brand-play">Play</span><span class="ws-brand-share">Share</span>
+            </div>
+            <p class="ws-brand-tagline">Watch together</p>
+          </div>
+        </div>
+        <div class="ws-status" id="wsStatus">
+          <span class="ws-dot" id="wsDot"></span>
+          <span id="wsStatusText">Connecting…</span>
+        </div>
+      </div>
+      <div class="ws-account-bar" id="accountBar">
+        <span id="accountBarText"></span>
+        <button type="button" class="ws-account-bar-action" id="accountBarAction"></button>
+      </div>
+    </div>
+
+    <!-- Auth: simple landing → optional login / signup forms -->
+    <div id="viewAuth" class="hidden">
+      <div id="authLanding" class="ws-auth-landing">
+        <p class="ws-auth-landing-lead">How do you want to continue?</p>
+        <div class="ws-auth-landing-actions">
+          <button type="button" class="ws-btn ws-btn-primary" id="btnShowLoginForm">Log in</button>
+          <button type="button" class="ws-btn ws-btn-ghost" id="btnGuest">Continue as guest</button>
+        </div>
+      </div>
+
+      <div id="authForms" class="hidden">
+        <button type="button" class="ws-account-bar-action ws-account-bar-action--back ws-auth-back" id="btnAuthBack">← Back</button>
+        <div class="ws-auth-tabs">
+          <button type="button" class="ws-auth-tab active" data-auth-tab="login">Sign in</button>
+          <button type="button" class="ws-auth-tab" data-auth-tab="signup">Create account</button>
+        </div>
+        <div id="authLogin" class="ws-auth-form">
+          <div class="ws-section">
+            <label class="ws-label">Email</label>
+            <input type="email" id="authLoginEmail" class="ws-input" placeholder="you@example.com" />
+          </div>
+          <div class="ws-section">
+            <label class="ws-label">Password</label>
+            <input type="password" id="authLoginPassword" class="ws-input" placeholder="••••••••" />
+          </div>
+          <button type="button" class="ws-btn ws-btn-primary" id="btnLogin">Sign in</button>
+        </div>
+        <div id="authSignup" class="ws-auth-form hidden">
+          <div class="ws-section">
+            <label class="ws-label">Display name</label>
+            <input type="text" id="authSignupName" class="ws-input" placeholder="e.g. Alex" maxlength="24" />
+          </div>
+          <div class="ws-section">
+            <label class="ws-label">Email</label>
+            <input type="email" id="authSignupEmail" class="ws-input" placeholder="you@example.com" />
+          </div>
+          <div class="ws-section">
+            <label class="ws-label">Password</label>
+            <input type="password" id="authSignupPassword" class="ws-input" placeholder="Min 6 characters" minlength="6" />
+          </div>
+          <button type="button" class="ws-btn ws-btn-primary" id="btnSignup">Create account</button>
+        </div>
+        <div class="ws-error" id="authError"></div>
+      </div>
+    </div>
+
+    <!-- Not in room -->
+    <div id="viewLobby" class="hidden">
+      <!-- Step 1: required nickname, then pick create vs manual join -->
+      <div id="lobbyStepChoose" class="ws-lobby-step">
+        <p class="ws-lobby-lead">Enter how you’ll appear, then choose an option.</p>
+        <div class="ws-section ws-display-name-section">
+          <label class="ws-label" for="usernameInput">Display name <span class="ws-label-hint">(required)</span></label>
+          <input type="text" id="usernameInput" class="ws-input" placeholder="e.g. Alex" maxlength="24" autocomplete="nickname" />
+        </div>
+        <div class="ws-lobby-mode-actions">
+          <button type="button" class="ws-btn ws-btn-primary" id="btnLobbyPickCreate" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+            Create a room
+          </button>
+          <button type="button" class="ws-btn ws-btn-secondary" id="btnLobbyPickJoin" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M10 17l5-5-5-5M15 12H3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Join a room manually
+          </button>
+        </div>
+      </div>
+
+      <!-- Create path -->
+      <div id="lobbyPanelCreate" class="ws-lobby-step hidden">
+        <button type="button" class="ws-account-bar-action ws-account-bar-action--back ws-lobby-panel-back" id="btnLobbyBackFromCreate">← Back</button>
+        <p class="ws-lobby-panel-lead">You’ll get a room code to share. Friends can open your invite link or enter the code.</p>
+        <div class="ws-section">
+          <label class="ws-label" for="serverUrlInputCreate">Server WebSocket URL</label>
+          <input type="text" id="serverUrlInputCreate" class="ws-input" placeholder="ws://10.0.0.92:8765" autocomplete="off" />
+          <p class="ws-field-hint" id="serverUrlCreateHint">If <code>node server.js</code> runs on <strong>another</strong> computer (e.g. your MacBook), paste the URL shown in that machine’s terminal — not <code>localhost</code> on this PC.</p>
+        </div>
+        <label class="ws-setting-row">
+          <input type="checkbox" id="hostOnlyControl" />
+          <span>Host-only playback</span>
+        </label>
+        <div class="ws-divider ws-divider--tight">
+          <button type="button" class="ws-btn ws-btn-primary" id="btnCreate">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+            Create room
+          </button>
+        </div>
+      </div>
+
+      <!-- Manual join path -->
+      <div id="lobbyPanelJoin" class="ws-lobby-step hidden">
+        <button type="button" class="ws-account-bar-action ws-account-bar-action--back ws-lobby-panel-back" id="btnLobbyBackFromJoin">← Back</button>
+        <p class="ws-lobby-panel-lead">Enter the room code (and server if your host sent one).</p>
+        <div class="ws-section ws-join-section">
+          <label class="ws-label" for="roomCodeInput">Room code</label>
+          <input type="text" id="roomCodeInput" class="ws-input ws-input-code" placeholder="ABC123" maxlength="6" autocomplete="off" />
+        </div>
+        <div class="ws-section">
+          <label class="ws-label" for="serverUrlInput">Server URL <span class="ws-label-hint">(on another computer: use this PC’s LAN IP, e.g. ws://192.168.x.x:8765 — not localhost)</span></label>
+          <input type="text" id="serverUrlInput" class="ws-input" placeholder="ws://10.0.0.92:8765" autocomplete="off" />
+        </div>
+        <button type="button" class="ws-btn ws-btn-ghost ws-btn-paste" id="btnPasteInvite" title="Paste from clipboard (after copying from join page)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2" stroke="currentColor" stroke-width="2"/><rect x="8" y="2" width="8" height="4" rx="1" stroke="currentColor" stroke-width="2"/></svg>
+          Paste invite
+        </button>
+        <button type="button" class="ws-btn ws-btn-secondary" id="btnJoin">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M10 17l5-5-5-5M15 12H3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Join room
+        </button>
+      </div>
+
+      <div class="ws-error" id="lobbyError"></div>
+    </div>
+
+    <!-- In room -->
+    <div id="viewRoom" class="hidden">
+      <div class="ws-room-header">
+        <div class="ws-room-info">
+          <span class="ws-room-label">Room</span>
+          <span class="ws-room-code" id="displayRoomCode">------</span>
+          <button class="ws-copy-btn" id="btnCopyCode" title="Copy room code">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" stroke="currentColor" stroke-width="2"/></svg>
+          </button>
+          <button class="ws-copy-btn ws-copy-link" id="btnCopyLink" title="Copy join link">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" stroke="currentColor" stroke-width="2"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" stroke="currentColor" stroke-width="2"/></svg>
+          </button>
+        </div>
+        <div class="ws-host-badge" id="hostBadge">HOST</div>
+        <span class="ws-host-only-badge" id="hostOnlyBadge" title="Only the host can control playback">Host controls only</span>
+      </div>
+        <p class="ws-room-overlay-hint">Chat, invites &amp; sync run in the <strong>sidebar</strong> on your watch tab.</p>
+
+      <div class="ws-members-section ws-popup-deferred">
+        <div class="ws-section-title">Watching together</div>
+        <div class="ws-members-list" id="membersList"></div>
+      </div>
+
+      <div class="ws-sync-status ws-popup-deferred" id="syncStatus">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M23 4v6h-6M1 20v-6h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Synced
+      </div>
+
+      <div class="ws-actions">
+        <button class="ws-btn ws-btn-ghost" id="btnOpenSidebar">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+          Open Chat
+        </button>
+        <button class="ws-btn ws-btn-danger" id="btnLeave">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Leave
+        </button>
+      </div>
+
+      <div class="ws-settings hidden" id="sidebarSettings">
+        <div class="ws-settings-title">Chat sidebar</div>
+        <label class="ws-setting-row">
+          <input type="checkbox" id="settingCompact" checked />
+          <span>Compact mode</span>
+        </label>
+        <label class="ws-setting-row">
+          <span class="ws-setting-label">Position</span>
+          <select id="settingPosition">
+            <option value="right">Right</option>
+            <option value="left">Left</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <div class="ws-footer">
+      <span class="ws-footer-line">v1.0 · Own subscription required</span>
+    </div>
+  </div>
+  <script src="../shared/streaming-hosts.generated.js"></script>
+  <script src="../lib/supabase.min.js"></script>
+  <script src="supabase-config.js"></script>
+  <script src="auth.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

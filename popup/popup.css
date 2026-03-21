@@ -1,0 +1,592 @@
+/* PlayShare Popup — Fresh & Smooth */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/*
+ * Chrome’s popup shell stays rectangular; we inset a rounded “card” so it
+ * feels less boxy. html = outer frame, .ws-popup = clipped rounded surface.
+ */
+html {
+  background: #030303;
+  background-image: radial-gradient(120% 90% at 50% 0%, rgba(229, 9, 20, 0.07) 0%, transparent 55%);
+}
+
+body {
+  box-sizing: border-box;
+  width: 300px;
+  margin: 0;
+  padding: 7px;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: transparent;
+  color: #f0f0f0;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.ws-popup {
+  position: relative;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 16px;
+  background: #0a0a0a;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 0 0 1px rgba(229, 9, 20, 0.06),
+    0 14px 36px rgba(0, 0, 0, 0.55),
+    0 0 48px rgba(229, 9, 20, 0.07);
+  isolation: isolate;
+}
+
+/* ── Header ── */
+.ws-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 12px 10px;
+  background: linear-gradient(165deg, #161616 0%, #0c0c0c 55%, #080808 100%);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.ws-header-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 36px;
+}
+
+/* Popup: slimmer brand (tagline hidden — details live in sidebar) */
+.ws-popup .ws-brand-tagline { display: none; }
+
+/* Same brand system as sidebar overlay */
+.ws-popup-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.ws-brand-mark {
+  position: relative;
+  isolation: isolate;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  background:
+    linear-gradient(165deg, rgba(255, 255, 255, 0.11) 0%, rgba(255, 255, 255, 0.02) 38%, transparent 52%),
+    linear-gradient(210deg, rgba(78, 205, 196, 0.06) 0%, transparent 42%),
+    rgba(0, 0, 0, 0.32);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.32),
+    0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 5px 14px rgba(0, 0, 0, 0.38),
+    0 0 18px rgba(229, 9, 20, 0.18),
+    0 0 28px rgba(78, 205, 196, 0.05);
+}
+.ws-brand-mark::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 15px;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 90, 90, 0.4) 0%,
+    rgba(229, 9, 20, 0.25) 35%,
+    rgba(78, 205, 196, 0.18) 70%,
+    transparent 85%
+  );
+  opacity: 0.48;
+  filter: blur(10px);
+  z-index: -1;
+  pointer-events: none;
+}
+.ws-brand-mark-svg {
+  display: block;
+  width: 32px;
+  height: 32px;
+  position: relative;
+  z-index: 1;
+  object-fit: contain;
+  -webkit-user-drag: none;
+  user-select: none;
+  filter: drop-shadow(0 2px 6px rgba(229, 9, 20, 0.24)) drop-shadow(0 0 8px rgba(78, 205, 196, 0.1));
+}
+.ws-brand-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+.ws-brand-name {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.034em;
+  line-height: 1.12;
+  color: #fff;
+}
+.ws-brand-play {
+  color: rgba(255, 255, 255, 0.96);
+}
+.ws-brand-share {
+  margin-left: 1px;
+  background: linear-gradient(100deg, #ff6a6a 0%, #E50914 38%, #c40812 92%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: #E50914;
+  -webkit-text-fill-color: transparent;
+}
+@supports not ((-webkit-background-clip: text) or (background-clip: text)) {
+  .ws-brand-share {
+    -webkit-text-fill-color: unset;
+    color: #E50914;
+    background: none;
+  }
+}
+.ws-brand-tagline {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(154, 154, 154, 0.92);
+  text-shadow: 0 0 14px rgba(255, 255, 255, 0.06);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ws-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #8a8a8a;
+  flex-shrink: 0;
+}
+
+.ws-account-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #9a9a9a;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255,255,255,0.04);
+}
+.ws-account-bar--signed-in #accountBarText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-account-bar-action {
+  flex-shrink: 0;
+  padding: 5px 11px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+}
+
+/* Back pill — same on lobby strip and auth forms (use .ws-account-bar-action--back) */
+.ws-account-bar-action--back {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: #b8b8b8;
+  box-shadow: 0 0 0 1px rgba(229, 9, 20, 0.05);
+}
+.ws-account-bar-action--back:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f0f0f0;
+  border-color: rgba(229, 9, 20, 0.28);
+  box-shadow: 0 2px 10px rgba(229, 9, 20, 0.12);
+}
+.ws-account-bar-action--back:active {
+  transform: translateY(0.5px);
+}
+.ws-account-bar-action--back:focus-visible {
+  outline: 2px solid rgba(229, 9, 20, 0.45);
+  outline-offset: 2px;
+}
+
+.ws-account-bar-action--signout {
+  margin-left: auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: #a8a8a8;
+  box-shadow: none;
+}
+.ws-account-bar-action--signout:hover {
+  color: #E50914;
+  background: rgba(229, 9, 20, 0.1);
+  border-color: rgba(229, 9, 20, 0.25);
+}
+.ws-account-bar-action--signout:focus-visible {
+  outline: 2px solid rgba(229, 9, 20, 0.45);
+  outline-offset: 2px;
+}
+.ws-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #555; transition: all 0.4s ease;
+}
+.ws-dot.connected { background: #4ECDC4; box-shadow: 0 0 12px rgba(78,205,196,0.5); }
+.ws-dot.disconnected { background: #E50914; box-shadow: 0 0 8px rgba(229,9,20,0.4); }
+
+/* ── Body sections ── */
+#viewAuth, #viewLobby, #viewRoom { padding: 12px 12px 14px; }
+.hidden { display: none !important; }
+
+/* In-room extras — roster & sync live in the page sidebar */
+.ws-popup-deferred { display: none !important; }
+
+/* ── Auth ── */
+.ws-auth-landing {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+  padding: 8px 2px 4px;
+}
+.ws-auth-landing-lead {
+  font-size: 13px;
+  color: #a8a8a8;
+  text-align: center;
+  line-height: 1.4;
+  margin: 0;
+}
+.ws-auth-landing-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ws-auth-landing-actions .ws-btn {
+  width: 100%;
+  justify-content: center;
+}
+/* Auth forms: same Back pill as lobby; compact width (not full-bleed) */
+#authForms {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.ws-auth-back {
+  align-self: flex-start;
+  margin: 0 0 12px;
+}
+
+/* Segmented control — same language as primary red + dark glass (Log in / room pills) */
+.ws-auth-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 4px;
+  background: linear-gradient(165deg, rgba(22, 22, 22, 0.95) 0%, rgba(12, 12, 12, 0.98) 100%);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 0 20px rgba(229, 9, 20, 0.06);
+}
+.ws-auth-tab {
+  flex: 1;
+  padding: 8px 8px;
+  border: none;
+  background: transparent;
+  color: #8a8a8a;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+.ws-auth-tab:hover {
+  color: #d8d8d8;
+  background: rgba(255, 255, 255, 0.04);
+}
+.ws-auth-tab.active {
+  color: #fff;
+  background: linear-gradient(135deg, #E50914 0%, #c40812 100%);
+  box-shadow:
+    0 2px 10px rgba(229, 9, 20, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+.ws-auth-tab.active:hover {
+  color: #fff;
+  box-shadow:
+    0 3px 14px rgba(229, 9, 20, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+.ws-auth-form { margin-bottom: 8px; }
+.ws-btn-link {
+  background: none; border: none; color: #4ECDC4; cursor: pointer;
+  font-size: 11px; padding: 0; text-decoration: underline;
+}
+.ws-btn-link:hover { color: #5fd9d0; }
+
+.ws-section { margin-bottom: 10px; }
+.ws-section:last-of-type { margin-bottom: 0; }
+.ws-label {
+  display: block;
+  font-size: 11px;
+  color: #9a9a9a;
+  margin-bottom: 5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+.ws-label-hint { font-weight: 400; color: #888; font-size: 10px; }
+.ws-field-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #9a9a9a;
+}
+.ws-field-hint code { font-size: 10px; color: #bbb; }
+.ws-join-hint { font-size: 10px; color: #8a8a8a; margin: -4px 0 8px; line-height: 1.3; }
+.ws-room-overlay-hint {
+  font-size: 10px;
+  color: #6a6a6a;
+  margin: 0 0 10px;
+  line-height: 1.35;
+}
+.ws-room-overlay-hint strong { color: #8a8a8a; font-weight: 600; }
+
+.ws-input {
+  width: 100%;
+  padding: 9px 11px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  color: #f0f0f0;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+.ws-input:focus {
+  border-color: rgba(78,205,196,0.4);
+  background: rgba(255,255,255,0.06);
+}
+.ws-input::placeholder { color: #6a6a6a; }
+.ws-input-code { text-transform: uppercase; letter-spacing: 3px; font-weight: 600; font-size: 14px; text-align: center; }
+
+.ws-divider { margin: 12px 10px; }
+.ws-divider--tight { margin-top: 4px; margin-bottom: 4px; }
+.ws-or {
+  text-align: center;
+  color: #6a6a6a;
+  font-size: 10px;
+  margin: 10px 0 8px;
+  letter-spacing: 0.04em;
+}
+
+/* Lobby: nickname → create | manual join */
+.ws-lobby-step { margin-bottom: 4px; }
+.ws-lobby-lead,
+.ws-lobby-panel-lead {
+  font-size: 12px;
+  color: #9a9a9a;
+  line-height: 1.4;
+  margin: 0 0 12px;
+}
+.ws-lobby-mode-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+.ws-lobby-panel-back {
+  align-self: flex-start;
+  margin: 0 0 10px;
+}
+#viewLobby > .ws-error {
+  margin-top: 10px;
+}
+.ws-input.ws-input-readonly {
+  opacity: 0.9;
+  cursor: default;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* ── Buttons ── */
+.ws-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-bottom: 7px;
+}
+.ws-btn:last-child { margin-bottom: 0; }
+
+.ws-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
+.ws-btn-primary:disabled {
+  filter: grayscale(0.2);
+}
+
+.ws-btn-primary {
+  background: linear-gradient(135deg, #E50914 0%, #c40812 100%);
+  color: #fff;
+  box-shadow: 0 2px 12px rgba(229,9,20,0.3);
+}
+.ws-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px rgba(229,9,20,0.4);
+}
+
+.ws-btn-secondary {
+  background: rgba(78,205,196,0.1);
+  color: #4ECDC4;
+  border: 1px solid rgba(78,205,196,0.3);
+}
+.ws-btn-secondary:hover {
+  background: rgba(78,205,196,0.16);
+  border-color: rgba(78,205,196,0.4);
+}
+
+.ws-btn-ghost {
+  background: rgba(255,255,255,0.04); color: #b0b0b0;
+  border: 1px solid rgba(255,255,255,0.08); flex: 1;
+}
+.ws-btn-ghost:hover { background: rgba(255,255,255,0.08); color: #f0f0f0; }
+.ws-btn-paste {
+  width: 100%;
+  border-style: dashed;
+  color: #4ECDC4;
+}
+.ws-btn-paste:hover { border-color: rgba(78,205,196,0.5); color: #5fd9d0; }
+
+.ws-btn-danger {
+  background: rgba(229,9,20,0.12); color: #E50914;
+  border: 1px solid rgba(229,9,20,0.25); flex: 1;
+}
+.ws-btn-danger:hover { background: rgba(229,9,20,0.2); }
+
+.ws-actions { display: flex; gap: 8px; margin-top: 10px; }
+.ws-actions .ws-btn { margin-bottom: 0; }
+
+/* ── Room view ── */
+.ws-room-header {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px;
+  background: rgba(255,255,255,0.04); border-radius: 10px;
+  padding: 10px 11px; margin-bottom: 10px;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.ws-room-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ws-room-label { font-size: 10px; color: #7a7a7a; font-weight: 500; letter-spacing: 0.03em; }
+.ws-room-code { font-size: 17px; font-weight: 700; letter-spacing: 3px; color: #4ECDC4; }
+.ws-copy-btn {
+  background: rgba(255,255,255,0.06); border: none; cursor: pointer;
+  color: #8a8a8a; padding: 5px; border-radius: 6px;
+  transition: all 0.2s ease;
+}
+.ws-copy-btn:hover { color: #4ECDC4; background: rgba(78,205,196,0.15); }
+.ws-copy-btn.ws-copy-link { margin-left: 4px; }
+.ws-host-badge {
+  font-size: 10px; font-weight: 600; padding: 4px 8px; border-radius: 8px;
+  background: rgba(229,9,20,0.2); color: #E50914;
+  letter-spacing: 0.05em;
+}
+.ws-host-only-badge {
+  font-size: 10px; font-weight: 500; padding: 4px 8px; border-radius: 8px;
+  background: rgba(255,255,255,0.08); color: #9a9a9a;
+  letter-spacing: 0.03em; display: none;
+}
+
+.ws-members-section { margin-bottom: 10px; }
+.ws-section-title { font-size: 11px; color: #8a8a8a; font-weight: 500; margin-bottom: 8px; }
+.ws-members-list { display: flex; flex-direction: column; gap: 4px; }
+
+.ws-member {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; background: rgba(255,255,255,0.04);
+  border-radius: 8px; border: 1px solid rgba(255,255,255,0.04);
+  transition: background 0.2s ease;
+}
+.ws-member:hover { background: rgba(255,255,255,0.06); }
+.ws-member-avatar {
+  width: 26px; height: 26px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 600; flex-shrink: 0;
+}
+.ws-member-name { font-size: 12px; color: #d0d0d0; flex: 1; }
+.ws-member-you { font-size: 10px; color: #6a6a6a; }
+.ws-member-host-tag {
+  font-size: 8px; padding: 2px 5px; border-radius: 5px;
+  background: rgba(229,9,20,0.2); color: #E50914;
+}
+
+.ws-sync-status {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: #4ECDC4; padding: 8px 11px;
+  background: rgba(78,205,196,0.08); border-radius: 8px;
+  margin-bottom: 4px; border: 1px solid rgba(78,205,196,0.15);
+}
+
+.ws-error {
+  color: #E50914; font-size: 11px; margin-top: 6px;
+  min-height: 16px; text-align: center;
+}
+
+/* ── Settings ── */
+.ws-settings {
+  margin-top: 12px; padding-top: 10px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.ws-settings-title {
+  font-size: 11px;
+  color: #8a8a8a;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+.ws-setting-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #b0b0b0;
+  cursor: pointer;
+  margin-bottom: 6px;
+  padding: 5px 0;
+}
+.ws-setting-row:last-child { margin-bottom: 0; }
+.ws-setting-row input[type="checkbox"] { accent-color: #4ECDC4; width: 14px; height: 14px; }
+.ws-setting-label { margin-right: 6px; }
+.ws-setting-row select {
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 6px; color: #f0f0f0; font-size: 12px;
+  padding: 4px 8px; outline: none;
+}
+.ws-setting-row select:focus { border-color: rgba(78,205,196,0.4); }
+
+/* ── Footer ── */
+.ws-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  justify-content: center;
+  padding: 9px 10px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  font-size: 10px;
+  color: #6a6a6a;
+}
+.ws-footer-line { text-align: center; line-height: 1.3; }
