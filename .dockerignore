@@ -2,12 +2,8 @@ node_modules
 .git
 .env
 .env.*
-content
-popup
-sidebar
-join
-icons
-scripts
-lib
 *.log
 .DS_Store
+# Root-level zips only; extension source must stay in context for Docker pack stage
+playshare-extension.zip
+playshare-extension-dev.zip

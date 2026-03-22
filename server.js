@@ -302,10 +302,27 @@ function escapeHtmlAttr(s) {
     .replace(/</g, '&lt;');
 }
 
+const EXTENSION_ZIP_PATH = path.join(__dirname, 'public', 'install', 'playshare-extension.zip');
+const EXTENSION_ZIP_URL_PATH = '/install/playshare-extension.zip';
+
+function extensionZipAvailable() {
+  try {
+    const st = fs.statSync(EXTENSION_ZIP_PATH);
+    return st.isFile() && st.size > 0;
+  } catch {
+    return false;
+  }
+}
+
 function renderHomepageHtml() {
   if (!homepageTemplate) return null;
   const storeUrl = String(process.env.PLAYSHARE_CHROME_STORE_URL || '').trim();
-  const bodyAttrs = storeUrl ? ` data-chrome-store-url="${escapeHtmlAttr(storeUrl)}"` : '';
+  const attrs = [];
+  if (storeUrl) attrs.push(`data-chrome-store-url="${escapeHtmlAttr(storeUrl)}"`);
+  if (!storeUrl && extensionZipAvailable()) {
+    attrs.push(`data-extension-zip-url="${escapeHtmlAttr(EXTENSION_ZIP_URL_PATH)}"`);
+  }
+  const bodyAttrs = attrs.length ? ` ${attrs.join(' ')}` : '';
   return homepageTemplate.replace('{{BODY_ATTRS}}', bodyAttrs);
 }
 
@@ -330,6 +347,36 @@ const httpServer = http.createServer((req, res) => {
       'Cache-Control': 'public, max-age=3600'
     });
     res.end(req.method === 'HEAD' ? undefined : privacyPolicyHtml);
+    return;
+  }
+  if (
+    (url.pathname === EXTENSION_ZIP_URL_PATH || url.pathname === `${EXTENSION_ZIP_URL_PATH}/`) &&
+    (req.method === 'GET' || req.method === 'HEAD')
+  ) {
+    if (!extensionZipAvailable()) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(
+        req.method === 'HEAD'
+          ? undefined
+          : 'Extension package not available. Run npm run package:extension and add playshare-extension.zip to public/install/ (or deploy with the Docker image that builds it).\n'
+      );
+      return;
+    }
+    let buf;
+    try {
+      buf = fs.readFileSync(EXTENSION_ZIP_PATH);
+    } catch {
+      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(req.method === 'HEAD' ? undefined : 'Could not read extension package.\n');
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': 'attachment; filename="playshare-extension.zip"',
+      'Content-Length': buf.length,
+      'Cache-Control': 'public, max-age=600'
+    });
+    res.end(req.method === 'HEAD' ? undefined : buf);
     return;
   }
   if (
@@ -919,8 +966,15 @@ function logStartupBanner() {
   if (homepageTemplate) {
     console.log(`   Homepage: ${getHttpJoinUrl()}/`);
     const store = String(process.env.PLAYSHARE_CHROME_STORE_URL || '').trim();
-    if (!store) {
-      console.log('   (Set PLAYSHARE_CHROME_STORE_URL for live Chrome Web Store install buttons.)');
+    if (extensionZipAvailable()) {
+      console.log(`   Extension .zip (pre–Web Store): ${getHttpJoinUrl()}${EXTENSION_ZIP_URL_PATH}`);
+    }
+    if (!store && !extensionZipAvailable()) {
+      console.log(
+        '   (Set PLAYSHARE_CHROME_STORE_URL for store install, or add public/install/playshare-extension.zip for download.)'
+      );
+    } else if (!store) {
+      console.log('   (Set PLAYSHARE_CHROME_STORE_URL when the listing is live; until then homepage uses .zip download.)');
     }
   }
 }

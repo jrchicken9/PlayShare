@@ -1,13 +1,21 @@
-# Minimal image: only what `server.js` needs at runtime (reliable on Railway vs auto-detect).
+# Pack stage: build store-ready extension zip for homepage download (GET /install/playshare-extension.zip).
+FROM node:20-alpine AS pack
+WORKDIR /app
+RUN apk add --no-cache bash zip
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run package:extension \
+  && mkdir -p public/install \
+  && cp playshare-extension.zip public/install/playshare-extension.zip
+
 FROM node:20-alpine
 WORKDIR /app
-
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
-
 COPY server.js ./
 COPY shared ./shared/
 COPY public ./public/
-
+COPY --from=pack /app/public/install/playshare-extension.zip ./public/install/playshare-extension.zip
 ENV NODE_ENV=production
 CMD ["node", "server.js"]
