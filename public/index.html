@@ -39,6 +39,8 @@
       html { scroll-behavior: auto; }
       .tile-card, .feature-card, .btn-install, .btn-secondary { transition: none !important; }
       .hero-billboard::before { animation: none !important; }
+      .hero-headline-slide { animation: none !important; }
+      .hero-headline-slide .hl-line { animation: none !important; }
     }
     body {
       margin: 0;
@@ -263,27 +265,253 @@
       background: var(--teal);
       box-shadow: 0 0 10px var(--teal);
     }
-    .hero h1 {
-      margin: 0 0 1.1rem;
-      font-size: clamp(2.15rem, 6vw, 3.35rem);
-      font-weight: 800;
-      letter-spacing: -0.045em;
-      line-height: 1.05;
-      color: #fff;
-    }
-    .hero h1 .line-accent {
+    .hero-title-block .line-accent {
       display: block;
       margin-top: 0.2em;
-      font-size: 0.42em;
+      font-size: clamp(0.95rem, 2.5vw, 1.35rem);
       font-weight: 700;
       letter-spacing: 0.02em;
+      line-height: 1.25;
       background: linear-gradient(90deg, var(--teal) 0%, rgba(255, 255, 255, 0.92) 50%, var(--accent) 100%);
       -webkit-background-clip: text;
       background-clip: text;
       -webkit-text-fill-color: transparent;
     }
     @supports not ((-webkit-background-clip: text) or (background-clip: text)) {
-      .hero h1 .line-accent { -webkit-text-fill-color: unset; color: var(--teal); background: none; }
+      .hero-title-block .line-accent { -webkit-text-fill-color: unset; color: var(--teal); background: none; }
+    }
+    /* Hero headline rotator */
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    .hero-title-block {
+      margin: 0 0 1.1rem;
+    }
+    .hero-headline-rotator {
+      perspective: 900px;
+    }
+    .hero-headline-viewport {
+      position: relative;
+      min-height: clamp(6.4rem, 16vw, 8.5rem);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+    }
+    .hero-headline-slide {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.02em;
+      opacity: 1;
+      visibility: visible;
+      pointer-events: none;
+      transform-origin: 50% 50%;
+    }
+    .hero-title-block .hl-line {
+      display: block;
+      font-size: clamp(2.15rem, 6vw, 3.35rem);
+      font-weight: 800;
+      letter-spacing: -0.045em;
+      line-height: 1.05;
+      color: #fff;
+      text-wrap: balance;
+      max-width: 22ch;
+    }
+    @keyframes hl-out-up {
+      to {
+        opacity: 0;
+        transform: translateY(-125%) rotateX(18deg) scale(0.92);
+        filter: blur(8px);
+      }
+    }
+    @keyframes hl-out-down {
+      to {
+        opacity: 0;
+        transform: translateY(130%) scale(0.9);
+        filter: blur(6px);
+      }
+    }
+    @keyframes hl-out-left {
+      to {
+        opacity: 0;
+        transform: translateX(-115%) skewX(-6deg);
+        filter: blur(4px);
+      }
+    }
+    @keyframes hl-out-right {
+      to {
+        opacity: 0;
+        transform: translateX(115%) skewX(6deg);
+        filter: blur(4px);
+      }
+    }
+    @keyframes hl-out-zoom {
+      to {
+        opacity: 0;
+        transform: scale(1.35);
+        filter: blur(12px);
+      }
+    }
+    @keyframes hl-out-curtain {
+      to {
+        opacity: 0;
+        transform: scaleX(0.15) scaleY(0.4);
+        filter: blur(10px);
+      }
+    }
+    @keyframes hl-in-up {
+      from {
+        opacity: 0;
+        transform: translateY(110%) rotateX(-14deg) scale(0.88);
+        filter: blur(10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) rotateX(0) scale(1);
+        filter: blur(0);
+      }
+    }
+    @keyframes hl-in-down {
+      from {
+        opacity: 0;
+        transform: translateY(-100%) scale(1.12);
+        filter: blur(8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+        filter: blur(0);
+      }
+    }
+    @keyframes hl-in-left {
+      from {
+        opacity: 0;
+        transform: translateX(110%) skewX(5deg);
+        filter: blur(5px);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0) skewX(0);
+        filter: blur(0);
+      }
+    }
+    @keyframes hl-in-right {
+      from {
+        opacity: 0;
+        transform: translateX(-110%) skewX(-5deg);
+        filter: blur(5px);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0) skewX(0);
+        filter: blur(0);
+      }
+    }
+    @keyframes hl-in-pop {
+      from {
+        opacity: 0;
+        transform: scale(0.65);
+        filter: blur(6px);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1);
+        filter: blur(0);
+      }
+    }
+    @keyframes hl-in-unfold {
+      from {
+        opacity: 0;
+        transform: scaleY(0.2) translateY(0.5em);
+        filter: blur(6px);
+      }
+      to {
+        opacity: 1;
+        transform: scaleY(1) translateY(0);
+        filter: blur(0);
+      }
+    }
+    .hero-headline-slide.hl-anim-out-up { animation: hl-out-up 0.72s var(--ease-out) forwards; }
+    .hero-headline-slide.hl-anim-out-down { animation: hl-out-down 0.68s var(--ease-out) forwards; }
+    .hero-headline-slide.hl-anim-out-left { animation: hl-out-left 0.7s var(--ease-out) forwards; }
+    .hero-headline-slide.hl-anim-out-right { animation: hl-out-right 0.7s var(--ease-out) forwards; }
+    .hero-headline-slide.hl-anim-out-zoom { animation: hl-out-zoom 0.65s var(--ease-out) forwards; }
+    .hero-headline-slide.hl-anim-out-curtain { animation: hl-out-curtain 0.75s var(--ease-out) forwards; }
+    .hero-headline-slide.hl-anim-in-up .hl-line:nth-child(1) {
+      animation: hl-in-up 0.62s var(--ease-out) backwards;
+      animation-delay: 0s;
+    }
+    .hero-headline-slide.hl-anim-in-up .hl-line:nth-child(2) {
+      animation: hl-in-up 0.62s var(--ease-out) backwards;
+      animation-delay: 0.09s;
+    }
+    .hero-headline-slide.hl-anim-in-down .hl-line:nth-child(1) {
+      animation: hl-in-down 0.58s var(--ease-out) backwards;
+      animation-delay: 0s;
+    }
+    .hero-headline-slide.hl-anim-in-down .hl-line:nth-child(2) {
+      animation: hl-in-down 0.58s var(--ease-out) backwards;
+      animation-delay: 0.1s;
+    }
+    .hero-headline-slide.hl-anim-in-left .hl-line:nth-child(1) {
+      animation: hl-in-left 0.6s var(--ease-out) backwards;
+      animation-delay: 0s;
+    }
+    .hero-headline-slide.hl-anim-in-left .hl-line:nth-child(2) {
+      animation: hl-in-left 0.6s var(--ease-out) backwards;
+      animation-delay: 0.08s;
+    }
+    .hero-headline-slide.hl-anim-in-right .hl-line:nth-child(1) {
+      animation: hl-in-right 0.6s var(--ease-out) backwards;
+      animation-delay: 0s;
+    }
+    .hero-headline-slide.hl-anim-in-right .hl-line:nth-child(2) {
+      animation: hl-in-right 0.6s var(--ease-out) backwards;
+      animation-delay: 0.08s;
+    }
+    .hero-headline-slide.hl-anim-in-pop .hl-line:nth-child(1) {
+      animation: hl-in-pop 0.55s var(--ease-out) backwards;
+      animation-delay: 0s;
+    }
+    .hero-headline-slide.hl-anim-in-pop .hl-line:nth-child(2) {
+      animation: hl-in-pop 0.55s var(--ease-out) backwards;
+      animation-delay: 0.11s;
+    }
+    .hero-headline-slide.hl-anim-in-unfold .hl-line:nth-child(1) {
+      animation: hl-in-unfold 0.58s var(--ease-out) backwards;
+      animation-delay: 0s;
+    }
+    .hero-headline-slide.hl-anim-in-unfold .hl-line:nth-child(2) {
+      animation: hl-in-unfold 0.58s var(--ease-out) backwards;
+      animation-delay: 0.12s;
+    }
+    @keyframes hl-accent-in {
+      from {
+        opacity: 0;
+        transform: translateY(0.6em);
+        filter: blur(4px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+        filter: blur(0);
+      }
+    }
+    .hero-title-block .line-accent.hl-accent-anim {
+      animation: hl-accent-in 0.55s var(--ease-out) backwards;
     }
     .hero .tagline {
       margin: 0 auto 1.75rem;
@@ -749,9 +977,12 @@
     <div class="hero-billboard">
       <section class="hero hero-billboard-inner" aria-labelledby="hero-title">
         <p class="hero-eyebrow"><span class="hero-eyebrow-dot" aria-hidden="true"></span> Chrome extension · Watch parties</p>
-        <h1 id="hero-title">
-          Same scene.<br />Same second.<br />
-          <span class="line-accent">Together on the apps you love.</span>
+        <h1 id="hero-title" class="hero-title-block">
+          <span id="hero-aria-live" class="sr-only" aria-live="polite" aria-atomic="true"></span>
+          <div class="hero-headline-rotator">
+            <div class="hero-headline-viewport" id="hero-headline-viewport" aria-hidden="true"></div>
+          </div>
+          <span class="line-accent" id="hero-line-accent"></span>
         </h1>
         <p class="tagline">
           PlayShare syncs play, pause, and seek on the streaming sites you already use—plus side chat in the room.
@@ -927,6 +1158,127 @@
           });
           if (soon) soon.hidden = false;
         }
+
+        /* Hero headline rotator */
+        var HL_SLIDES = [
+          { l1: 'Same scene.', l2: 'Same second.', accent: 'Together on the apps you love.' },
+          { l1: 'Perfect sync.', l2: 'Perfect rhythm.', accent: 'Built for pause, rewind, and group reactions.' },
+          { l1: 'Watch together.', l2: 'React together.', accent: 'Side chat without leaving the watch page.' },
+          { l1: 'One play button.', l2: 'Whole room rolls.', accent: 'Host sets the beat—everyone echoes in sync.' },
+          { l1: 'Same timestamp.', l2: 'Same gasp.', accent: 'Less “wait—what happened?” mid-scene.' },
+          { l1: 'Your stream.', l2: 'Our sync line.', accent: 'We sweat milliseconds so you can enjoy the moment.' },
+          { l1: 'Frame for frame.', l2: 'Second for second.', accent: 'Binge nights with distributed couches.' },
+          { l1: 'Different houses.', l2: 'Same couch energy.', accent: 'Chrome extension—your subscriptions stay yours.' }
+        ];
+        var HL_TRANS = [
+          { out: 'hl-anim-out-up', inn: 'hl-anim-in-up' },
+          { out: 'hl-anim-out-left', inn: 'hl-anim-in-right' },
+          { out: 'hl-anim-out-zoom', inn: 'hl-anim-in-pop' },
+          { out: 'hl-anim-out-down', inn: 'hl-anim-in-down' },
+          { out: 'hl-anim-out-right', inn: 'hl-anim-in-left' },
+          { out: 'hl-anim-out-curtain', inn: 'hl-anim-in-unfold' }
+        ];
+        var viewport = document.getElementById('hero-headline-viewport');
+        var accentEl = document.getElementById('hero-line-accent');
+        var liveEl = document.getElementById('hero-aria-live');
+        if (!viewport || !accentEl || !HL_SLIDES.length) return;
+
+        function setLive(s) {
+          if (liveEl) liveEl.textContent = s.l1 + ' ' + s.l2 + ' ' + s.accent;
+        }
+
+        function buildSlideHtml(s) {
+          return (
+            '<span class="hl-line">' + s.l1 + '</span><span class="hl-line">' + s.l2 + '</span>'
+          );
+        }
+
+        var idx = 0;
+        var slideEl = document.createElement('div');
+        slideEl.className = 'hero-headline-slide';
+        slideEl.innerHTML = buildSlideHtml(HL_SLIDES[0]);
+        viewport.appendChild(slideEl);
+        accentEl.textContent = HL_SLIDES[0].accent;
+        setLive(HL_SLIDES[0]);
+
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+        var HOLD_MS = 4200;
+        var timer = null;
+        var busy = false;
+
+        function clearAnimClasses(el) {
+          HL_TRANS.forEach(function (t) {
+            el.classList.remove(t.out, t.inn);
+          });
+        }
+
+        function goNext() {
+          if (busy) return;
+          busy = true;
+          var nextIdx = (idx + 1) % HL_SLIDES.length;
+          var trans = HL_TRANS[idx % HL_TRANS.length];
+          var next = HL_SLIDES[nextIdx];
+
+          clearAnimClasses(slideEl);
+          slideEl.classList.add(trans.out);
+
+          var outDone = false;
+          function afterOut() {
+            if (outDone) return;
+            outDone = true;
+            clearTimeout(safetyOut);
+            slideEl.removeEventListener('animationend', onOutOnce);
+            slideEl.classList.remove(trans.out);
+            slideEl.style.animation = 'none';
+            void slideEl.offsetWidth;
+            slideEl.style.opacity = '';
+            slideEl.style.filter = '';
+            slideEl.style.transform = '';
+            slideEl.innerHTML = buildSlideHtml(next);
+            accentEl.textContent = next.accent;
+            accentEl.classList.remove('hl-accent-anim');
+            void accentEl.offsetWidth;
+            accentEl.classList.add('hl-accent-anim');
+            clearAnimClasses(slideEl);
+            slideEl.classList.add(trans.inn);
+            idx = nextIdx;
+            setLive(next);
+
+            var linesLeft = 2;
+            var safetyIn = setTimeout(function finishIn() {
+              slideEl.removeEventListener('animationend', onInDone);
+              clearAnimClasses(slideEl);
+              slideEl.style.animation = '';
+              accentEl.classList.remove('hl-accent-anim');
+              busy = false;
+              timer = setTimeout(goNext, HOLD_MS);
+            }, 1300);
+            function onInDone(evn) {
+              if (!slideEl.contains(evn.target)) return;
+              var n = evn.animationName || '';
+              if (n.indexOf('hl-in') !== 0) return;
+              linesLeft -= 1;
+              if (linesLeft > 0) return;
+              clearTimeout(safetyIn);
+              slideEl.removeEventListener('animationend', onInDone);
+              clearAnimClasses(slideEl);
+              slideEl.style.animation = '';
+              accentEl.classList.remove('hl-accent-anim');
+              busy = false;
+              timer = setTimeout(goNext, HOLD_MS);
+            }
+            slideEl.addEventListener('animationend', onInDone);
+          }
+          var safetyOut = setTimeout(afterOut, 900);
+          function onOutOnce(ev) {
+            if (ev.target !== slideEl) return;
+            afterOut();
+          }
+          slideEl.addEventListener('animationend', onOutOnce);
+        }
+
+        timer = setTimeout(goNext, HOLD_MS);
       });
     })();
   </script>
