@@ -5,3 +5,4 @@ node_modules/
 *.log
 # Optional local archives (source is in-repo)
 watchsync-*.zip
+playshare-extension.zip

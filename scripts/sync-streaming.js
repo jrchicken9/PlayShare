@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 /**
  * Reads shared/streaming-hosts.json and updates:
- * - manifest.json (content_scripts[0].matches, host_permissions,
- *   web_accessible_resources[0].matches — same as content scripts, not <all_urls>)
+ * - manifest.json (content_scripts[0].matches,
+ *   host_permissions = extraHostPermissions only — streaming tab URLs use `tabs` + content_scripts,
+ *   optional_host_permissions from optionalHostPermissions,
+ *   web_accessible_resources[0].matches — same as content scripts)
  * - shared/streaming-hosts.generated.js (for background + content + popup + join)
  *
  * Run after editing the JSON: npm run sync-streaming
@@ -17,13 +19,14 @@ const generatedPath = path.join(root, 'shared', 'streaming-hosts.generated.js');
 
 const cfg = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
 
-const { hostSubstrings, contentScriptMatches, extraHostPermissions } = cfg;
+const { hostSubstrings, contentScriptMatches, extraHostPermissions, optionalHostPermissions } = cfg;
 if (!Array.isArray(hostSubstrings) || !Array.isArray(contentScriptMatches) || !Array.isArray(extraHostPermissions)) {
   console.error('sync-streaming: invalid streaming-hosts.json shape');
   process.exit(1);
 }
 
-const hostPerms = [...extraHostPermissions, ...contentScriptMatches];
+/** Required only for signaling + auth — not duplicate content-script sites (`tabs` covers tab URL queries). */
+const hostPerms = [...extraHostPermissions];
 
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 manifest.content_scripts[0].matches = contentScriptMatches;
@@ -32,6 +35,11 @@ manifest.content_scripts[0].js = [
   'content/content.bundle.js'
 ];
 manifest.host_permissions = hostPerms;
+if (Array.isArray(optionalHostPermissions) && optionalHostPermissions.length) {
+  manifest.optional_host_permissions = [...optionalHostPermissions];
+} else {
+  delete manifest.optional_host_permissions;
+}
 if (manifest.web_accessible_resources && manifest.web_accessible_resources[0]) {
   manifest.web_accessible_resources[0].matches = [...contentScriptMatches];
 }

@@ -10,10 +10,9 @@ const viewLobby    = document.getElementById('viewLobby');
 const viewRoom     = document.getElementById('viewRoom');
 const usernameInput  = document.getElementById('usernameInput');
 const roomCodeInput  = document.getElementById('roomCodeInput');
-const serverUrlInput = document.getElementById('serverUrlInput');
-const serverUrlInputCreate = document.getElementById('serverUrlInputCreate');
 const btnPasteInvite = document.getElementById('btnPasteInvite');
 const lobbyError     = document.getElementById('lobbyError');
+const roomActionError = document.getElementById('roomActionError');
 const authError      = document.getElementById('authError');
 const btnCreate      = document.getElementById('btnCreate');
 const btnJoin        = document.getElementById('btnJoin');
@@ -57,19 +56,14 @@ function clearCreateRoomPendingTimer() {
   }
 }
 
-function getSyncedServerUrl() {
-  const j = serverUrlInput?.value?.trim() || '';
-  const c = serverUrlInputCreate?.value?.trim() || '';
-  return (c || j).trim();
-}
+/** Same origin as `background.js` / `server-config.js` — change server URL only in `server-config.js` for dev. */
+const SIGNALING_SERVER_URL =
+  typeof PLAYSHARE_SERVER_URL !== 'undefined'
+    ? PLAYSHARE_SERVER_URL
+    : 'wss://playshare-production.up.railway.app';
 
-if (serverUrlInput && serverUrlInputCreate) {
-  serverUrlInput.addEventListener('input', () => {
-    serverUrlInputCreate.value = serverUrlInput.value;
-  });
-  serverUrlInputCreate.addEventListener('input', () => {
-    serverUrlInput.value = serverUrlInputCreate.value;
-  });
+function getSyncedServerUrl() {
+  return SIGNALING_SERVER_URL;
 }
 
 // ── Auth UI ───────────────────────────────────────────────────────────────────
@@ -77,6 +71,16 @@ function updateAccountBar() {
   if (!accountBar || !accountBarText || !accountBarAction) return;
   // Auth screen already has “Log in” — hide redundant Guest · Sign in strip
   if (viewAuth && !viewAuth.classList.contains('hidden')) {
+    accountBar.classList.add('hidden');
+    return;
+  }
+  // Create / Join panels have their own “← Back”; hide header strip to avoid duplicate CTAs
+  const lobbySubPanelOpen =
+    viewLobby &&
+    !viewLobby.classList.contains('hidden') &&
+    ((lobbyPanelCreate && !lobbyPanelCreate.classList.contains('hidden')) ||
+      (lobbyPanelJoin && !lobbyPanelJoin.classList.contains('hidden')));
+  if (lobbySubPanelOpen) {
     accountBar.classList.add('hidden');
     return;
   }
@@ -143,6 +147,10 @@ function showRoomView(state) {
   viewAuth.classList.add('hidden');
   viewLobby.classList.add('hidden');
   viewRoom.classList.remove('hidden');
+  if (roomActionError) {
+    roomActionError.textContent = '';
+    roomActionError.classList.add('hidden');
+  }
   updateAccountBar();
   displayRoomCode.textContent = state.roomCode;
   hostBadge.style.display = state.isHost ? 'block' : 'none';
@@ -180,6 +188,7 @@ function setLobbyMode(mode) {
   show(lobbyPanelCreate, mode === 'create');
   show(lobbyPanelJoin, mode === 'join');
   if (lobbyError) lobbyError.textContent = '';
+  updateAccountBar();
 }
 
 function canProceedFromLobbyChoose() {
@@ -233,7 +242,7 @@ async function init() {
     showLobbyView();
   }
 
-  chrome.storage.local.get(['roomState', 'username', 'pendingJoinCode', 'serverUrl'], (data) => {
+  chrome.storage.local.get(['roomState', 'username', 'pendingJoinCode'], (data) => {
     let hadPendingJoin = false;
     if (data.roomState) {
       currentState = data.roomState;
@@ -244,10 +253,7 @@ async function init() {
       chrome.storage.local.remove('pendingJoinCode');
     }
     if (data.username && !currentUser && usernameInput) usernameInput.value = data.username;
-    if (data.serverUrl) {
-      if (serverUrlInput) serverUrlInput.value = data.serverUrl;
-      if (serverUrlInputCreate) serverUrlInputCreate.value = data.serverUrl;
-    }
+    chrome.storage.local.set({ serverUrl: SIGNALING_SERVER_URL });
 
     if (!data.roomState && viewLobby && !viewLobby.classList.contains('hidden')) {
       updateLobbyChooseButtons();
@@ -325,18 +331,60 @@ if (btnAuthBack) {
 }
 
 // ── Connection status ─────────────────────────────────────────────────────────
-chrome.runtime.sendMessage({ source: 'playshare', type: 'GET_DIAG' }, (res) => {
-  if (res && res.roomState) {
-    currentState = res.roomState;
-    showRoomView(res.roomState);
+function loadPopupStateFromBackground() {
+  chrome.runtime.sendMessage({ source: 'playshare', type: 'GET_DIAG' }, (res) => {
+    if (res && res.roomState) {
+      currentState = res.roomState;
+      showRoomView(res.roomState);
+    }
+    updateWsHeader(res);
+  });
+}
+
+chrome.storage.local.get(['serverUrl'], (st) => {
+  const url = (st.serverUrl && String(st.serverUrl).trim()) || getSyncedServerUrl();
+  const afterEnsure = () => {
+    chrome.runtime.sendMessage({ source: 'playshare', type: 'REQUEST_WS_RECONNECT' }, () => {
+      loadPopupStateFromBackground();
+    });
+  };
+  if (typeof PlayShareSignalPermissions !== 'undefined') {
+    PlayShareSignalPermissions.ensure(url, afterEnsure);
+  } else {
+    afterEnsure();
   }
-  const connected = res && res.connectionStatus === 'connected';
-  updateConnectionStatus(connected);
 });
 
-function updateConnectionStatus(connected) {
-  if (wsDot) wsDot.className = 'ws-dot ' + (connected ? 'connected' : 'disconnected');
-  if (wsStatusText) wsStatusText.textContent = connected ? 'Connected' : 'Offline';
+function updateWsHeader(res) {
+  if (!res || typeof res !== 'object') {
+    if (wsDot) wsDot.className = 'ws-dot disconnected';
+    if (wsStatusText) wsStatusText.textContent = 'Offline';
+    return;
+  }
+  const open = !!(res.open === true || res.connectionStatus === 'connected');
+  const phase = res.transportPhase || '';
+  const message =
+    typeof res.connectionMessage === 'string' && res.connectionMessage.trim()
+      ? res.connectionMessage
+      : open
+        ? 'Connected'
+        : 'Offline';
+  if (wsDot) {
+    let cls = 'ws-dot';
+    if (open) cls += ' connected';
+    else if (phase === 'unreachable') cls += ' unreachable';
+    else cls += ' disconnected';
+    wsDot.className = cls;
+  }
+  if (wsStatusText) wsStatusText.textContent = message;
+}
+
+function userVisibleServerErrorLine(msg) {
+  const code = msg && msg.code;
+  if (code === 'ROOM_NOT_FOUND') return 'Server unavailable — that room may have ended.';
+  if (code === 'RATE_LIMIT') return 'Too many messages — slow down.';
+  if (code === 'MESSAGE_TOO_LARGE') return 'Message too large.';
+  return (msg && msg.message) || 'Something went wrong.';
 }
 
 // ── Room display ──────────────────────────────────────────────────────────────
@@ -364,6 +412,10 @@ function showLobby() {
   viewAuth.classList.add('hidden');
   viewRoom.classList.add('hidden');
   viewLobby.classList.remove('hidden');
+  if (roomActionError) {
+    roomActionError.textContent = '';
+    roomActionError.classList.add('hidden');
+  }
   currentState = null;
   setLobbyMode('choose');
   updateLobbyNicknameField();
@@ -415,6 +467,13 @@ if (btnLobbyBackFromCreate) {
 if (btnLobbyBackFromJoin) {
   btnLobbyBackFromJoin.addEventListener('click', () => setLobbyMode('choose'));
 }
+
+if (hostOnlyControl) {
+  hostOnlyControl.setAttribute('aria-checked', hostOnlyControl.checked ? 'true' : 'false');
+  hostOnlyControl.addEventListener('change', () => {
+    hostOnlyControl.setAttribute('aria-checked', hostOnlyControl.checked ? 'true' : 'false');
+  });
+}
 if (usernameInput) {
   usernameInput.addEventListener('input', () => {
     updateLobbyChooseButtons();
@@ -431,9 +490,7 @@ btnCreate.addEventListener('click', () => {
     return;
   }
   const hostOnly = hostOnlyControl ? hostOnlyControl.checked : false;
-  const serverUrl = getSyncedServerUrl();
-  const toStore = { username };
-  if (serverUrl) toStore.serverUrl = serverUrl;
+  const toStore = { username, serverUrl: getSyncedServerUrl() };
   if (lobbyError) {
     lobbyError.textContent = '';
     lobbyError.style.color = '';
@@ -446,10 +503,13 @@ btnCreate.addEventListener('click', () => {
       createRoomPendingTimer = null;
       chrome.runtime.sendMessage({ source: 'playshare', type: 'GET_DIAG' }, (res) => {
         if (chrome.runtime.lastError) return;
-        if (!res?.roomState && res?.connectionStatus !== 'connected' && lobbyError) {
+        const connected = !!(res && (res.open === true || res.connectionStatus === 'connected'));
+        if (!res?.roomState && !connected && lobbyError) {
           lobbyError.style.color = '#E50914';
           lobbyError.textContent =
-            'Could not connect to the server. Check the Server WebSocket URL (default is the cloud server). For a server on your own network use ws:// that machine’s IP and port — not localhost on another PC.';
+            res?.transportPhase === 'unreachable'
+              ? 'Server unavailable — check your network or server URL.'
+              : 'Could not connect to the signaling server. Check your network or try again in a moment.';
         }
       });
     }, 4500);
@@ -459,13 +519,9 @@ btnCreate.addEventListener('click', () => {
 function parseInviteFromClipboard(text) {
   if (!text || typeof text !== 'string') return null;
   const t = text.trim();
-  let server = null;
-  let code = null;
-  const serverMatch = t.match(/(wss?:\/\/[^\s\n]+)/i);
-  if (serverMatch) server = serverMatch[1].trim();
   const codeMatch = t.match(/(?:Code|code):\s*([A-Z0-9]{4,6})/i) || t.match(/\b([A-Z0-9]{4,6})\b/);
-  if (codeMatch) code = codeMatch[1].toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
-  return { server, code };
+  const code = codeMatch ? codeMatch[1].toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6) : null;
+  return { code };
 }
 
 if (btnPasteInvite) {
@@ -473,17 +529,13 @@ if (btnPasteInvite) {
     try {
       const text = await navigator.clipboard.readText();
       const parsed = parseInviteFromClipboard(text);
-      if (parsed && (parsed.server || parsed.code)) {
-        if (parsed.server) {
-          if (serverUrlInput) serverUrlInput.value = parsed.server;
-          if (serverUrlInputCreate) serverUrlInputCreate.value = parsed.server;
-        }
-        if (parsed.code && roomCodeInput) roomCodeInput.value = parsed.code;
+      if (parsed?.code && roomCodeInput) {
+        roomCodeInput.value = parsed.code;
         lobbyError.textContent = 'Pasted!';
         lobbyError.style.color = '#4ECDC4';
         setTimeout(() => { lobbyError.textContent = ''; lobbyError.style.color = ''; }, 1500);
       } else {
-        lobbyError.textContent = 'Could not parse invite. Copy from the join page first.';
+        lobbyError.textContent = 'Could not find a room code. Copy the full invite from the join page.';
       }
     } catch {
       lobbyError.textContent = 'Please allow clipboard access or paste manually.';
@@ -500,13 +552,11 @@ btnJoin.addEventListener('click', () => {
     return;
   }
   const roomCode = roomCodeInput.value.trim().toUpperCase();
-  const serverUrl = getSyncedServerUrl();
   if (!roomCode || roomCode.length < 4) {
     if (lobbyError) lobbyError.textContent = 'Please enter a valid room code.';
     return;
   }
-  const joinStore = { username };
-  if (serverUrl) joinStore.serverUrl = serverUrl;
+  const joinStore = { username, serverUrl: getSyncedServerUrl() };
   if (lobbyError) lobbyError.textContent = '';
   chrome.storage.local.set(joinStore, () => {
     chrome.runtime.sendMessage({ source: 'playshare', type: 'JOIN_ROOM', username, roomCode: roomCode });
@@ -547,8 +597,32 @@ btnLeave.addEventListener('click', () => {
 });
 
 btnOpenSidebar.addEventListener('click', () => {
-  chrome.runtime.sendMessage({ source: 'playshare', type: 'TOGGLE_SIDEBAR_ACTIVE' });
-  window.close();
+  chrome.runtime.sendMessage({ source: 'playshare', type: 'TOGGLE_SIDEBAR_ACTIVE' }, (r) => {
+    if (chrome.runtime.lastError) {
+      window.close();
+      return;
+    }
+    if (r && !r.ok) {
+      const inRoom = viewRoom && !viewRoom.classList.contains('hidden');
+      const errEl = inRoom ? roomActionError : lobbyError;
+      if (errEl) {
+        errEl.style.color = '#E50914';
+        if (r.error === 'NOT_STREAMING') {
+          errEl.textContent =
+            'Not on a supported site — open Netflix, YouTube, or another listed streaming page first.';
+        } else if (r.error === 'NO_TAB' || r.error === 'NOT_WEB_PAGE') {
+          errEl.textContent = 'Open a normal browser tab, then try again.';
+        } else if (r.error === 'SEND_FAILED') {
+          errEl.textContent = 'Could not reach this tab — refresh the streaming page and try again.';
+        } else {
+          errEl.textContent = 'Could not open the sidebar.';
+        }
+        if (inRoom && roomActionError) roomActionError.classList.remove('hidden');
+      }
+      return;
+    }
+    window.close();
+  });
 });
 
 async function handleSignOut() {
@@ -593,15 +667,15 @@ chrome.runtime.onMessage.addListener((msg) => {
     case 'ROOM_LEFT':
       showLobby();
       break;
-    case 'WS_CONNECTED':
-      updateConnectionStatus(true);
-      break;
-    case 'WS_DISCONNECTED':
-      updateConnectionStatus(false);
+    case 'WS_STATUS':
+      updateWsHeader(msg);
       break;
     case 'ERROR':
       clearCreateRoomPendingTimer();
-      lobbyError.textContent = msg.message || 'An error occurred.';
+      if (lobbyError) {
+        lobbyError.style.color = '#E50914';
+        lobbyError.textContent = userVisibleServerErrorLine(msg);
+      }
       break;
   }
 });

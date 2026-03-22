@@ -239,6 +239,7 @@ body {
 }
 .ws-dot.connected { background: #4ECDC4; box-shadow: 0 0 12px rgba(78,205,196,0.5); }
 .ws-dot.disconnected { background: #E50914; box-shadow: 0 0 8px rgba(229,9,20,0.4); }
+.ws-dot.unreachable { background: #f5a623; box-shadow: 0 0 10px rgba(245,166,35,0.45); }
 
 /* ── Body sections ── */
 #viewAuth, #viewLobby, #viewRoom { padding: 12px 12px 14px; }
@@ -405,6 +406,99 @@ body {
   align-self: flex-start;
   margin: 0 0 10px;
 }
+
+/* Host-only — card row + iOS-style toggle (not a raw checkbox) */
+.ws-host-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 14px;
+  padding: 12px 12px;
+  border-radius: 12px;
+  cursor: pointer;
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.055) 0%, rgba(255, 255, 255, 0.02) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 0 24px rgba(229, 9, 20, 0.04);
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+.ws-host-toggle-row:hover {
+  border-color: rgba(229, 9, 20, 0.22);
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.03) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 28px rgba(229, 9, 20, 0.08);
+}
+.ws-host-toggle-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.ws-host-toggle-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #eaeaea;
+  letter-spacing: 0.01em;
+}
+.ws-host-toggle-hint {
+  font-size: 10px;
+  color: #7a7a7a;
+  line-height: 1.35;
+}
+.ws-toggle {
+  position: relative;
+  flex-shrink: 0;
+  width: 44px;
+  height: 26px;
+}
+.ws-toggle-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+}
+.ws-toggle-ui {
+  position: absolute;
+  inset: 0;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  transition: background 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+.ws-toggle-ui::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #f2f2f2 0%, #bdbdbd 100%);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  transition: transform 0.28s cubic-bezier(0.34, 1.45, 0.64, 1), background 0.2s ease;
+}
+.ws-toggle-input:checked + .ws-toggle-ui {
+  background: linear-gradient(135deg, #E50914 0%, #9f0610 100%);
+  border-color: rgba(229, 9, 20, 0.5);
+  box-shadow:
+    0 0 18px rgba(229, 9, 20, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+.ws-toggle-input:checked + .ws-toggle-ui::after {
+  transform: translateX(20px);
+  background: linear-gradient(180deg, #ffffff 0%, #e4e4e4 100%);
+}
+.ws-toggle-input:focus-visible + .ws-toggle-ui {
+  outline: 2px solid rgba(229, 9, 20, 0.55);
+  outline-offset: 2px;
+}
+
 #viewLobby > .ws-error {
   margin-top: 10px;
 }

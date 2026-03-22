@@ -10,6 +10,8 @@
     "sync-streaming": "node scripts/sync-streaming.js",
     "build:content": "esbuild content/src/entry.js --bundle --outfile=content/content.bundle.js --format=iife --platform=browser --target=chrome109 --legal-comments=none --charset=utf8",
     "build:content:watch": "esbuild content/src/entry.js --bundle --outfile=content/content.bundle.js --format=iife --platform=browser --target=chrome109 --legal-comments=none --charset=utf8 --watch",
+    "package:extension": "bash scripts/package-extension.sh",
+    "prepackage:extension": "npm run sync-streaming && npm run build:content",
     "start": "node server.js",
     "dev": "node server.js",
     "test": "node test-sync.js",

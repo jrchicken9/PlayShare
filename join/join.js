@@ -10,58 +10,58 @@
     if (rawServer) serverUrl = decodeURIComponent(rawServer);
   } catch {}
 
-  if (serverUrl) {
-    chrome.storage.local.set({ serverUrl });
-  }
-
   const STREAMING_HOSTS = globalThis.PLAYSHARE_STREAMING_CONFIG.hostSubstrings;
 
   function isValidVideoUrl(url) {
     if (!url || typeof url !== 'string') return false;
     try {
       const u = new URL(url);
-      return u.protocol === 'https:' && STREAMING_HOSTS.some(h => u.hostname.includes(h));
-    } catch { return false; }
+      return u.protocol === 'https:' && STREAMING_HOSTS.some((h) => u.hostname.includes(h));
+    } catch {
+      return false;
+    }
   }
 
-  // Convert title/detail URLs to watch URLs for auto-play where possible
   function toWatchUrl(url) {
     if (!url) return url;
     try {
       const u = new URL(url);
-      // Netflix: /title/12345 -> /watch/12345 (starts playback)
       const netflixTitle = u.pathname.match(/\/title\/(\d+)/);
       if (u.hostname.includes('netflix.com') && netflixTitle) {
         u.pathname = `/watch/${netflixTitle[1]}`;
         return u.toString();
       }
       return url;
-    } catch { return url; }
+    } catch {
+      return url;
+    }
   }
 
   const content = document.getElementById('content');
 
   if (!code || code.length < 4) {
-    content.innerHTML = '<p class="join-error">Invalid or missing room code. The link should look like: ...?code=ABC123</p>';
+    content.innerHTML =
+      '<p class="join-error">Invalid or missing room code. The link should look like: ...?code=ABC123</p>';
     return;
   }
 
-  chrome.storage.local.set({ pendingJoinCode: code }, () => {
-    const watchUrl = toWatchUrl(videoUrl);
-    if (watchUrl && isValidVideoUrl(watchUrl)) {
-      content.innerHTML = `
+  function runJoinFlow() {
+    chrome.storage.local.set({ pendingJoinCode: code }, () => {
+      const watchUrl = toWatchUrl(videoUrl);
+      if (watchUrl && isValidVideoUrl(watchUrl)) {
+        content.innerHTML = `
         <p style="color:#888;font-size:14px;">Redirecting you to the video…</p>
         <div class="join-room-code">${code}</div>
         <p class="join-instructions">
           Opening the same video the host is watching. Once it loads, <strong>click the PlayShare icon</strong> and join the room.
         </p>
       `;
-      chrome.tabs.getCurrent((tab) => {
-        if (tab?.id) chrome.tabs.update(tab.id, { url: watchUrl });
-        else chrome.tabs.create({ url: watchUrl });
-      });
-    } else {
-      content.innerHTML = `
+        chrome.tabs.getCurrent((tab) => {
+          if (tab?.id) chrome.tabs.update(tab.id, { url: watchUrl });
+          else chrome.tabs.create({ url: watchUrl });
+        });
+      } else {
+        content.innerHTML = `
         <p style="color:#888;font-size:14px;">You're invited to join</p>
         <div class="join-room-code">${code}</div>
         <p class="join-instructions">
@@ -76,14 +76,30 @@
         </div>
       `;
 
-      document.getElementById('openYouTube').addEventListener('click', (e) => {
-        e.preventDefault();
-        chrome.tabs.create({ url: 'https://www.youtube.com' });
+        document.getElementById('openYouTube').addEventListener('click', (e) => {
+          e.preventDefault();
+          chrome.tabs.create({ url: 'https://www.youtube.com' });
+        });
+        document.getElementById('openPrime').addEventListener('click', (e) => {
+          e.preventDefault();
+          chrome.tabs.create({ url: 'https://www.primevideo.com' });
+        });
+      }
+    });
+  }
+
+  if (serverUrl) {
+    PlayShareSignalPermissions.ensure(serverUrl, (ok) => {
+      if (!ok) {
+        content.innerHTML =
+          '<p class="join-error">Network access for this invite link was not granted, so the custom server cannot be used. You can allow access when prompted, or ask the host for a link that uses the default PlayShare server.</p>';
+        return;
+      }
+      chrome.storage.local.set({ serverUrl }, () => {
+        chrome.runtime.sendMessage({ source: 'playshare', type: 'REQUEST_WS_RECONNECT' }, () => runJoinFlow());
       });
-      document.getElementById('openPrime').addEventListener('click', (e) => {
-        e.preventDefault();
-        chrome.tabs.create({ url: 'https://www.primevideo.com' });
-      });
-    }
-  });
+    });
+  } else {
+    runJoinFlow();
+  }
 })();

@@ -50,6 +50,8 @@
   let lastDriftSec = 0;
   /** Extension ↔ server WebSocket (not the same as video PTS, but affects commands). */
   let extensionWsConnected = true;
+  let extensionWsMessage = '';
+  let extensionWsPhase = '';
   /** Connection detail popover (only for tiers other than ok). */
   let connectionDetailOpen = false;
   let connectionBadgeDetailTitle = '';
@@ -101,11 +103,14 @@
     else openConnectionDetailPopover();
   }
 
-  function setHeaderSyncBadge(tier, title) {
+  function setHeaderSyncBadge(tier, title, shortLabelOverride) {
     if (!sSyncBadge) return;
     for (const t of SYNC_BADGE_TIERS) sSyncBadge.classList.remove('ws-sync-' + t);
     sSyncBadge.classList.add('ws-sync-' + tier);
-    const shortLabel = connectionTierLabel(tier);
+    const shortLabel =
+      shortLabelOverride != null && String(shortLabelOverride).trim() !== ''
+        ? String(shortLabelOverride)
+        : connectionTierLabel(tier);
     const clickable = tier !== 'ok';
 
     connectionBadgeDetailTitle = title;
@@ -151,7 +156,22 @@
       return;
     }
     if (!extensionWsConnected) {
-      setHeaderSyncBadge('disconnected', 'Disconnected — reconnecting to PlayShare…');
+      const phase = extensionWsPhase || '';
+      const detail =
+        extensionWsMessage ||
+        (phase === 'unreachable'
+          ? "Can't reach server"
+          : 'Reconnecting…');
+      const short =
+        phase === 'unreachable'
+          ? 'Offline'
+          : phase === 'connecting'
+            ? 'Connecting…'
+            : phase === 'offline'
+              ? 'Offline'
+              : 'Reconnecting…';
+      const tier = phase === 'unreachable' ? 'err' : phase === 'connecting' ? 'wait' : 'disconnected';
+      setHeaderSyncBadge(tier, detail, short);
       return;
     }
 
@@ -572,6 +592,8 @@
 
       case 'EXTENSION_WS':
         extensionWsConnected = msg.open !== false;
+        extensionWsMessage = typeof msg.connectionMessage === 'string' ? msg.connectionMessage : '';
+        extensionWsPhase = typeof msg.transportPhase === 'string' ? msg.transportPhase : '';
         refreshHeaderSyncBadge();
         break;
 

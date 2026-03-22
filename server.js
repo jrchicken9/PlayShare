@@ -6,6 +6,8 @@
  */
 
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const os = require('os');
 const { WebSocketServer, WebSocket } = require('ws');
 const { v4: uuidv4 } = require('uuid');
@@ -274,6 +276,15 @@ function isValidVideoUrl(u) {
   } catch { return false; }
 }
 
+const PRIVACY_HTML_PATH = path.join(__dirname, 'public', 'privacy.html');
+let privacyPolicyHtml = '';
+try {
+  privacyPolicyHtml = fs.readFileSync(PRIVACY_HTML_PATH, 'utf8');
+  console.log(`[PlayShare] Privacy policy: GET /privacy (${privacyPolicyHtml.length} bytes)`);
+} catch (e) {
+  console.warn('[PlayShare] public/privacy.html missing — /privacy will return 503:', e.message);
+}
+
 const httpServer = http.createServer((req, res) => {
   // WebSocket clients hit `/` (or any path) with Upgrade: websocket — do not send 404 here or the
   // handshake fails (Railway/extension saw "Unexpected response code: 404").
@@ -281,6 +292,22 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
   const url = new URL(req.url || '/', `http://localhost:${PORT}`);
+  if (
+    (url.pathname === '/privacy' || url.pathname === '/privacy/') &&
+    (req.method === 'GET' || req.method === 'HEAD')
+  ) {
+    if (!privacyPolicyHtml) {
+      res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(req.method === 'HEAD' ? undefined : 'Privacy policy unavailable.\n');
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'public, max-age=3600'
+    });
+    res.end(req.method === 'HEAD' ? undefined : privacyPolicyHtml);
+    return;
+  }
   if (url.pathname === '/join' && req.method === 'GET') {
     const code = (url.searchParams.get('code') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
     let videoUrl = null;
@@ -822,6 +849,9 @@ function logStartupBanner() {
     console.log(`   Phones & other PCs on your LAN: ${lanWs}`);
   }
   console.log(`   Join page: ${getHttpJoinUrl()}/join?code=XXXXXX`);
+  if (privacyPolicyHtml) {
+    console.log(`   Privacy policy: ${getHttpJoinUrl()}/privacy`);
+  }
 }
 
 console.log('[PlayShare] boot', {

@@ -111,14 +111,15 @@
       <div id="lobbyPanelCreate" class="ws-lobby-step hidden">
         <button type="button" class="ws-account-bar-action ws-account-bar-action--back ws-lobby-panel-back" id="btnLobbyBackFromCreate">← Back</button>
         <p class="ws-lobby-panel-lead">You’ll get a room code to share. Friends can open your invite link or enter the code.</p>
-        <div class="ws-section">
-          <label class="ws-label" for="serverUrlInputCreate">Server WebSocket URL</label>
-          <input type="text" id="serverUrlInputCreate" class="ws-input" placeholder="wss://playshare-production.up.railway.app" autocomplete="off" />
-          <p class="ws-field-hint" id="serverUrlCreateHint">If <code>node server.js</code> runs on <strong>another</strong> computer (e.g. your MacBook), paste the URL shown in that machine’s terminal — not <code>localhost</code> on this PC.</p>
-        </div>
-        <label class="ws-setting-row">
-          <input type="checkbox" id="hostOnlyControl" />
-          <span>Host-only playback</span>
+        <label class="ws-host-toggle-row" for="hostOnlyControl">
+          <span class="ws-host-toggle-copy">
+            <span class="ws-host-toggle-title">Host-only playback</span>
+            <span class="ws-host-toggle-hint">Only you can play, pause, and seek</span>
+          </span>
+          <span class="ws-toggle">
+            <input type="checkbox" id="hostOnlyControl" class="ws-toggle-input" role="switch" />
+            <span class="ws-toggle-ui" aria-hidden="true"></span>
+          </span>
         </label>
         <div class="ws-divider ws-divider--tight">
           <button type="button" class="ws-btn ws-btn-primary" id="btnCreate">
@@ -131,14 +132,10 @@
       <!-- Manual join path -->
       <div id="lobbyPanelJoin" class="ws-lobby-step hidden">
         <button type="button" class="ws-account-bar-action ws-account-bar-action--back ws-lobby-panel-back" id="btnLobbyBackFromJoin">← Back</button>
-        <p class="ws-lobby-panel-lead">Enter the room code (and server if your host sent one).</p>
+        <p class="ws-lobby-panel-lead">Enter the room code from your host (or use Paste invite).</p>
         <div class="ws-section ws-join-section">
           <label class="ws-label" for="roomCodeInput">Room code</label>
           <input type="text" id="roomCodeInput" class="ws-input ws-input-code" placeholder="ABC123" maxlength="6" autocomplete="off" />
-        </div>
-        <div class="ws-section">
-          <label class="ws-label" for="serverUrlInput">Server URL <span class="ws-label-hint">(default: cloud server; use ws://… only for a machine on your LAN)</span></label>
-          <input type="text" id="serverUrlInput" class="ws-input" placeholder="wss://playshare-production.up.railway.app" autocomplete="off" />
         </div>
         <button type="button" class="ws-btn ws-btn-ghost ws-btn-paste" id="btnPasteInvite" title="Paste from clipboard (after copying from join page)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2" stroke="currentColor" stroke-width="2"/><rect x="8" y="2" width="8" height="4" rx="1" stroke="currentColor" stroke-width="2"/></svg>
@@ -170,6 +167,7 @@
         <span class="ws-host-only-badge" id="hostOnlyBadge" title="Only the host can control playback">Host controls only</span>
       </div>
         <p class="ws-room-overlay-hint">Chat, invites &amp; sync run in the <strong>sidebar</strong> on your watch tab.</p>
+      <div class="ws-error hidden" id="roomActionError" role="alert"></div>
 
       <div class="ws-members-section ws-popup-deferred">
         <div class="ws-section-title">Watching together</div>
@@ -209,10 +207,12 @@
     </div>
 
     <div class="ws-footer">
-      <span class="ws-footer-line">v1.0 · Own subscription required</span>
+      <span class="ws-footer-line">v1.0.4 · Each viewer needs their own subscription</span>
     </div>
   </div>
   <script src="../shared/streaming-hosts.generated.js"></script>
+  <script src="../server-config.js"></script>
+  <script src="../shared/signal-permissions.js"></script>
   <script src="../lib/supabase.min.js"></script>
   <script src="supabase-config.js"></script>
   <script src="auth.js"></script>

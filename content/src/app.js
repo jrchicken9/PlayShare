@@ -99,6 +99,8 @@ export function runPlayShareContent() {
   let lastClusterSidebarKey = null;
   /** Host-only: wall-clock until which we skip synthetic SEEK from `timeupdate` jumps (see onVideoPlay). */
   let hostTimeupdateSeekSuppressUntil = 0;
+  /** Prior tab WS open flag from background (for disconnect event counting). */
+  let prevBgWsOpen = /** @type {boolean|undefined} */ (undefined);
 
   let lastSyncAt = 0;
   let lastTimeUpdatePos = -1;  // for detecting internal seeks (buffering/adaptive bitrate)
@@ -121,6 +123,8 @@ export function runPlayShareContent() {
   // ── Diagnostic state ───────────────────────────────────────────────────────
   const diag = {
     connectionStatus: 'unknown',
+    connectionMessage: '',
+    transportPhase: '',
     lastEvent: null,
     recentMessages: [],
     errors: [],
@@ -1831,8 +1835,10 @@ export function runPlayShareContent() {
 
     switch (msg.type) {
       case 'ROOM_CREATED':
-      case 'ROOM_JOINED':
-        roomState = msg;
+      case 'ROOM_JOINED': {
+        const reconnectResync = !!msg.reconnectResync;
+        roomState = { ...msg };
+        delete roomState.reconnectResync;
         diag.connectionStatus = 'connected';
         if (diag.reportSession.roomCode !== msg.roomCode) {
           diag.reportSession = { startedAt: Date.now(), roomCode: msg.roomCode };
@@ -1860,9 +1866,18 @@ export function runPlayShareContent() {
               syncPendingSyncStateDiagFlag();
             }
           }
-          // Request fresh sync after delay (fallback + handles late video load)
           const syncDelay = playbackProfile.syncRequestDelayMs;
-          setTimeout(() => sendBg({ source: 'playshare', type: 'SYNC_REQUEST' }), syncDelay);
+          if (reconnectResync) {
+            if (msg.isHost && video && !isVideoStale(video)) {
+              setTimeout(() => {
+                sendBg({ source: 'playshare', type: 'PLAYBACK_POSITION', currentTime: video.currentTime });
+              }, Math.min(syncDelay, 120));
+            } else if (!msg.isHost) {
+              setTimeout(() => sendBg({ source: 'playshare', type: 'SYNC_REQUEST' }), syncDelay);
+            }
+          } else {
+            setTimeout(() => sendBg({ source: 'playshare', type: 'SYNC_REQUEST' }), syncDelay);
+          }
           postSidebarRoomState();
           showToast(`🎬 Joined room ${msg.roomCode}`);
           if (video) startPositionReportInterval();
@@ -1892,6 +1907,7 @@ export function runPlayShareContent() {
           finalizeRoomJoined();
         }
         break;
+      }
 
       case 'ROOM_LEFT':
         roomState = null;
@@ -2082,26 +2098,26 @@ export function runPlayShareContent() {
         applySidebarLayout();
         break;
 
-      case 'WS_DISCONNECTED':
-        diag.extensionOps.wsDisconnectEvents++;
-        diag.connectionStatus = 'disconnected';
-        diagLog('ERROR', { message: 'WebSocket disconnected' });
-        showToast('⚠ PlayShare disconnected — reconnecting…');
-        postSidebar({ type: 'EXTENSION_WS', open: false });
+      case 'WS_STATUS': {
+        if (prevBgWsOpen === true && !msg.open) diag.extensionOps.wsDisconnectEvents++;
+        prevBgWsOpen = !!msg.open;
+        diag.connectionStatus = msg.open ? 'connected' : 'disconnected';
+        if (typeof msg.connectionMessage === 'string') diag.connectionMessage = msg.connectionMessage;
+        if (typeof msg.transportPhase === 'string') diag.transportPhase = msg.transportPhase;
+        postSidebar({
+          type: 'EXTENSION_WS',
+          open: !!msg.open,
+          connectionMessage: msg.connectionMessage,
+          transportPhase: msg.transportPhase
+        });
+        if (msg.transportPhase === 'unreachable') showToast('Server unavailable');
         break;
-
-      case 'WS_CONNECTED':
-        diag.connectionStatus = 'connected';
-        postSidebar({ type: 'EXTENSION_WS', open: true });
-        if (roomState) {
-          const syncDelay = playbackProfile.syncRequestDelayMs;
-          setTimeout(() => sendBg({ source: 'playshare', type: 'SYNC_REQUEST' }), syncDelay);
-        }
-        break;
+      }
 
       case 'ERROR':
         diag.extensionOps.serverErrors++;
         diagLog('ERROR', { message: msg.message || msg.code || 'Unknown error' });
+        showToast(userVisibleServerErrorLine(msg));
         break;
     }
   });
@@ -2259,11 +2275,16 @@ export function runPlayShareContent() {
       case 'READY':
         markSidebarIframeReady();
         postSidebar({ type: 'SETTINGS', compact: true });
-        postSidebar({
-          type: 'EXTENSION_WS',
-          open: diag.connectionStatus !== 'disconnected'
+        chrome.runtime.sendMessage({ source: 'playshare', type: 'GET_DIAG' }, (res) => {
+          mergeServiceWorkerDiag(res);
+          postSidebar({
+            type: 'EXTENSION_WS',
+            open: !!(res && res.open),
+            connectionMessage: res && res.connectionMessage,
+            transportPhase: res && res.transportPhase
+          });
+          if (roomState) postSidebarRoomState();
         });
-        if (roomState) postSidebarRoomState();
         break;
     }
   }
@@ -2434,6 +2455,8 @@ export function runPlayShareContent() {
   function mergeServiceWorkerDiag(res) {
     if (!res) return;
     if (res.connectionStatus) diag.connectionStatus = res.connectionStatus;
+    if (typeof res.connectionMessage === 'string') diag.connectionMessage = res.connectionMessage;
+    if (typeof res.transportPhase === 'string') diag.transportPhase = res.transportPhase;
     if (typeof res.lastRttMs === 'number' && res.lastRttMs > 0) {
       diag.timing.lastRttMs = res.lastRttMs;
       diag.timing.lastRttSource = 'background_heartbeat';
@@ -2441,6 +2464,15 @@ export function runPlayShareContent() {
     if (res.transport && typeof res.transport === 'object') {
       diag.serviceWorkerTransport = { ...res.transport };
     }
+  }
+
+  /** Popup/sidebar-aligned copy for server ERROR frames (no video heuristics). */
+  function userVisibleServerErrorLine(msg) {
+    const code = msg && msg.code;
+    if (code === 'ROOM_NOT_FOUND') return 'Server unavailable — that room may have ended.';
+    if (code === 'RATE_LIMIT') return 'Too many messages — slow down.';
+    if (code === 'MESSAGE_TOO_LARGE') return 'Message too large.';
+    return (msg && msg.message) || 'Something went wrong.';
   }
 
   function flushDiagFromBackground() {

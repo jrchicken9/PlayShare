@@ -38,7 +38,55 @@ let lastWsClosedAt = null;
 /** Count of dropped server messages (WebSocket not OPEN). Resets with service worker. */
 let wsSendFailures = 0;
 let lastWsSendFailureAt = null;
+/** After a socket drop while in a room, re-send JOIN_ROOM on next open (server removes dead sockets). */
+let needsAutoRejoin = false;
+/** After auto-rejoin JOIN, content/bg do one-shot resync (host pushes position, viewer uses ROOM_JOINED + SYNC_REQUEST). */
+let pendingReconnectResync = false;
+/** When non-OPEN with an active room, wall-clock start for “still down” → “can’t reach server” messaging. */
+let transportStallStartedAt = 0;
+let transportStallBroadcastTimer = null;
+
 const DEFAULT_SERVER_URL = typeof PLAYSHARE_SERVER_URL !== 'undefined' ? PLAYSHARE_SERVER_URL : 'wss://playshare-production.up.railway.app';
+
+function clearTransportStallTimer() {
+  if (transportStallBroadcastTimer) {
+    clearTimeout(transportStallBroadcastTimer);
+    transportStallBroadcastTimer = null;
+  }
+}
+
+function scheduleTransportStallRefresh() {
+  clearTransportStallTimer();
+  transportStallBroadcastTimer = setTimeout(() => {
+    transportStallBroadcastTimer = null;
+    broadcastWsStatusToTabs();
+  }, 12500);
+}
+
+/** Popup GET_DIAG + sidebar: human line + phase (no new sync logic). */
+function buildWsStatusPayload() {
+  const open = ws && ws.readyState === WebSocket.OPEN;
+  if (open) {
+    return { open: true, connectionMessage: 'Connected', transportPhase: 'connected' };
+  }
+  const connecting = ws && ws.readyState === WebSocket.CONNECTING;
+  if (!roomState) {
+    return { open: false, connectionMessage: 'Offline', transportPhase: 'offline' };
+  }
+  if (connecting || wsConnectInProgress) {
+    return { open: false, connectionMessage: 'Connecting…', transportPhase: 'connecting' };
+  }
+  const stallMs = transportStallStartedAt ? Date.now() - transportStallStartedAt : 0;
+  if (stallMs > 12000) {
+    return { open: false, connectionMessage: "Can't reach server", transportPhase: 'unreachable' };
+  }
+  return { open: false, connectionMessage: 'Reconnecting…', transportPhase: 'reconnecting' };
+}
+
+function broadcastWsStatusToTabs() {
+  const p = buildWsStatusPayload();
+  broadcastToTabs({ type: 'WS_STATUS', ...p });
+}
 
 /** First install / empty storage: persist default so popup shows the same URL the service worker uses. */
 function ensureDefaultServerUrlSeeded() {
@@ -100,6 +148,8 @@ function connect(onOpen) {
 
       const url = data.serverUrl || DEFAULT_SERVER_URL;
       ws = new WebSocket(url);
+      broadcastWsStatusToTabs();
+      broadcastToPopup({ type: 'WS_STATUS', ...buildWsStatusPayload() });
       let opened = false;
 
       ws.onopen = () => {
@@ -109,12 +159,31 @@ function connect(onOpen) {
         wsOpenCount++;
         lastWsOpenedAt = Date.now();
         clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+        transportStallStartedAt = 0;
+        clearTransportStallTimer();
         lastHeartbeatSentAt = Date.now();
         ws.send(JSON.stringify({ type: 'HEARTBEAT' }));
         startHeartbeat();
         flushWsOpenWaiters();
-        broadcastToTabs({ type: 'WS_CONNECTED' });
-        broadcastToPopup({ type: 'WS_CONNECTED' });
+
+        if (roomState?.roomCode && roomState?.username && needsAutoRejoin) {
+          needsAutoRejoin = false;
+          pendingReconnectResync = true;
+          ws.send(
+            JSON.stringify({
+              type: 'JOIN_ROOM',
+              roomCode: roomState.roomCode,
+              username: roomState.username
+            })
+          );
+        } else {
+          needsAutoRejoin = false;
+        }
+
+        broadcastWsStatusToTabs();
+        const st = buildWsStatusPayload();
+        broadcastToPopup({ type: 'WS_STATUS', ...st });
       };
 
       ws.onmessage = (event) => {
@@ -133,8 +202,17 @@ function connect(onOpen) {
         wsCloseCount++;
         lastWsClosedAt = Date.now();
         stopHeartbeat();
-        broadcastToTabs({ type: 'WS_DISCONNECTED' });
-        broadcastToPopup({ type: 'WS_DISCONNECTED' });
+        if (roomState) {
+          needsAutoRejoin = true;
+          transportStallStartedAt = Date.now();
+          scheduleTransportStallRefresh();
+        } else {
+          transportStallStartedAt = 0;
+          clearTransportStallTimer();
+        }
+        broadcastWsStatusToTabs();
+        const st = buildWsStatusPayload();
+        broadcastToPopup({ type: 'WS_STATUS', ...st });
         scheduleReconnect();
       };
 
@@ -188,7 +266,6 @@ function send(msg) {
 function handleServerMessage(msg) {
   switch (msg.type) {
     case 'ROOM_CREATED':
-    case 'ROOM_JOINED':
       roomState = {
         roomCode: msg.roomCode,
         clientId: msg.clientId,
@@ -205,6 +282,27 @@ function handleServerMessage(msg) {
       broadcastToTabs(msg);
       broadcastToPopup(msg);
       break;
+
+    case 'ROOM_JOINED': {
+      const isReconnect = pendingReconnectResync;
+      pendingReconnectResync = false;
+      roomState = {
+        roomCode: msg.roomCode,
+        clientId: msg.clientId,
+        username: msg.username,
+        color: msg.color,
+        isHost: msg.isHost,
+        members: msg.members || [],
+        state: msg.state || { playing: false, currentTime: 0 },
+        videoUrl: roomState?.videoUrl || null,
+        hostOnlyControl: msg.hostOnlyControl || false,
+        countdownOnPlay: msg.countdownOnPlay || false
+      };
+      chrome.storage.local.set({ roomState });
+      broadcastToTabs({ ...msg, reconnectResync: isReconnect });
+      broadcastToPopup(msg);
+      break;
+    }
 
     case 'MEMBER_JOINED':
     case 'MEMBER_LEFT':
@@ -265,6 +363,7 @@ function handleServerMessage(msg) {
       break;
 
     case 'ERROR':
+      if (pendingReconnectResync) pendingReconnectResync = false;
       broadcastToTabs(msg);
       broadcastToPopup(msg);
       break;
@@ -345,11 +444,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   switch (msg.type) {
     case 'CREATE_ROOM':
+      needsAutoRejoin = false;
+      pendingReconnectResync = false;
       connect(() => send({ type: 'CREATE_ROOM', username: msg.username, hostOnlyControl: msg.hostOnlyControl, countdownOnPlay: msg.countdownOnPlay }));
       sendResponse({ ok: true });
       break;
 
     case 'JOIN_ROOM':
+      needsAutoRejoin = false;
+      pendingReconnectResync = false;
       connect(() => send({ type: 'JOIN_ROOM', roomCode: msg.roomCode, username: msg.username }));
       sendResponse({ ok: true });
       break;
@@ -357,9 +460,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'LEAVE_ROOM':
       send({ type: 'LEAVE_ROOM' });
       roomState = null;
+      needsAutoRejoin = false;
+      pendingReconnectResync = false;
+      transportStallStartedAt = 0;
+      clearTransportStallTimer();
       chrome.storage.local.remove('roomState');
       broadcastToTabs({ type: 'ROOM_LEFT' });
       broadcastToPopup({ type: 'ROOM_LEFT' });
+      broadcastWsStatusToTabs();
+      broadcastToPopup({ type: 'WS_STATUS', ...buildWsStatusPayload() });
       sendResponse({ ok: true });
       break;
 
@@ -424,6 +533,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ roomState });
       break;
 
+    case 'REQUEST_WS_RECONNECT':
+      connect();
+      sendResponse({ ok: true });
+      break;
+
     case 'GET_DIAG':
       chrome.storage.local.get(['serverUrl'], (data) => {
         let serverHost = null;
@@ -435,7 +549,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         } catch {
           serverHost = null;
         }
+        const wsPayload = buildWsStatusPayload();
         sendResponse({
+          ...wsPayload,
           connectionStatus: ws && ws.readyState === WebSocket.OPEN ? 'connected' : 'disconnected',
           roomState,
           lastRttMs: typeof lastRtt === 'number' && lastRtt > 0 ? lastRtt : null,
@@ -484,22 +600,31 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const tab = tabs[0];
         if (!tab?.id) {
           console.warn('[PlayShare] TOGGLE_SIDEBAR_ACTIVE: No active tab');
+          sendResponse({ ok: false, error: 'NO_TAB' });
           return;
         }
         if (!tab.url || tab.url.startsWith('chrome://')) {
           console.warn('[PlayShare] TOGGLE_SIDEBAR_ACTIVE: Active tab is not a web page:', tab.url);
+          sendResponse({ ok: false, error: 'NOT_WEB_PAGE' });
           return;
         }
         const isStreaming = isStreamingTab(tab.url);
         if (!isStreaming) {
           console.warn('[PlayShare] TOGGLE_SIDEBAR_ACTIVE: Active tab is not a streaming site. Open Netflix/YouTube etc first:', tab.url);
+          sendResponse({ ok: false, error: 'NOT_STREAMING' });
+          return;
         }
         chrome.tabs.sendMessage(tab.id, { source: 'playshare-bg', type: 'TOGGLE_SIDEBAR' })
-          .then(() => console.log('[PlayShare] TOGGLE_SIDEBAR sent to tab', tab.id))
-          .catch((err) => console.warn('[PlayShare] TOGGLE_SIDEBAR failed:', err.message));
+          .then(() => {
+            console.log('[PlayShare] TOGGLE_SIDEBAR sent to tab', tab.id);
+            sendResponse({ ok: true });
+          })
+          .catch((err) => {
+            console.warn('[PlayShare] TOGGLE_SIDEBAR failed:', err.message);
+            sendResponse({ ok: false, error: 'SEND_FAILED' });
+          });
       });
-      sendResponse({ ok: true });
-      break;
+      return true;
 
     default:
       sendResponse({ ok: false });
@@ -511,6 +636,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 chrome.storage.local.get('roomState', ({ roomState: saved }) => {
   if (saved) {
     roomState = saved;
+    needsAutoRejoin = true;
     connect();
   }
 });

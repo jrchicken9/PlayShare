@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PlayShare — Privacy Policy</title>
+  <style>
+    :root {
+      color-scheme: dark light;
+      --bg: #0c0c0f;
+      --text: #e8e8ec;
+      --muted: #9b9ba8;
+      --accent: #e50914;
+      --rule: rgba(255, 255, 255, 0.08);
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f6f6f8;
+        --text: #1a1a20;
+        --muted: #5c5c6b;
+        --rule: rgba(0, 0, 0, 0.08);
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      line-height: 1.6;
+      max-width: 42rem;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 4rem;
+      background: var(--bg);
+      color: var(--text);
+    }
+    h1 {
+      font-size: 1.65rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin: 0 0 0.5rem;
+    }
+    .meta { color: var(--muted); font-size: 0.9rem; margin-bottom: 1.5rem; }
+    h2 {
+      font-size: 1.15rem;
+      margin: 2rem 0 0.75rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--rule);
+    }
+    h2:first-of-type { border-top: none; padding-top: 0; }
+    h3 { font-size: 1rem; margin: 1.25rem 0 0.5rem; }
+    p { margin: 0.65rem 0; }
+    ul { margin: 0.5rem 0; padding-left: 1.25rem; }
+    li { margin: 0.35rem 0; }
+    a { color: var(--accent); }
+    strong { font-weight: 600; }
+    .lead { font-size: 1.02rem; }
+    footer {
+      margin-top: 2.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--rule);
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <article>
+    <h1>PlayShare — Privacy Policy</h1>
+    <p class="meta"><strong>Effective date:</strong> March 22, 2026</p>
+
+    <p class="lead">
+      This Privacy Policy describes how the <strong>PlayShare</strong> browser extension (“<strong>Extension</strong>”) and related services (“<strong>Services</strong>”) collect, use, and share information when you use the Extension. It is intended to support publication on the <strong>Chrome Web Store</strong> and to align with the data disclosures you provide there.
+    </p>
+    <p>
+      <strong>Operator:</strong> <strong>Ibrahim Haddad</strong> (“<strong>we</strong>,” “<strong>us</strong>,” “<strong>our</strong>”).<br />
+      <strong>Contact:</strong> <strong><a href="mailto:i.haddad009@gmail.com">i.haddad009@gmail.com</a></strong> — for privacy and support questions. Use the same address as your <strong>Chrome Web Store</strong> developer contact so the listing matches this policy.
+    </p>
+    <p>By installing or using the Extension, you agree to this policy. If you do not agree, do not use the Extension.</p>
+
+    <h2>1. What PlayShare is</h2>
+    <p>
+      PlayShare lets people watch video on <strong>supported streaming websites</strong> in better sync with friends and includes <strong>text chat</strong> and room features (for example, invites and room codes). <strong>Each viewer must have their own legitimate access</strong> to the streaming service they use. PlayShare does not provide video content, does not sell subscriptions, and is <strong>not affiliated</strong> with streaming platforms.
+    </p>
+
+    <h2>2. Information we collect and process</h2>
+    <p>
+      We process information in the categories below. This matches the Chrome Web Store “Data usage” disclosures for personally identifiable information, personal communications, authentication information, location (network identifiers), and website content (hyperlinks), where applicable.
+    </p>
+
+    <h3>2.1 Information stored on your device (Chrome local storage)</h3>
+    <p>The Extension uses <strong><code>chrome.storage.local</code></strong> to store items such as:</p>
+    <ul>
+      <li><strong>Room state</strong> — for example room code, whether you are host, member list metadata the Extension needs to function, and related session fields.</li>
+      <li><strong>Display name</strong> — the name you choose (or that is derived from optional account sign-in) for use in rooms.</li>
+      <li><strong>Signaling server URL</strong> — default server address or a <strong>custom</strong> server you configure (for example via invite links or advanced setup).</li>
+      <li><strong>Pending join codes</strong> or similar short-lived values used to complete join flows.</li>
+      <li><strong>Optional authentication session data</strong> — if you use sign-in, tokens or session identifiers required to keep you logged in (managed with Supabase as described below).</li>
+      <li><strong>UI preferences</strong> — for example sidebar-related settings stored by the Extension.</li>
+    </ul>
+    <p>This data remains on your device unless a feature below sends derived or related information to our servers or third parties.</p>
+
+    <h3>2.2 Information sent to the signaling server (WebSocket)</h3>
+    <p>To coordinate rooms, the Extension communicates over <strong>WebSocket</strong> with a <strong>signaling server</strong> (by default operated by us or our hosting provider; you may point the Extension at another server if that feature is available). That traffic may include:</p>
+    <ul>
+      <li><strong>Room identifier</strong> (room code) and <strong>client/session identifiers</strong> generated for the session.</li>
+      <li><strong>Display name</strong> and <strong>color</strong> or similar presence fields shown to other participants.</li>
+      <li><strong>Chat messages</strong> and related metadata needed to deliver chat (for example sender name).</li>
+      <li><strong>Playback coordination messages</strong> — for example play, pause, seek, and timeline-related values used to keep participants aligned, plus technical fields (timestamps, correlation identifiers, latency-related hints where used).</li>
+      <li><strong>Other room messages</strong> the product uses for features you enable (for example reactions, typing indicators, diagnostics the Extension sends by design).</li>
+    </ul>
+    <p><strong>Do not post</strong> passwords, payment card data, government ID numbers, or other highly sensitive personal information in chat or display names.</p>
+
+    <h3>2.3 Network and location-related identifiers</h3>
+    <p>
+      Like most internet services, servers that terminate your WebSocket or HTTPS connections may observe <strong>network identifiers</strong>, including <strong>IP addresses</strong> and derived <strong>approximate location</strong> (such as region inferred from IP by infrastructure or analytics tools). We use this category in the ordinary course of operating and securing servers (for example abuse prevention, debugging, capacity planning).
+    </p>
+    <p>We do <strong>not</strong> use the Extension to collect <strong>GPS coordinates</strong> from your device.</p>
+
+    <h3>2.4 Website content: watch page links (hyperlinks)</h3>
+    <p>
+      For <strong>invites</strong> and <strong>one-tap join</strong> style flows, the Extension may store or transmit a <strong>URL</strong> of the watch page you are on (an <strong>HTTPS hyperlink</strong>) so others can open the same title. That URL is <strong>website content</strong> in the sense of a link to a specific page; it is <strong>not</strong> a copy of the video file.
+    </p>
+    <p>The Extension reads the <strong>playback state</strong> from the page’s video element to perform sync; it does <strong>not</strong> upload the video stream to us.</p>
+
+    <h3>2.5 Optional sign-in (authentication)</h3>
+    <p>If you use <strong>email/password or other sign-in</strong> offered in the Extension, <strong>Supabase</strong> (or a comparable provider configured in the build) processes authentication on our behalf. That processing can involve:</p>
+    <ul>
+      <li><strong>Email address</strong> and <strong>password</strong> (or other credentials you submit) sent to Supabase over TLS for authentication.</li>
+      <li><strong>Session tokens</strong> or similar credentials returned to the Extension and stored locally so you stay signed in until you sign out.</li>
+    </ul>
+    <p>
+      The Extension includes Supabase client configuration (including a <strong>publishable/anon key</strong>) required for the client to talk to Supabase. <strong>Supabase’s privacy policy</strong> governs their processing: <a href="https://supabase.com/privacy" rel="noopener noreferrer">https://supabase.com/privacy</a>
+    </p>
+    <p>Guest mode may be available without creating an account; if you avoid sign-in, Supabase auth data above is not used.</p>
+
+    <h3>2.6 What we do <strong>not</strong> intentionally collect via the Extension</h3>
+    <ul>
+      <li><strong>Streaming account passwords</strong> for Netflix, YouTube, or other platforms (we do not ask for them in PlayShare).</li>
+      <li><strong>Payment card numbers</strong> or <strong>financial account</strong> details for purchases inside the Extension.</li>
+      <li><strong>Browsing history</strong> as a general log of every site you visit (the Extension runs only on declared supported sites).</li>
+      <li><strong>Keystroke logging</strong> or <strong>mouse tracking</strong> for advertising profiling.</li>
+    </ul>
+    <p>If this policy and the Chrome Web Store disclosures ever disagree, we will update this policy and the store listing to resolve the conflict.</p>
+
+    <h2>3. How we use information</h2>
+    <p>We use the information above to:</p>
+    <ul>
+      <li>Provide <strong>room creation, join, sync, and chat</strong>.</li>
+      <li>Operate, secure, and improve the <strong>signaling service</strong> (including troubleshooting and abuse prevention).</li>
+      <li>Provide <strong>optional accounts</strong> and session maintenance through Supabase (if enabled).</li>
+      <li>Generate <strong>invite links</strong> that may include room codes and optional watch URLs.</li>
+    </ul>
+    <p>We do <strong>not</strong> sell your personal information.</p>
+
+    <h2>4. How we share information</h2>
+    <ul>
+      <li><strong>Hosting / infrastructure providers</strong> that run the signaling server or related backends may process data on our behalf under contractual obligations.</li>
+      <li><strong>Supabase</strong> receives authentication-related data when you use sign-in features.</li>
+      <li><strong>Custom signaling servers</strong>: if you configure a non-default server, your room traffic is processed by that operator under their practices—we are not responsible for third-party servers you choose.</li>
+    </ul>
+    <p>We may disclose information if required by <strong>law</strong>, legal process, or to protect <strong>rights, safety, and security</strong>.</p>
+
+    <h2>5. Retention</h2>
+    <ul>
+      <li><strong>Server-side</strong>: we retain signaling and chat-related data only as long as needed for <strong>session operation</strong>, <strong>security</strong>, and <strong>legal obligations</strong>. Exact retention can vary by log type and infrastructure; we may delete or aggregate data over time.</li>
+      <li><strong>Device-side</strong>: data in <code>chrome.storage.local</code> remains until you <strong>remove</strong> it, <strong>clear extension data</strong>, or <strong>uninstall</strong> the Extension.</li>
+    </ul>
+
+    <h2>6. Security</h2>
+    <p>We use <strong>HTTPS/WSS</strong> (TLS) for client connections where configured. No method of transmission or storage is 100% secure; use PlayShare only for information you are comfortable sharing with others in the same room.</p>
+
+    <h2>7. Children’s privacy</h2>
+    <p>
+      PlayShare is <strong>not directed to children under 13</strong> (or the minimum age of digital consent in your jurisdiction). Do not use the Extension if you are below that age. If you believe we have collected a child’s information, contact us and we will take appropriate steps.
+    </p>
+
+    <h2>8. International users</h2>
+    <p>If you access the Services from outside the country where servers are located, your information may be <strong>transferred</strong> to and processed in other countries where privacy laws may differ.</p>
+
+    <h2>9. Your choices</h2>
+    <ul>
+      <li><strong>Leave a room</strong> or <strong>uninstall</strong> the Extension.</li>
+      <li><strong>Clear</strong> PlayShare data in Chrome: <code>chrome://extensions</code> → PlayShare → <strong>Remove</strong> or <strong>Clear storage</strong> (wording may vary by Chrome version).</li>
+      <li><strong>Avoid optional sign-in</strong> if you do not want Supabase authentication.</li>
+      <li><strong>Do not use custom servers</strong> you do not trust.</li>
+    </ul>
+
+    <h2>10. Changes to this policy</h2>
+    <p>
+      We may update this Privacy Policy from time to time. We will change the <strong>Effective date</strong> at the top when we do. Continued use after the update means you accept the revised policy. Material changes may also be reflected in the Chrome Web Store listing where required.
+    </p>
+
+    <h2>11. Contact</h2>
+    <p><strong>Ibrahim Haddad</strong><br /><strong>Email:</strong> <a href="mailto:i.haddad009@gmail.com">i.haddad009@gmail.com</a></p>
+    <p>Privacy and support inquiries: write to the email above. It should match the developer contact email on the PlayShare <strong>Chrome Web Store</strong> listing.</p>
+  </article>
+  <footer>
+    Official hosted privacy policy for the <strong>PlayShare</strong> browser extension. Use this page’s URL in your Chrome Web Store listing.
+  </footer>
+</body>
+</html>
