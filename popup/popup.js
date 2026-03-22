@@ -10,6 +10,15 @@ const viewLobby    = document.getElementById('viewLobby');
 const viewRoom     = document.getElementById('viewRoom');
 const usernameInput  = document.getElementById('usernameInput');
 const roomCodeInput  = document.getElementById('roomCodeInput');
+/** wss/ws signaling URL → https/http origin for /join links (browsers cannot open wss:// as a page). */
+function wsUrlToHttpBase(wsUrl) {
+  if (!wsUrl || typeof wsUrl !== 'string') return null;
+  const t = wsUrl.trim();
+  if (/^wss:\/\//i.test(t)) return 'https://' + t.slice(6).replace(/\/+$/, '');
+  if (/^ws:\/\//i.test(t)) return 'http://' + t.slice(5).replace(/\/+$/, '');
+  return null;
+}
+
 const btnPasteInvite = document.getElementById('btnPasteInvite');
 const lobbyError     = document.getElementById('lobbyError');
 const roomActionError = document.getElementById('roomActionError');
@@ -518,7 +527,10 @@ btnCreate.addEventListener('click', () => {
 
 function parseInviteFromClipboard(text) {
   if (!text || typeof text !== 'string') return null;
-  const t = text.trim();
+  let t = text.trim();
+  if (/^wss:\/\/[^\s]+\/join\b/i.test(t)) {
+    t = 'https://' + t.slice(6);
+  }
   const codeMatch = t.match(/(?:Code|code):\s*([A-Z0-9]{4,6})/i) || t.match(/\b([A-Z0-9]{4,6})\b/);
   const code = codeMatch ? codeMatch[1].toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6) : null;
   return { code };
@@ -581,10 +593,7 @@ btnCopyLink.addEventListener('click', () => {
   chrome.runtime.sendMessage({ source: 'playshare', type: 'GET_ROOM_LINK_DATA' }, (linkData) => {
     if (!linkData) return;
     const serverUrl = linkData.serverUrl;
-    const httpBase =
-      typeof globalThis.PlayShareJoinLink?.wsUrlToHttpBase === 'function'
-        ? globalThis.PlayShareJoinLink.wsUrlToHttpBase(serverUrl)
-        : null;
+    const httpBase = wsUrlToHttpBase(serverUrl);
     let httpJoinUrl = httpBase ? `${httpBase}/join?code=${currentState.roomCode}` : null;
     if (httpJoinUrl && linkData.videoUrl) httpJoinUrl += '&url=' + encodeURIComponent(linkData.videoUrl);
     const textToCopy = httpJoinUrl || currentState.roomCode;

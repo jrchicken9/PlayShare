@@ -14,6 +14,7 @@ import { buildDiagnosticExport, pushDiagTimeline, updateDriftEwm } from "./diagn
 import { getPlaybackProfile, getApplyDelayMs } from "./platform-profiles.js";
 import { createDrmSyncPromptHost } from "./drm-sync-prompt.js";
 import { createAdBreakMonitor } from "./ad-detection.js";
+import { wsUrlToHttpBase } from "./join-link-helpers.js";
 
 export function runPlayShareContent() {
   "use strict";
@@ -2258,10 +2259,7 @@ export function runPlayShareContent() {
             return;
           }
           const serverUrl = linkData.serverUrl;
-          const httpBase =
-            typeof globalThis.PlayShareJoinLink?.wsUrlToHttpBase === 'function'
-              ? globalThis.PlayShareJoinLink.wsUrlToHttpBase(serverUrl)
-              : null;
+          const httpBase = wsUrlToHttpBase(serverUrl);
           let httpJoinUrl = httpBase ? `${httpBase}/join?code=${linkData.roomCode}` : null;
           if (httpJoinUrl && linkData.videoUrl) httpJoinUrl += '&url=' + encodeURIComponent(linkData.videoUrl);
           const textToCopy = httpJoinUrl || linkData.roomCode;

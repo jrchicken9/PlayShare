@@ -1,3 +1,5 @@
+import { wsUrlFromInvitePsSrv } from './join-link-helpers.js';
+
 /** URL looks like a watchable video page (not home/browse). */
 export function isVideoPage() {
   const path = location.pathname.toLowerCase();
@@ -25,10 +27,7 @@ export function runUrlJoinFromQuery() {
   const srv = params.get('ps_srv');
   if (code.length < 4 || !srv) return;
 
-  const serverUrl =
-    typeof globalThis.PlayShareJoinLink?.wsUrlFromInvitePsSrv === 'function'
-      ? globalThis.PlayShareJoinLink.wsUrlFromInvitePsSrv(srv)
-      : null;
+  const serverUrl = wsUrlFromInvitePsSrv(srv);
   if (!serverUrl) return;
   params.delete('playshare');
   params.delete('ps_srv');

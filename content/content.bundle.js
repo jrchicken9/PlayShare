@@ -81,6 +81,33 @@
     }
   };
 
+  // content/src/join-link-helpers.js
+  function wsUrlToHttpBase(wsUrl) {
+    if (!wsUrl || typeof wsUrl !== "string") return null;
+    const t = wsUrl.trim();
+    if (/^wss:\/\//i.test(t)) return "https://" + t.slice(6).replace(/\/+$/, "");
+    if (/^ws:\/\//i.test(t)) return "http://" + t.slice(5).replace(/\/+$/, "");
+    return null;
+  }
+  function wsUrlFromInvitePsSrv(srv) {
+    if (srv == null || typeof srv !== "string") return null;
+    let host = srv;
+    try {
+      host = decodeURIComponent(srv.trim());
+    } catch {
+      return null;
+    }
+    if (!host) return null;
+    if (/^wss?:\/\//i.test(host)) return host;
+    const firstSeg = host.split(":")[0];
+    const isLocal = firstSeg === "localhost" || firstSeg === "127.0.0.1" || firstSeg === "[::1]" || firstSeg === "::1";
+    if (isLocal) {
+      if (/:\d+$/.test(host)) return "ws://" + host;
+      return "ws://" + firstSeg + ":8765";
+    }
+    return "wss://" + host;
+  }
+
   // content/src/video-page.js
   function isVideoPage() {
     const path = location.pathname.toLowerCase();
@@ -105,7 +132,7 @@
     const code = (params.get("playshare") || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
     const srv = params.get("ps_srv");
     if (code.length < 4 || !srv) return;
-    const serverUrl = typeof globalThis.PlayShareJoinLink?.wsUrlFromInvitePsSrv === "function" ? globalThis.PlayShareJoinLink.wsUrlFromInvitePsSrv(srv) : null;
+    const serverUrl = wsUrlFromInvitePsSrv(srv);
     if (!serverUrl) return;
     params.delete("playshare");
     params.delete("ps_srv");
@@ -3389,7 +3416,7 @@
               return;
             }
             const serverUrl = linkData.serverUrl;
-            const httpBase = typeof globalThis.PlayShareJoinLink?.wsUrlToHttpBase === "function" ? globalThis.PlayShareJoinLink.wsUrlToHttpBase(serverUrl) : null;
+            const httpBase = wsUrlToHttpBase(serverUrl);
             let httpJoinUrl = httpBase ? `${httpBase}/join?code=${linkData.roomCode}` : null;
             if (httpJoinUrl && linkData.videoUrl) httpJoinUrl += "&url=" + encodeURIComponent(linkData.videoUrl);
             const textToCopy = httpJoinUrl || linkData.roomCode;
