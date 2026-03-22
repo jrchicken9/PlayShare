@@ -14,7 +14,13 @@ Use this when filling the developer dashboard (privacy, permissions justificatio
 4. **Smoke-test the same zip** — Unzip to a folder → Chrome → `chrome://extensions` → **Load unpacked** → create/join a room on one streaming site and confirm sync + chat.
 5. **Dashboard fields** — Complete **Privacy practices** (data types, handling, certification). Answer consistently with this doc and `PRIVACY_POLICY.md`.
 6. **Listing assets** — At least **1 screenshot** (often 1280×800 or 640×400). Short description ≤132 characters. Optional: promo tile, marquee.
-7. **Version** — Each new upload must bump `"version"` in `manifest.json` (e.g. `1.0.5`). The popup footer is manual; update `popup/popup.html` if you want it to match.
+7. **Version** — **Source of truth:** `"version"` in `manifest.json` (Chrome requires semver `X.Y.Z`). The popup footer reads it at runtime via `chrome.runtime.getManifest().version`, so you do **not** edit the footer text by hand. To bump before a release:
+   ```bash
+   node scripts/bump-extension-version.mjs patch   # 1.0.7 → 1.0.8
+   # or: minor | major
+   node scripts/bump-extension-version.mjs         # print current version only
+   ```
+   Then rebuild the zip (`npm run package:extension`) and upload.
 
 ## Single purpose
 

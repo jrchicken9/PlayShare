@@ -51,6 +51,17 @@ const btnLobbyBackFromJoin = document.getElementById('btnLobbyBackFromJoin');
 const accountBar = document.getElementById('accountBar');
 const accountBarText = document.getElementById('accountBarText');
 const accountBarAction = document.getElementById('accountBarAction');
+const footerVersionLine = document.getElementById('footerVersionLine');
+
+/** Shown in popup footer — always matches `manifest.json` `version` (Chrome Web Store source of truth). */
+if (footerVersionLine) {
+  try {
+    const v = chrome.runtime.getManifest()?.version || '0.0.0';
+    footerVersionLine.textContent = `v${v} · Each viewer needs their own subscription`;
+  } catch {
+    footerVersionLine.textContent = 'Each viewer needs their own subscription';
+  }
+}
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let currentState = null;

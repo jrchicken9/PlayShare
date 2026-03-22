@@ -7,6 +7,8 @@
   },
   "main": "server.js",
   "scripts": {
+    "version:extension": "node scripts/bump-extension-version.mjs",
+    "bump:extension": "node scripts/bump-extension-version.mjs patch",
     "sync-streaming": "node scripts/sync-streaming.js",
     "build:content": "esbuild content/src/entry.js --bundle --outfile=content/content.bundle.js --format=iife --platform=browser --target=chrome109 --legal-comments=none --charset=utf8",
     "build:content:watch": "esbuild content/src/entry.js --bundle --outfile=content/content.bundle.js --format=iife --platform=browser --target=chrome109 --legal-comments=none --charset=utf8 --watch",
