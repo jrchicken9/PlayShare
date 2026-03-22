@@ -832,17 +832,29 @@ console.log('[PlayShare] boot', {
   RAILWAY_ENVIRONMENT: process.env.RAILWAY_ENVIRONMENT || null
 });
 
-// Railway expects IPv4 bind on 0.0.0.0 + process.env.PORT (see Railway networking docs).
-httpServer.on('error', (err) => {
+// Bind for Railway + Docker: prefer dual-stack (:: + IPv4-mapped) so mesh traffic over IPv4 or IPv6 reaches us.
+let listenFallbackIpv4 = false;
+function onListenError(err) {
+  httpServer.removeListener('error', onListenError);
+  if (!listenFallbackIpv4 && (err.code === 'EAFNOSUPPORT' || err.code === 'EINVAL')) {
+    listenFallbackIpv4 = true;
+    httpServer.on('error', onListenError);
+    httpServer.listen(PORT, '0.0.0.0', finishListen);
+    return;
+  }
   if (err.code === 'EADDRINUSE') console.error('Port already in use:', err.message);
   else console.error('Server listen error:', err.message);
   process.exit(1);
-});
+}
 
-httpServer.listen(PORT, '0.0.0.0', () => {
+function finishListen() {
+  httpServer.removeListener('error', onListenError);
   const a = httpServer.address();
   if (a && typeof a === 'object') {
     console.log(`✅ Listening ${a.address}:${a.port} (${a.family})`);
   }
   logStartupBanner();
-});
+}
+
+httpServer.on('error', onListenError);
+httpServer.listen({ port: PORT, host: '::', ipv6Only: false }, finishListen);
