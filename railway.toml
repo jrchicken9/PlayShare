@@ -1,10 +1,10 @@
 # https://docs.railway.com/deploy/config-as-code
 [build]
-builder = "DOCKERFILE"
+builder = "NIXPACKS"
 
 [deploy]
 startCommand = "node server.js"
-healthcheckPath = "/"
+healthcheckPath = "/health"
 healthcheckTimeout = 300
 # Avoid cold-start / sleep 502s on hobby tiers when the platform supports it.
 sleepApplication = false

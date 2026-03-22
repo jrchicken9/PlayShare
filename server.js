@@ -10,10 +10,26 @@ const os = require('os');
 const { WebSocketServer, WebSocket } = require('ws');
 const { v4: uuidv4 } = require('uuid');
 
-const PORT = (() => {
-  const n = Number.parseInt(String(process.env.PORT || '').trim(), 10);
-  return Number.isFinite(n) && n > 0 ? n : 8765;
-})();
+const rawPort = String(process.env.PORT ?? '').trim();
+const parsedPort = Number.parseInt(rawPort, 10);
+/** True inside a Railway deployment container (not your laptop). */
+const onRailway = Boolean(
+  String(process.env.RAILWAY_ENVIRONMENT || '').trim() ||
+    String(process.env.RAILWAY_PROJECT_ID || '').trim()
+);
+let PORT;
+if (rawPort !== '' && Number.isFinite(parsedPort) && parsedPort > 0) {
+  PORT = parsedPort;
+} else if (onRailway) {
+  console.error(
+    '[PlayShare] FATAL: PORT is unset in a Railway container (RAILWAY_* env present). ' +
+      'Delete any empty or wrong PORT variable in Railway; the platform injects PORT automatically. ' +
+      'If the app listens on 8765 while the proxy uses another port, every request returns 502.'
+  );
+  process.exit(1);
+} else {
+  PORT = 8765;
+}
 
 /** Drop oversized frames before JSON.parse (abuse / accidental huge payloads). */
 const MAX_WS_MESSAGE_BYTES = parseInt(process.env.PLAYSHARE_MAX_MESSAGE_BYTES || '65536', 10);
@@ -317,8 +333,11 @@ function openSite(u){window.open(u,'_blank');}
     res.end(html);
     return;
   }
-  // Health check for Railway / load balancers (GET or HEAD /)
-  if (url.pathname === '/' && (req.method === 'GET' || req.method === 'HEAD')) {
+  // Health checks (GET or HEAD) — some dashboards default to /health
+  if (
+    (url.pathname === '/' || url.pathname === '/health') &&
+    (req.method === 'GET' || req.method === 'HEAD')
+  ) {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end(req.method === 'HEAD' ? undefined : 'PlayShare signaling OK\n');
     return;
@@ -804,6 +823,14 @@ function logStartupBanner() {
   }
   console.log(`   Join page: ${getHttpJoinUrl()}/join?code=XXXXXX`);
 }
+
+console.log('[PlayShare] boot', {
+  node: process.version,
+  cwd: process.cwd(),
+  PORT,
+  onRailway,
+  RAILWAY_ENVIRONMENT: process.env.RAILWAY_ENVIRONMENT || null
+});
 
 // Railway expects IPv4 bind on 0.0.0.0 + process.env.PORT (see Railway networking docs).
 httpServer.on('error', (err) => {

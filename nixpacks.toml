@@ -1,0 +1,8 @@
+# Explicit Node install + start (avoids Docker/builder mismatches on Railway).
+# https://nixpacks.com/docs/configuration/file
+
+[phases.install]
+cmds = ['npm ci --omit=dev']
+
+[start]
+cmd = 'node server.js'
