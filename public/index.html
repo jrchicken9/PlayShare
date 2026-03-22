@@ -25,7 +25,6 @@
       --teal-dim: rgba(78, 205, 196, 0.14);
       --radius: 18px;
       --radius-sm: 12px;
-      --radius-tile: 10px;
       --nav-h: 64px;
       --max: 78rem;
       --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
@@ -37,10 +36,14 @@
     }
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
-      .tile-card, .feature-card, .btn-install, .btn-secondary { transition: none !important; }
+      .feature-card, .btn-install, .btn-secondary { transition: none !important; }
       .hero-billboard::before { animation: none !important; }
-      .hero-headline-slide { animation: none !important; }
-      .hero-headline-slide .hl-line { animation: none !important; }
+      .hero-spotlight { animation: none !important; }
+      .hero-spotlight-art *,
+      .hero-spotlight-shimmer,
+      .hero-scrub-playhead,
+      .hero-spotlight-marquee,
+      .hero-spotlight-badge::before { animation: none !important; }
     }
     body {
       margin: 0;
@@ -265,6 +268,18 @@
       background: var(--teal);
       box-shadow: 0 0 10px var(--teal);
     }
+    .hero-title-block {
+      margin: 0 0 1.35rem;
+      font-size: clamp(2.15rem, 6vw, 3.35rem);
+      font-weight: 800;
+      letter-spacing: -0.045em;
+      line-height: 1.05;
+      color: #fff;
+      text-wrap: balance;
+      max-width: 22ch;
+      margin-left: auto;
+      margin-right: auto;
+    }
     .hero-title-block .line-accent {
       display: block;
       margin-top: 0.2em;
@@ -280,238 +295,226 @@
     @supports not ((-webkit-background-clip: text) or (background-clip: text)) {
       .hero-title-block .line-accent { -webkit-text-fill-color: unset; color: var(--teal); background: none; }
     }
-    /* Hero headline rotator */
-    .sr-only {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      padding: 0;
-      margin: -1px;
+    /* Hero spotlight card — slow, ambient motion (not the headline) */
+    .hero-spotlight {
+      max-width: min(52rem, 100%);
+      margin: 0 auto 2rem;
+      border-radius: calc(var(--radius) + 4px);
+      padding: 1px;
+      background: linear-gradient(
+        125deg,
+        rgba(78, 205, 196, 0.35) 0%,
+        rgba(255, 255, 255, 0.08) 25%,
+        rgba(229, 9, 20, 0.3) 50%,
+        rgba(255, 255, 255, 0.06) 75%,
+        rgba(78, 205, 196, 0.25) 100%
+      );
+      background-size: 240% 240%;
+      animation: hero-border-flow 28s ease-in-out infinite alternate;
+      box-shadow:
+        0 24px 80px rgba(0, 0, 0, 0.55),
+        0 0 60px rgba(229, 9, 20, 0.06),
+        inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    }
+    @keyframes hero-border-flow {
+      0% { background-position: 0% 40%; }
+      100% { background-position: 100% 60%; }
+    }
+    .hero-spotlight-inner {
+      border-radius: var(--radius);
       overflow: hidden;
-      clip: rect(0, 0, 0, 0);
-      white-space: nowrap;
-      border: 0;
-    }
-    .hero-title-block {
-      margin: 0 0 1.1rem;
-    }
-    .hero-headline-rotator {
-      perspective: 900px;
-    }
-    .hero-headline-viewport {
+      background: #060606;
+      border: 1px solid rgba(255, 255, 255, 0.06);
       position: relative;
-      min-height: clamp(6.4rem, 16vw, 8.5rem);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: flex-start;
     }
-    .hero-headline-slide {
+    .hero-spotlight-shimmer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 4;
+      background: linear-gradient(
+        105deg,
+        transparent 0%,
+        transparent 42%,
+        rgba(255, 255, 255, 0.04) 48%,
+        rgba(255, 255, 255, 0.07) 50%,
+        rgba(255, 255, 255, 0.04) 52%,
+        transparent 58%,
+        transparent 100%
+      );
+      background-size: 200% 100%;
+      animation: hero-shimmer-pass 14s ease-in-out infinite;
+      opacity: 0.85;
+    }
+    @keyframes hero-shimmer-pass {
+      0%, 15% { background-position: 130% 0; }
+      45%, 100% { background-position: -130% 0; }
+    }
+    .hero-spotlight-frame {
+      position: relative;
+      aspect-ratio: 16 / 9;
+      max-height: min(52vh, 380px);
+      min-height: 180px;
+    }
+    .hero-spotlight-art {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+    }
+    .hero-spotlight-layer {
+      position: absolute;
+      inset: -12%;
+      will-change: transform;
+    }
+    .hero-spotlight-layer-a {
+      background:
+        radial-gradient(ellipse 70% 60% at 30% 40%, rgba(229, 9, 20, 0.45) 0%, transparent 55%),
+        radial-gradient(ellipse 50% 45% at 75% 55%, rgba(78, 205, 196, 0.22) 0%, transparent 50%),
+        linear-gradient(165deg, #120808 0%, #050506 100%);
+      animation: hero-drift-a 48s ease-in-out infinite alternate;
+    }
+    .hero-spotlight-layer-b {
+      background:
+        radial-gradient(ellipse 55% 50% at 60% 30%, rgba(78, 205, 196, 0.18) 0%, transparent 50%),
+        radial-gradient(ellipse 40% 40% at 20% 70%, rgba(229, 9, 20, 0.2) 0%, transparent 45%);
+      mix-blend-mode: screen;
+      opacity: 0.75;
+      animation: hero-drift-b 56s ease-in-out infinite alternate;
+    }
+    @keyframes hero-drift-a {
+      0% { transform: translate(0, 0) scale(1); }
+      100% { transform: translate(4%, -3%) scale(1.06); }
+    }
+    @keyframes hero-drift-b {
+      0% { transform: translate(0, 0) scale(1.05) rotate(0deg); }
+      100% { transform: translate(-5%, 4%) scale(1.12) rotate(2deg); }
+    }
+    .hero-spotlight-vignette {
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse 85% 75% at 50% 45%, transparent 30%, rgba(0, 0, 0, 0.75) 100%);
+      z-index: 1;
+    }
+    .hero-spotlight-ui {
       position: absolute;
       left: 0;
       right: 0;
-      top: 0;
-      display: flex;
-      flex-direction: column;
+      bottom: 0;
+      z-index: 3;
+      padding: 1rem 1.15rem 1.1rem;
+      background: linear-gradient(0deg, rgba(0, 0, 0, 0.92) 0%, rgba(0, 0, 0, 0.5) 55%, transparent 100%);
+      text-align: left;
+    }
+    @media (min-width: 640px) {
+      .hero-spotlight-ui { padding: 1.15rem 1.35rem 1.25rem; }
+    }
+    .hero-spotlight-badge {
+      display: inline-flex;
       align-items: center;
-      gap: 0.02em;
-      opacity: 1;
-      visibility: visible;
-      pointer-events: none;
-      transform-origin: 50% 50%;
-    }
-    .hero-title-block .hl-line {
-      display: block;
-      font-size: clamp(2.15rem, 6vw, 3.35rem);
+      gap: 0.35rem;
+      font-size: 0.625rem;
       font-weight: 800;
-      letter-spacing: -0.045em;
-      line-height: 1.05;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.9);
+      margin-bottom: 0.35rem;
+    }
+    .hero-spotlight-badge::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--teal);
+      box-shadow: 0 0 10px var(--teal);
+      animation: hero-pulse-soft 3.2s ease-in-out infinite;
+    }
+    @keyframes hero-pulse-soft {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.65; transform: scale(0.92); }
+    }
+    .hero-spotlight-card-title {
+      margin: 0 0 0.25rem;
+      font-size: clamp(1rem, 2.5vw, 1.2rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
       color: #fff;
-      text-wrap: balance;
-      max-width: 22ch;
     }
-    @keyframes hl-out-up {
-      to {
-        opacity: 0;
-        transform: translateY(-125%) rotateX(18deg) scale(0.92);
-        filter: blur(8px);
-      }
+    .hero-spotlight-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.35rem 0.5rem;
+      font-size: 0.75rem;
+      color: rgba(255, 255, 255, 0.55);
+      margin-bottom: 0.65rem;
     }
-    @keyframes hl-out-down {
-      to {
-        opacity: 0;
-        transform: translateY(130%) scale(0.9);
-        filter: blur(6px);
-      }
+    .hero-spotlight-meta .dot { opacity: 0.45; }
+    .hero-spotlight-avatars {
+      display: inline-flex;
+      align-items: center;
     }
-    @keyframes hl-out-left {
-      to {
-        opacity: 0;
-        transform: translateX(-115%) skewX(-6deg);
-        filter: blur(4px);
-      }
+    .hero-spotlight-avatars span {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 2px solid #0a0a0a;
+      margin-right: -7px;
+      background: linear-gradient(135deg, #3d8b84 0%, #1a3d3a 100%);
     }
-    @keyframes hl-out-right {
-      to {
-        opacity: 0;
-        transform: translateX(115%) skewX(6deg);
-        filter: blur(4px);
-      }
+    .hero-spotlight-avatars span:nth-child(2) { background: linear-gradient(135deg, #8b3d4a 0%, #3d1a20 100%); }
+    .hero-spotlight-avatars span:nth-child(3) { background: linear-gradient(135deg, #6b5b8b 0%, #2a2438 100%); }
+    .hero-spotlight-scrub {
+      position: relative;
+      height: 4px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.1);
+      overflow: hidden;
     }
-    @keyframes hl-out-zoom {
-      to {
-        opacity: 0;
-        transform: scale(1.35);
-        filter: blur(12px);
-      }
+    .hero-scrub-playhead {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 26%;
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(78, 205, 196, 0.2), var(--teal), rgba(229, 9, 20, 0.85));
+      box-shadow: 0 0 12px rgba(78, 205, 196, 0.35);
+      animation: hero-scrub-drift 24s ease-in-out infinite alternate;
     }
-    @keyframes hl-out-curtain {
-      to {
-        opacity: 0;
-        transform: scaleX(0.15) scaleY(0.4);
-        filter: blur(10px);
-      }
+    @keyframes hero-scrub-drift {
+      0% { left: 0; }
+      100% { left: 72%; }
     }
-    @keyframes hl-in-up {
-      from {
-        opacity: 0;
-        transform: translateY(110%) rotateX(-14deg) scale(0.88);
-        filter: blur(10px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0) rotateX(0) scale(1);
-        filter: blur(0);
-      }
+    .hero-spotlight-marquee-wrap {
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(0, 0, 0, 0.45);
+      padding: 0.65rem 0;
+      overflow: hidden;
     }
-    @keyframes hl-in-down {
-      from {
-        opacity: 0;
-        transform: translateY(-100%) scale(1.12);
-        filter: blur(8px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-        filter: blur(0);
-      }
+    .hero-spotlight-marquee {
+      display: flex;
+      gap: 0.5rem;
+      width: max-content;
+      animation: hero-marquee 80s linear infinite;
     }
-    @keyframes hl-in-left {
-      from {
-        opacity: 0;
-        transform: translateX(110%) skewX(5deg);
-        filter: blur(5px);
-      }
-      to {
-        opacity: 1;
-        transform: translateX(0) skewX(0);
-        filter: blur(0);
-      }
+    @keyframes hero-marquee {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
     }
-    @keyframes hl-in-right {
-      from {
-        opacity: 0;
-        transform: translateX(-110%) skewX(-5deg);
-        filter: blur(5px);
-      }
-      to {
-        opacity: 1;
-        transform: translateX(0) skewX(0);
-        filter: blur(0);
-      }
+    .hero-spotlight-marquee .m-thumb {
+      flex: 0 0 auto;
+      width: 72px;
+      aspect-ratio: 2 / 3;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: linear-gradient(160deg, #2a1810 0%, #0d0806 100%);
+      opacity: 0.85;
     }
-    @keyframes hl-in-pop {
-      from {
-        opacity: 0;
-        transform: scale(0.65);
-        filter: blur(6px);
-      }
-      to {
-        opacity: 1;
-        transform: scale(1);
-        filter: blur(0);
-      }
+    .hero-spotlight-marquee .m-thumb:nth-child(3n + 2) {
+      background: linear-gradient(160deg, #102420 0%, #060d0c 100%);
     }
-    @keyframes hl-in-unfold {
-      from {
-        opacity: 0;
-        transform: scaleY(0.2) translateY(0.5em);
-        filter: blur(6px);
-      }
-      to {
-        opacity: 1;
-        transform: scaleY(1) translateY(0);
-        filter: blur(0);
-      }
-    }
-    .hero-headline-slide.hl-anim-out-up { animation: hl-out-up 0.72s var(--ease-out) forwards; }
-    .hero-headline-slide.hl-anim-out-down { animation: hl-out-down 0.68s var(--ease-out) forwards; }
-    .hero-headline-slide.hl-anim-out-left { animation: hl-out-left 0.7s var(--ease-out) forwards; }
-    .hero-headline-slide.hl-anim-out-right { animation: hl-out-right 0.7s var(--ease-out) forwards; }
-    .hero-headline-slide.hl-anim-out-zoom { animation: hl-out-zoom 0.65s var(--ease-out) forwards; }
-    .hero-headline-slide.hl-anim-out-curtain { animation: hl-out-curtain 0.75s var(--ease-out) forwards; }
-    .hero-headline-slide.hl-anim-in-up .hl-line:nth-child(1) {
-      animation: hl-in-up 0.62s var(--ease-out) backwards;
-      animation-delay: 0s;
-    }
-    .hero-headline-slide.hl-anim-in-up .hl-line:nth-child(2) {
-      animation: hl-in-up 0.62s var(--ease-out) backwards;
-      animation-delay: 0.09s;
-    }
-    .hero-headline-slide.hl-anim-in-down .hl-line:nth-child(1) {
-      animation: hl-in-down 0.58s var(--ease-out) backwards;
-      animation-delay: 0s;
-    }
-    .hero-headline-slide.hl-anim-in-down .hl-line:nth-child(2) {
-      animation: hl-in-down 0.58s var(--ease-out) backwards;
-      animation-delay: 0.1s;
-    }
-    .hero-headline-slide.hl-anim-in-left .hl-line:nth-child(1) {
-      animation: hl-in-left 0.6s var(--ease-out) backwards;
-      animation-delay: 0s;
-    }
-    .hero-headline-slide.hl-anim-in-left .hl-line:nth-child(2) {
-      animation: hl-in-left 0.6s var(--ease-out) backwards;
-      animation-delay: 0.08s;
-    }
-    .hero-headline-slide.hl-anim-in-right .hl-line:nth-child(1) {
-      animation: hl-in-right 0.6s var(--ease-out) backwards;
-      animation-delay: 0s;
-    }
-    .hero-headline-slide.hl-anim-in-right .hl-line:nth-child(2) {
-      animation: hl-in-right 0.6s var(--ease-out) backwards;
-      animation-delay: 0.08s;
-    }
-    .hero-headline-slide.hl-anim-in-pop .hl-line:nth-child(1) {
-      animation: hl-in-pop 0.55s var(--ease-out) backwards;
-      animation-delay: 0s;
-    }
-    .hero-headline-slide.hl-anim-in-pop .hl-line:nth-child(2) {
-      animation: hl-in-pop 0.55s var(--ease-out) backwards;
-      animation-delay: 0.11s;
-    }
-    .hero-headline-slide.hl-anim-in-unfold .hl-line:nth-child(1) {
-      animation: hl-in-unfold 0.58s var(--ease-out) backwards;
-      animation-delay: 0s;
-    }
-    .hero-headline-slide.hl-anim-in-unfold .hl-line:nth-child(2) {
-      animation: hl-in-unfold 0.58s var(--ease-out) backwards;
-      animation-delay: 0.12s;
-    }
-    @keyframes hl-accent-in {
-      from {
-        opacity: 0;
-        transform: translateY(0.6em);
-        filter: blur(4px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-        filter: blur(0);
-      }
-    }
-    .hero-title-block .line-accent.hl-accent-anim {
-      animation: hl-accent-in 0.55s var(--ease-out) backwards;
+    .hero-spotlight-marquee .m-thumb:nth-child(3n) {
+      background: linear-gradient(160deg, #181028 0%, #0a060e 100%);
     }
     .hero .tagline {
       margin: 0 auto 1.75rem;
@@ -566,83 +569,6 @@
       text-align: left;
     }
     #install-soon[hidden] { display: none !important; }
-    /* Decorative tile row under hero */
-    .hero-tile-strip-wrap {
-      position: relative;
-      z-index: 2;
-      margin-top: 0.5rem;
-      padding: 0 0 2.25rem;
-      mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
-      -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
-    }
-    .hero-tile-strip {
-      display: flex;
-      gap: 0.65rem;
-      overflow-x: auto;
-      padding: 0.5rem 1.25rem 0.75rem;
-      scroll-snap-type: x mandatory;
-      scrollbar-width: thin;
-      scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
-    }
-    @media (min-width: 768px) {
-      .hero-tile-strip { padding-left: 2rem; padding-right: 2rem; justify-content: center; flex-wrap: wrap; overflow: visible; scroll-snap-type: none; }
-    }
-    .tile-card {
-      flex: 0 0 auto;
-      width: 112px;
-      aspect-ratio: 2 / 3;
-      border-radius: var(--radius-tile);
-      scroll-snap-align: start;
-      position: relative;
-      overflow: hidden;
-      border: 1px solid var(--border);
-      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
-      transition: transform 0.35s var(--ease-out), box-shadow 0.35s, border-color 0.25s;
-    }
-    @media (min-width: 768px) {
-      .tile-card { width: 124px; }
-      .tile-card:hover {
-        transform: scale(1.06) translateY(-4px);
-        z-index: 3;
-        border-color: rgba(78, 205, 196, 0.35);
-        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(78, 205, 196, 0.15);
-      }
-    }
-    .tile-card::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background: var(--tile-grad, linear-gradient(160deg, #1a1a1a 0%, #0a0a0a 100%));
-    }
-    .tile-card::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.85) 100%);
-    }
-    .tile-card .tile-play {
-      position: absolute;
-      bottom: 10px;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 32px;
-      height: 32px;
-      border-radius: 50%;
-      background: rgba(255, 255, 255, 0.95);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 1;
-      opacity: 0.95;
-    }
-    .tile-card .tile-play svg { margin-left: 2px; }
-    .tile-card:nth-child(1) { --tile-grad: linear-gradient(165deg, #3d1518 0%, #1a080a 50%, #0a0a0a 100%); }
-    .tile-card:nth-child(2) { --tile-grad: linear-gradient(165deg, #0d2a28 0%, #0a1816 55%, #050808 100%); }
-    .tile-card:nth-child(3) { --tile-grad: linear-gradient(165deg, #2a1a0d 0%, #140c06 50%, #0a0603 100%); }
-    .tile-card:nth-child(4) { --tile-grad: linear-gradient(165deg, #1a1f3d 0%, #0a0e1a 55%, #05060a 100%); }
-    .tile-card:nth-child(5) { --tile-grad: linear-gradient(165deg, #251828 0%, #120c14 50%, #080508 100%); }
-    .tile-card:nth-child(6) { --tile-grad: linear-gradient(165deg, #152a1a 0%, #0a140c 55%, #050a06 100%); }
-    .tile-card:nth-child(7) { --tile-grad: linear-gradient(165deg, #2a1520 0%, #140a10 50%, #0a0508 100%); }
     /* Section chrome */
     .section-stream {
       max-width: var(--max);
@@ -978,12 +904,44 @@
       <section class="hero hero-billboard-inner" aria-labelledby="hero-title">
         <p class="hero-eyebrow"><span class="hero-eyebrow-dot" aria-hidden="true"></span> Chrome extension · Watch parties</p>
         <h1 id="hero-title" class="hero-title-block">
-          <span id="hero-aria-live" class="sr-only" aria-live="polite" aria-atomic="true"></span>
-          <div class="hero-headline-rotator">
-            <div class="hero-headline-viewport" id="hero-headline-viewport" aria-hidden="true"></div>
-          </div>
-          <span class="line-accent" id="hero-line-accent"></span>
+          Same scene.<br />Same second.<br />
+          <span class="line-accent">Together on the apps you love.</span>
         </h1>
+
+        <div class="hero-spotlight" role="region" aria-label="Watch party preview illustration">
+          <div class="hero-spotlight-inner">
+            <div class="hero-spotlight-frame">
+              <div class="hero-spotlight-art" aria-hidden="true">
+                <div class="hero-spotlight-layer hero-spotlight-layer-a"></div>
+                <div class="hero-spotlight-layer hero-spotlight-layer-b"></div>
+                <div class="hero-spotlight-vignette"></div>
+                <div class="hero-spotlight-shimmer"></div>
+              </div>
+              <div class="hero-spotlight-ui">
+                <div class="hero-spotlight-badge">In sync</div>
+                <p class="hero-spotlight-card-title">Everyone on the same moment</p>
+                <div class="hero-spotlight-meta">
+                  <span class="hero-spotlight-avatars"><span></span><span></span><span></span></span>
+                  <span>Friends in room</span>
+                  <span class="dot">·</span>
+                  <span>Decorative preview—not your data</span>
+                </div>
+                <div class="hero-spotlight-scrub" aria-hidden="true">
+                  <div class="hero-scrub-playhead"></div>
+                </div>
+              </div>
+            </div>
+            <div class="hero-spotlight-marquee-wrap" aria-hidden="true">
+              <div class="hero-spotlight-marquee">
+                <div class="m-thumb"></div><div class="m-thumb"></div><div class="m-thumb"></div><div class="m-thumb"></div>
+                <div class="m-thumb"></div><div class="m-thumb"></div><div class="m-thumb"></div><div class="m-thumb"></div>
+                <div class="m-thumb"></div><div class="m-thumb"></div><div class="m-thumb"></div><div class="m-thumb"></div>
+                <div class="m-thumb"></div><div class="m-thumb"></div><div class="m-thumb"></div><div class="m-thumb"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <p class="tagline">
           PlayShare syncs play, pause, and seek on the streaming sites you already use—plus side chat in the room.
           Everyone keeps their own subscription; we’re not affiliated with Netflix, YouTube, Prime Video, or other providers.
@@ -1009,17 +967,6 @@
           If you’re the operator, set the environment variable <code style="font-size:0.85em;background:rgba(0,0,0,0.35);padding:0.15em 0.4em;border-radius:4px">PLAYSHARE_CHROME_STORE_URL</code> on your server to the full Web Store listing URL so the install buttons go live automatically.
         </div>
       </section>
-      <div class="hero-tile-strip-wrap" aria-hidden="true">
-        <div class="hero-tile-strip">
-          <div class="tile-card"><span class="tile-play"><svg width="12" height="14" viewBox="0 0 24 28" fill="#0a0a0a" aria-hidden="true"><path d="M0 4a4 4 0 014-4h1l15 10a4 4 0 010 6.7L5 27H4a4 4 0 01-4-4V4z"/></svg></span></div>
-          <div class="tile-card"><span class="tile-play"><svg width="12" height="14" viewBox="0 0 24 28" fill="#0a0a0a" aria-hidden="true"><path d="M0 4a4 4 0 014-4h1l15 10a4 4 0 010 6.7L5 27H4a4 4 0 01-4-4V4z"/></svg></span></div>
-          <div class="tile-card"><span class="tile-play"><svg width="12" height="14" viewBox="0 0 24 28" fill="#0a0a0a" aria-hidden="true"><path d="M0 4a4 4 0 014-4h1l15 10a4 4 0 010 6.7L5 27H4a4 4 0 01-4-4V4z"/></svg></span></div>
-          <div class="tile-card"><span class="tile-play"><svg width="12" height="14" viewBox="0 0 24 28" fill="#0a0a0a" aria-hidden="true"><path d="M0 4a4 4 0 014-4h1l15 10a4 4 0 010 6.7L5 27H4a4 4 0 01-4-4V4z"/></svg></span></div>
-          <div class="tile-card"><span class="tile-play"><svg width="12" height="14" viewBox="0 0 24 28" fill="#0a0a0a" aria-hidden="true"><path d="M0 4a4 4 0 014-4h1l15 10a4 4 0 010 6.7L5 27H4a4 4 0 01-4-4V4z"/></svg></span></div>
-          <div class="tile-card"><span class="tile-play"><svg width="12" height="14" viewBox="0 0 24 28" fill="#0a0a0a" aria-hidden="true"><path d="M0 4a4 4 0 014-4h1l15 10a4 4 0 010 6.7L5 27H4a4 4 0 01-4-4V4z"/></svg></span></div>
-          <div class="tile-card"><span class="tile-play"><svg width="12" height="14" viewBox="0 0 24 28" fill="#0a0a0a" aria-hidden="true"><path d="M0 4a4 4 0 014-4h1l15 10a4 4 0 010 6.7L5 27H4a4 4 0 01-4-4V4z"/></svg></span></div>
-        </div>
-      </div>
     </div>
 
     <div class="highlight-strip">
@@ -1158,127 +1105,6 @@
           });
           if (soon) soon.hidden = false;
         }
-
-        /* Hero headline rotator */
-        var HL_SLIDES = [
-          { l1: 'Same scene.', l2: 'Same second.', accent: 'Together on the apps you love.' },
-          { l1: 'Perfect sync.', l2: 'Perfect rhythm.', accent: 'Built for pause, rewind, and group reactions.' },
-          { l1: 'Watch together.', l2: 'React together.', accent: 'Side chat without leaving the watch page.' },
-          { l1: 'One play button.', l2: 'Whole room rolls.', accent: 'Host sets the beat—everyone echoes in sync.' },
-          { l1: 'Same timestamp.', l2: 'Same gasp.', accent: 'Less “wait—what happened?” mid-scene.' },
-          { l1: 'Your stream.', l2: 'Our sync line.', accent: 'We sweat milliseconds so you can enjoy the moment.' },
-          { l1: 'Frame for frame.', l2: 'Second for second.', accent: 'Binge nights with distributed couches.' },
-          { l1: 'Different houses.', l2: 'Same couch energy.', accent: 'Chrome extension—your subscriptions stay yours.' }
-        ];
-        var HL_TRANS = [
-          { out: 'hl-anim-out-up', inn: 'hl-anim-in-up' },
-          { out: 'hl-anim-out-left', inn: 'hl-anim-in-right' },
-          { out: 'hl-anim-out-zoom', inn: 'hl-anim-in-pop' },
-          { out: 'hl-anim-out-down', inn: 'hl-anim-in-down' },
-          { out: 'hl-anim-out-right', inn: 'hl-anim-in-left' },
-          { out: 'hl-anim-out-curtain', inn: 'hl-anim-in-unfold' }
-        ];
-        var viewport = document.getElementById('hero-headline-viewport');
-        var accentEl = document.getElementById('hero-line-accent');
-        var liveEl = document.getElementById('hero-aria-live');
-        if (!viewport || !accentEl || !HL_SLIDES.length) return;
-
-        function setLive(s) {
-          if (liveEl) liveEl.textContent = s.l1 + ' ' + s.l2 + ' ' + s.accent;
-        }
-
-        function buildSlideHtml(s) {
-          return (
-            '<span class="hl-line">' + s.l1 + '</span><span class="hl-line">' + s.l2 + '</span>'
-          );
-        }
-
-        var idx = 0;
-        var slideEl = document.createElement('div');
-        slideEl.className = 'hero-headline-slide';
-        slideEl.innerHTML = buildSlideHtml(HL_SLIDES[0]);
-        viewport.appendChild(slideEl);
-        accentEl.textContent = HL_SLIDES[0].accent;
-        setLive(HL_SLIDES[0]);
-
-        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-
-        var HOLD_MS = 4200;
-        var timer = null;
-        var busy = false;
-
-        function clearAnimClasses(el) {
-          HL_TRANS.forEach(function (t) {
-            el.classList.remove(t.out, t.inn);
-          });
-        }
-
-        function goNext() {
-          if (busy) return;
-          busy = true;
-          var nextIdx = (idx + 1) % HL_SLIDES.length;
-          var trans = HL_TRANS[idx % HL_TRANS.length];
-          var next = HL_SLIDES[nextIdx];
-
-          clearAnimClasses(slideEl);
-          slideEl.classList.add(trans.out);
-
-          var outDone = false;
-          function afterOut() {
-            if (outDone) return;
-            outDone = true;
-            clearTimeout(safetyOut);
-            slideEl.removeEventListener('animationend', onOutOnce);
-            slideEl.classList.remove(trans.out);
-            slideEl.style.animation = 'none';
-            void slideEl.offsetWidth;
-            slideEl.style.opacity = '';
-            slideEl.style.filter = '';
-            slideEl.style.transform = '';
-            slideEl.innerHTML = buildSlideHtml(next);
-            accentEl.textContent = next.accent;
-            accentEl.classList.remove('hl-accent-anim');
-            void accentEl.offsetWidth;
-            accentEl.classList.add('hl-accent-anim');
-            clearAnimClasses(slideEl);
-            slideEl.classList.add(trans.inn);
-            idx = nextIdx;
-            setLive(next);
-
-            var linesLeft = 2;
-            var safetyIn = setTimeout(function finishIn() {
-              slideEl.removeEventListener('animationend', onInDone);
-              clearAnimClasses(slideEl);
-              slideEl.style.animation = '';
-              accentEl.classList.remove('hl-accent-anim');
-              busy = false;
-              timer = setTimeout(goNext, HOLD_MS);
-            }, 1300);
-            function onInDone(evn) {
-              if (!slideEl.contains(evn.target)) return;
-              var n = evn.animationName || '';
-              if (n.indexOf('hl-in') !== 0) return;
-              linesLeft -= 1;
-              if (linesLeft > 0) return;
-              clearTimeout(safetyIn);
-              slideEl.removeEventListener('animationend', onInDone);
-              clearAnimClasses(slideEl);
-              slideEl.style.animation = '';
-              accentEl.classList.remove('hl-accent-anim');
-              busy = false;
-              timer = setTimeout(goNext, HOLD_MS);
-            }
-            slideEl.addEventListener('animationend', onInDone);
-          }
-          var safetyOut = setTimeout(afterOut, 900);
-          function onOutOnce(ev) {
-            if (ev.target !== slideEl) return;
-            afterOut();
-          }
-          slideEl.addEventListener('animationend', onOutOnce);
-        }
-
-        timer = setTimeout(goNext, HOLD_MS);
       });
     })();
   </script>
