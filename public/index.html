@@ -61,10 +61,12 @@
       pointer-events: none;
       z-index: 0;
       background:
-        radial-gradient(ellipse 135% 90% at 50% -12%, rgba(229, 9, 20, 0.32) 0%, rgba(229, 9, 20, 0.06) 42%, transparent 58%),
-        radial-gradient(ellipse 95% 70% at 95% 8%, rgba(229, 9, 20, 0.16) 0%, transparent 48%),
-        radial-gradient(ellipse 75% 55% at 5% 22%, rgba(229, 9, 20, 0.14) 0%, transparent 46%),
-        radial-gradient(ellipse 110% 65% at 50% 102%, rgba(229, 9, 20, 0.12) 0%, transparent 52%),
+        /* Softer above-the-fold wash — peak sits a bit lower so the nav isn’t drowning in red */
+        radial-gradient(ellipse 120% 75% at 50% 4%, rgba(229, 9, 20, 0.17) 0%, rgba(229, 9, 20, 0.04) 38%, transparent 55%),
+        radial-gradient(ellipse 90% 60% at 95% 14%, rgba(229, 9, 20, 0.09) 0%, transparent 46%),
+        radial-gradient(ellipse 75% 55% at 5% 28%, rgba(229, 9, 20, 0.11) 0%, transparent 46%),
+        /* Slightly richer toward the bottom so scrolling feels balanced */
+        radial-gradient(ellipse 115% 72% at 50% 108%, rgba(229, 9, 20, 0.17) 0%, rgba(229, 9, 20, 0.05) 45%, transparent 58%),
         radial-gradient(ellipse 85% 55% at 100% 12%, rgba(78, 205, 196, 0.07) 0%, transparent 45%);
     }
     #main, .nav, footer { position: relative; z-index: 1; }
@@ -223,17 +225,17 @@
       inset: -45% -25% 30%;
       background:
         conic-gradient(
-          from 188deg at 62% 36%,
-          rgba(229, 9, 20, 0.38) 0deg,
-          rgba(180, 25, 35, 0.18) 42deg,
+          from 188deg at 62% 42%,
+          rgba(229, 9, 20, 0.24) 0deg,
+          rgba(180, 25, 35, 0.11) 42deg,
           transparent 72deg,
-          rgba(229, 9, 20, 0.12) 118deg,
+          rgba(229, 9, 20, 0.09) 118deg,
           rgba(78, 205, 196, 0.1) 148deg,
           transparent 215deg,
-          rgba(229, 9, 20, 0.08) 280deg,
+          rgba(229, 9, 20, 0.06) 280deg,
           transparent 360deg
         );
-      opacity: 1;
+      opacity: 0.95;
       animation: hero-shift 18s ease-in-out infinite alternate;
     }
     @keyframes hero-shift {
@@ -246,9 +248,9 @@
       inset: 0;
       background: linear-gradient(
         180deg,
-        rgba(3, 3, 3, 0.08) 0%,
-        rgba(3, 3, 3, 0.28) 38%,
-        rgba(3, 3, 3, 0.55) 72%,
+        rgba(3, 3, 3, 0.22) 0%,
+        rgba(3, 3, 3, 0.26) 32%,
+        rgba(3, 3, 3, 0.52) 72%,
         var(--bg) 100%
       );
       pointer-events: none;
