@@ -7,21 +7,28 @@
   <title>PlayShare — Watch together</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <style>
     :root {
       --bg: #030303;
-      --bg-card: #0c0c0c;
+      --bg-card: #0a0a0a;
       --bg-elevated: #141414;
+      --bg-row: #0e0e0e;
       --border: rgba(255, 255, 255, 0.08);
+      --border-glow: rgba(78, 205, 196, 0.2);
       --text: #ececec;
-      --text-muted: #8c8c8c;
+      --text-muted: #949494;
       --accent: #e50914;
       --accent-hover: #ff1a26;
+      --accent-glow: rgba(229, 9, 20, 0.35);
       --teal: #4ecdc4;
-      --radius: 16px;
+      --teal-dim: rgba(78, 205, 196, 0.14);
+      --radius: 18px;
       --radius-sm: 12px;
+      --radius-tile: 10px;
       --nav-h: 64px;
+      --max: 78rem;
+      --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
     }
     *, *::before, *::after { box-sizing: border-box; }
     html {
@@ -30,6 +37,8 @@
     }
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
+      .tile-card, .feature-card, .btn-install, .btn-secondary { transition: none !important; }
+      .hero-billboard::before { animation: none !important; }
     }
     body {
       margin: 0;
@@ -38,13 +47,22 @@
       line-height: 1.6;
       color: var(--text);
       background: var(--bg);
-      background-image:
-        radial-gradient(100% 80% at 50% -10%, rgba(229, 9, 20, 0.12) 0%, transparent 50%),
-        radial-gradient(60% 40% at 100% 20%, rgba(78, 205, 196, 0.06) 0%, transparent 45%);
       -webkit-font-smoothing: antialiased;
     }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      background:
+        radial-gradient(ellipse 120% 70% at 50% -15%, rgba(229, 9, 20, 0.14) 0%, transparent 52%),
+        radial-gradient(ellipse 80% 50% at 100% 10%, rgba(78, 205, 196, 0.07) 0%, transparent 45%),
+        radial-gradient(ellipse 60% 40% at 0% 30%, rgba(229, 9, 20, 0.05) 0%, transparent 42%);
+    }
+    #main, .nav, footer { position: relative; z-index: 1; }
     a { color: var(--teal); text-decoration: none; font-weight: 500; }
-    a:hover { text-decoration: underline; color: #6ee0d7; }
+    a:hover { text-decoration: underline; color: #7ee8de; }
     .skip {
       position: absolute;
       left: -9999px;
@@ -62,28 +80,29 @@
       padding: 10px 16px;
       background: var(--accent);
       color: #fff;
-      z-index: 200;
+      z-index: 300;
       border-radius: 8px;
       outline: none;
     }
-    /* Nav */
+    /* Nav — streaming bar */
     .nav {
       position: sticky;
       top: 0;
       z-index: 100;
-      height: var(--nav-h);
+      min-height: var(--nav-h);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 1.25rem;
-      max-width: 72rem;
+      padding: 0.65rem 1.25rem;
+      max-width: var(--max);
       margin: 0 auto;
       border-bottom: 1px solid var(--border);
-      background: rgba(3, 3, 3, 0.85);
-      backdrop-filter: blur(12px);
+      background: rgba(3, 3, 3, 0.78);
+      backdrop-filter: blur(16px) saturate(1.2);
+      -webkit-backdrop-filter: blur(16px) saturate(1.2);
     }
     @media (min-width: 768px) {
-      .nav { padding: 0 2rem; }
+      .nav { padding: 0.65rem 2rem; }
     }
     .nav-brand {
       display: flex;
@@ -91,17 +110,19 @@
       gap: 12px;
       color: inherit;
       text-decoration: none;
-      font-weight: 600;
+      font-weight: 700;
       letter-spacing: -0.03em;
+      font-size: 1.05rem;
     }
     .nav-brand:hover { text-decoration: none; color: #fff; }
     .nav-brand img {
-      width: 36px;
-      height: 36px;
-      border-radius: 10px;
+      width: 38px;
+      height: 38px;
+      border-radius: 11px;
       object-fit: contain;
+      box-shadow: 0 0 20px rgba(78, 205, 196, 0.12);
     }
-    .nav-brand .play { color: rgba(255, 255, 255, 0.95); }
+    .nav-brand .play { color: rgba(255, 255, 255, 0.96); }
     .nav-brand .share {
       margin-left: 2px;
       background: linear-gradient(100deg, #ff6a6a 0%, #e50914 45%, #c40812 100%);
@@ -115,36 +136,39 @@
     .nav-links {
       display: flex;
       align-items: center;
-      gap: 0.5rem 1.25rem;
+      gap: 0.35rem 1rem;
       flex-wrap: wrap;
       justify-content: flex-end;
     }
     .nav-links a:not(.btn-install) {
       color: var(--text-muted);
-      font-size: 0.9rem;
+      font-size: 0.875rem;
       font-weight: 500;
+      text-decoration: none;
     }
-    .nav-links a:not(.btn-install):hover { color: var(--text); }
+    .nav-links a:not(.btn-install):hover { color: #fff; text-decoration: none; }
     .btn-install {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      padding: 0.55rem 1.15rem;
-      font-size: 0.875rem;
-      font-weight: 600;
+      padding: 0.55rem 1.2rem;
+      font-size: 0.8125rem;
+      font-weight: 700;
       color: #fff !important;
       text-decoration: none !important;
       background: var(--accent);
       border-radius: 999px;
       border: none;
       cursor: pointer;
-      transition: background 0.15s ease, transform 0.15s ease;
+      transition: background 0.2s var(--ease-out), transform 0.2s var(--ease-out), box-shadow 0.2s;
       white-space: nowrap;
+      box-shadow: 0 4px 20px var(--accent-glow);
     }
     .btn-install:hover {
       background: var(--accent-hover);
       text-decoration: none !important;
-      transform: translateY(-1px);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 28px rgba(229, 9, 20, 0.45);
     }
     .btn-install.is-pending {
       background: var(--bg-elevated);
@@ -152,124 +176,361 @@
       border: 1px solid var(--border);
       cursor: default;
       transform: none;
+      box-shadow: none;
     }
     .btn-install.is-pending:hover {
       background: var(--bg-elevated);
       transform: none;
+      box-shadow: none;
     }
-    /* Hero */
-    .hero {
-      max-width: 72rem;
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.55rem 1.2rem;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--text);
+      text-decoration: none !important;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      transition: border-color 0.2s, background 0.2s, transform 0.2s var(--ease-out);
+    }
+    .btn-secondary:hover {
+      border-color: rgba(255, 255, 255, 0.22);
+      background: rgba(255, 255, 255, 0.1);
+      text-decoration: none !important;
+      transform: translateY(-1px);
+    }
+    .btn-secondary svg { opacity: 0.85; flex-shrink: 0; }
+    /* Hero billboard */
+    .hero-billboard {
+      position: relative;
+      overflow: hidden;
+      border-bottom: 1px solid var(--border);
+    }
+    .hero-billboard::before {
+      content: "";
+      position: absolute;
+      inset: -40% -20% 35%;
+      background:
+        conic-gradient(from 200deg at 70% 40%, rgba(229, 9, 20, 0.15) 0deg, transparent 55deg, rgba(78, 205, 196, 0.08) 120deg, transparent 220deg);
+      opacity: 0.9;
+      animation: hero-shift 18s ease-in-out infinite alternate;
+    }
+    @keyframes hero-shift {
+      from { transform: translate(-3%, 0) rotate(0deg); }
+      to { transform: translate(3%, -2%) rotate(3deg); }
+    }
+    .hero-billboard::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, transparent 0%, rgba(3, 3, 3, 0.4) 45%, var(--bg) 100%);
+      pointer-events: none;
+    }
+    .hero-billboard-inner {
+      position: relative;
+      z-index: 2;
+      max-width: var(--max);
       margin: 0 auto;
-      padding: 3rem 1.25rem 4rem;
+      padding: 2.5rem 1.25rem 2rem;
       text-align: center;
     }
     @media (min-width: 768px) {
-      .hero { padding: 4.5rem 2rem 5rem; }
+      .hero-billboard-inner { padding: 3.75rem 2rem 2.5rem; }
+    }
+    .hero-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin: 0 0 1rem;
+      padding: 0.35rem 0.85rem;
+      font-size: 0.6875rem;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.75);
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+    }
+    .hero-eyebrow-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--teal);
+      box-shadow: 0 0 10px var(--teal);
     }
     .hero h1 {
-      margin: 0 0 1rem;
-      font-size: clamp(2rem, 5vw, 2.85rem);
-      font-weight: 700;
-      letter-spacing: -0.04em;
-      line-height: 1.12;
+      margin: 0 0 1.1rem;
+      font-size: clamp(2.15rem, 6vw, 3.35rem);
+      font-weight: 800;
+      letter-spacing: -0.045em;
+      line-height: 1.05;
       color: #fff;
     }
-    .hero .tagline {
-      margin: 0 auto 2rem;
-      max-width: 36rem;
-      font-size: 1.125rem;
-      color: var(--text-muted);
-      line-height: 1.65;
+    .hero h1 .line-accent {
+      display: block;
+      margin-top: 0.2em;
+      font-size: 0.42em;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      background: linear-gradient(90deg, var(--teal) 0%, rgba(255, 255, 255, 0.92) 50%, var(--accent) 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
     }
+    @supports not ((-webkit-background-clip: text) or (background-clip: text)) {
+      .hero h1 .line-accent { -webkit-text-fill-color: unset; color: var(--teal); background: none; }
+    }
+    .hero .tagline {
+      margin: 0 auto 1.75rem;
+      max-width: 34rem;
+      font-size: clamp(1rem, 2.2vw, 1.15rem);
+      color: var(--text-muted);
+      line-height: 1.7;
+    }
+    .hero-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 0.65rem;
+      justify-content: center;
+      margin-bottom: 1.75rem;
+    }
+    .hero-badge {
+      padding: 0.4rem 0.75rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.82);
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .hero-badge strong { color: var(--teal); font-weight: 700; }
     .hero-cta {
       display: flex;
       flex-wrap: wrap;
       gap: 0.75rem 1rem;
       justify-content: center;
       align-items: center;
-      margin-bottom: 1.5rem;
-    }
-    .btn-secondary {
-      display: inline-flex;
-      align-items: center;
-      padding: 0.55rem 1.15rem;
-      font-size: 0.875rem;
-      font-weight: 600;
-      color: var(--text);
-      text-decoration: none !important;
-      background: transparent;
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      transition: border-color 0.15s, background 0.15s;
-    }
-    .btn-secondary:hover {
-      border-color: rgba(255, 255, 255, 0.2);
-      background: rgba(255, 255, 255, 0.04);
-      text-decoration: none !important;
+      margin-bottom: 1.25rem;
     }
     .hero-note {
       font-size: 0.8125rem;
       color: var(--text-muted);
-      max-width: 32rem;
+      max-width: 34rem;
       margin: 0 auto;
+      line-height: 1.55;
     }
+    .hero-note a { font-weight: 600; }
     #install-soon {
       max-width: 36rem;
-      margin: 2rem auto 0;
+      margin: 1.75rem auto 0;
       padding: 1rem 1.25rem;
       border-radius: var(--radius-sm);
-      border: 1px solid rgba(78, 205, 196, 0.25);
-      background: rgba(78, 205, 196, 0.06);
+      border: 1px solid rgba(78, 205, 196, 0.28);
+      background: linear-gradient(165deg, rgba(78, 205, 196, 0.08) 0%, rgba(0, 0, 0, 0.25) 100%);
       font-size: 0.9rem;
-      color: rgba(255, 255, 255, 0.88);
+      color: rgba(255, 255, 255, 0.9);
       line-height: 1.55;
       text-align: left;
     }
     #install-soon[hidden] { display: none !important; }
-    /* Sections */
-    section {
-      max-width: 72rem;
+    /* Decorative tile row under hero */
+    .hero-tile-strip-wrap {
+      position: relative;
+      z-index: 2;
+      margin-top: 0.5rem;
+      padding: 0 0 2.25rem;
+      mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+      -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+    }
+    .hero-tile-strip {
+      display: flex;
+      gap: 0.65rem;
+      overflow-x: auto;
+      padding: 0.5rem 1.25rem 0.75rem;
+      scroll-snap-type: x mandatory;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+    }
+    @media (min-width: 768px) {
+      .hero-tile-strip { padding-left: 2rem; padding-right: 2rem; justify-content: center; flex-wrap: wrap; overflow: visible; scroll-snap-type: none; }
+    }
+    .tile-card {
+      flex: 0 0 auto;
+      width: 112px;
+      aspect-ratio: 2 / 3;
+      border-radius: var(--radius-tile);
+      scroll-snap-align: start;
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+      transition: transform 0.35s var(--ease-out), box-shadow 0.35s, border-color 0.25s;
+    }
+    @media (min-width: 768px) {
+      .tile-card { width: 124px; }
+      .tile-card:hover {
+        transform: scale(1.06) translateY(-4px);
+        z-index: 3;
+        border-color: rgba(78, 205, 196, 0.35);
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(78, 205, 196, 0.15);
+      }
+    }
+    .tile-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: var(--tile-grad, linear-gradient(160deg, #1a1a1a 0%, #0a0a0a 100%));
+    }
+    .tile-card::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.85) 100%);
+    }
+    .tile-card .tile-play {
+      position: absolute;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.95);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1;
+      opacity: 0.95;
+    }
+    .tile-card .tile-play svg { margin-left: 2px; }
+    .tile-card:nth-child(1) { --tile-grad: linear-gradient(165deg, #3d1518 0%, #1a080a 50%, #0a0a0a 100%); }
+    .tile-card:nth-child(2) { --tile-grad: linear-gradient(165deg, #0d2a28 0%, #0a1816 55%, #050808 100%); }
+    .tile-card:nth-child(3) { --tile-grad: linear-gradient(165deg, #2a1a0d 0%, #140c06 50%, #0a0603 100%); }
+    .tile-card:nth-child(4) { --tile-grad: linear-gradient(165deg, #1a1f3d 0%, #0a0e1a 55%, #05060a 100%); }
+    .tile-card:nth-child(5) { --tile-grad: linear-gradient(165deg, #251828 0%, #120c14 50%, #080508 100%); }
+    .tile-card:nth-child(6) { --tile-grad: linear-gradient(165deg, #152a1a 0%, #0a140c 55%, #050a06 100%); }
+    .tile-card:nth-child(7) { --tile-grad: linear-gradient(165deg, #2a1520 0%, #140a10 50%, #0a0508 100%); }
+    /* Section chrome */
+    .section-stream {
+      max-width: var(--max);
       margin: 0 auto;
       padding: 3rem 1.25rem;
     }
     @media (min-width: 768px) {
-      section { padding: 3.5rem 2rem; }
+      .section-stream { padding: 3.75rem 2rem; }
+    }
+    .section-eyebrow {
+      margin: 0 0 0.5rem;
+      font-size: 0.6875rem;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--teal);
     }
     .section-title {
-      margin: 0 0 0.5rem;
-      font-size: 1.5rem;
-      font-weight: 600;
-      letter-spacing: -0.02em;
+      margin: 0 0 0.65rem;
+      font-size: clamp(1.5rem, 3vw, 1.85rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
       color: #fff;
-      text-align: center;
     }
     .section-lead {
-      margin: 0 auto 2rem;
-      max-width: 40rem;
-      text-align: center;
+      margin: 0 0 2rem;
+      max-width: 42rem;
       color: var(--text-muted);
-      font-size: 1rem;
+      font-size: 1.02rem;
+      line-height: 1.65;
     }
-    /* Platforms */
-    .platforms-grid {
+    .section-stream:not(.section-center) .section-title,
+    .section-stream:not(.section-center) .section-lead { text-align: left; }
+    .section-center .section-eyebrow { text-align: center; }
+    .section-center .section-title,
+    .section-center .section-lead { text-align: center; margin-left: auto; margin-right: auto; }
+    .section-center .steps { margin-left: auto; margin-right: auto; }
+    /* Platform row — Netflix-style chips */
+    .platforms-row {
       display: flex;
       flex-wrap: wrap;
-      gap: 0.6rem;
-      justify-content: center;
-      max-width: 52rem;
-      margin: 0 auto;
+      gap: 0.5rem;
+      align-items: center;
     }
     .platform-pill {
-      padding: 0.45rem 0.9rem;
+      padding: 0.5rem 1rem;
       font-size: 0.8125rem;
-      font-weight: 500;
-      color: rgba(255, 255, 255, 0.88);
-      background: var(--bg-elevated);
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.9);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0%, rgba(0, 0, 0, 0.2) 100%);
       border: 1px solid var(--border);
-      border-radius: 999px;
+      border-radius: 8px;
+      transition: border-color 0.2s, transform 0.2s var(--ease-out);
+    }
+    @media (hover: hover) {
+      .platform-pill:hover {
+        border-color: rgba(78, 205, 196, 0.35);
+        transform: translateY(-2px);
+      }
+    }
+    /* Highlight strip */
+    .highlight-strip {
+      max-width: var(--max);
+      margin: 0 auto;
+      padding: 0 1.25rem 2.5rem;
+    }
+    @media (min-width: 768px) {
+      .highlight-strip { padding: 0 2rem 3rem; }
+    }
+    .highlight-inner {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 1rem;
+      padding: 1.35rem 1.25rem;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: linear-gradient(135deg, rgba(78, 205, 196, 0.06) 0%, rgba(229, 9, 20, 0.05) 50%, rgba(10, 10, 10, 0.9) 100%);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+    @media (min-width: 640px) {
+      .highlight-inner {
+        grid-template-columns: repeat(3, 1fr);
+        padding: 1.5rem 1.75rem;
+        gap: 1.5rem;
+      }
+    }
+    .highlight-item {
+      text-align: center;
+      padding: 0.35rem 0;
+    }
+    .highlight-item strong {
+      display: block;
+      font-size: 0.9375rem;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 0.25rem;
+    }
+    .highlight-item span {
+      font-size: 0.8125rem;
+      color: var(--text-muted);
+      line-height: 1.5;
     }
     /* Features */
+    .features-wrap {
+      background: linear-gradient(180deg, transparent 0%, var(--bg-row) 12%, var(--bg-row) 88%, transparent 100%);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .features-inner {
+      max-width: var(--max);
+      margin: 0 auto;
+      padding: 3rem 1.25rem;
+    }
+    @media (min-width: 768px) {
+      .features-inner { padding: 3.75rem 2rem; }
+    }
     .features {
       display: grid;
       gap: 1.25rem;
@@ -279,58 +540,79 @@
       .features { grid-template-columns: repeat(3, 1fr); }
     }
     .feature-card {
-      padding: 1.5rem;
+      padding: 1.65rem 1.4rem;
       border-radius: var(--radius);
       background: var(--bg-card);
       border: 1px solid var(--border);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+      transition: transform 0.3s var(--ease-out), border-color 0.25s, box-shadow 0.3s;
+    }
+    @media (hover: hover) {
+      .feature-card:hover {
+        transform: translateY(-4px);
+        border-color: rgba(255, 255, 255, 0.12);
+        box-shadow: 0 24px 56px rgba(0, 0, 0, 0.5);
+      }
     }
     .feature-card h3 {
       margin: 0 0 0.5rem;
-      font-size: 1.05rem;
-      font-weight: 600;
+      font-size: 1.08rem;
+      font-weight: 700;
       color: #fff;
+      letter-spacing: -0.02em;
     }
     .feature-card p {
       margin: 0;
       font-size: 0.9375rem;
       color: var(--text-muted);
-      line-height: 1.6;
+      line-height: 1.65;
     }
     .feature-icon {
-      width: 40px;
-      height: 40px;
-      border-radius: 12px;
+      width: 48px;
+      height: 48px;
+      border-radius: 14px;
       display: flex;
       align-items: center;
       justify-content: center;
-      margin-bottom: 1rem;
-      background: rgba(229, 9, 20, 0.12);
-      color: var(--accent);
-      font-size: 1.25rem;
+      margin-bottom: 1.1rem;
+      background: rgba(229, 9, 20, 0.14);
+      color: #ff6b6b;
+      border: 1px solid rgba(229, 9, 20, 0.2);
     }
     .feature-card:nth-child(2) .feature-icon {
-      background: rgba(78, 205, 196, 0.12);
+      background: var(--teal-dim);
       color: var(--teal);
+      border-color: rgba(78, 205, 196, 0.25);
     }
     .feature-card:nth-child(3) .feature-icon {
       background: rgba(255, 255, 255, 0.06);
-      color: rgba(255, 255, 255, 0.85);
+      color: rgba(255, 255, 255, 0.88);
+      border-color: var(--border);
     }
+    .feature-icon svg { width: 24px; height: 24px; }
     /* Steps */
+    .steps-wrap {
+      max-width: var(--max);
+      margin: 0 auto;
+      padding: 3rem 1.25rem;
+    }
+    @media (min-width: 768px) {
+      .steps-wrap { padding: 3.75rem 2rem; }
+    }
     .steps {
       counter-reset: step;
       list-style: none;
       padding: 0;
-      margin: 0 auto;
-      max-width: 40rem;
+      margin: 0;
+      max-width: 44rem;
     }
     .steps li {
       position: relative;
-      padding: 1.25rem 0 1.25rem 3.5rem;
+      padding: 1.35rem 0 1.35rem 3.75rem;
       border-bottom: 1px solid var(--border);
-      font-size: 0.975rem;
+      font-size: 0.98rem;
       color: rgba(255, 255, 255, 0.88);
+      line-height: 1.55;
     }
     .steps li:last-child { border-bottom: none; }
     .steps li::before {
@@ -338,56 +620,76 @@
       content: counter(step);
       position: absolute;
       left: 0;
-      top: 1.15rem;
-      width: 2.25rem;
-      height: 2.25rem;
-      border-radius: 10px;
-      background: linear-gradient(145deg, rgba(229, 9, 20, 0.25) 0%, rgba(78, 205, 196, 0.12) 100%);
+      top: 1.2rem;
+      width: 2.5rem;
+      height: 2.5rem;
+      border-radius: 12px;
+      background: linear-gradient(145deg, rgba(229, 9, 20, 0.35) 0%, rgba(78, 205, 196, 0.12) 100%);
       border: 1px solid var(--border);
       display: flex;
       align-items: center;
       justify-content: center;
-      font-weight: 700;
-      font-size: 0.875rem;
+      font-weight: 800;
+      font-size: 0.9rem;
       color: #fff;
     }
     .steps strong { color: #fff; }
     /* CTA band */
     .cta-band {
-      margin: 2rem auto 4rem;
-      max-width: 72rem;
+      margin: 0 auto 3.5rem;
+      max-width: var(--max);
       padding: 0 1.25rem;
     }
     @media (min-width: 768px) {
       .cta-band { padding: 0 2rem; }
     }
     .cta-inner {
-      padding: 2.5rem 1.5rem;
+      position: relative;
+      padding: 2.75rem 1.75rem;
       border-radius: var(--radius);
       text-align: center;
-      background: linear-gradient(165deg, #141414 0%, #0a0a0a 100%);
+      overflow: hidden;
+      background: linear-gradient(165deg, #161616 0%, #0a0a0a 100%);
       border: 1px solid var(--border);
-      box-shadow: 0 0 0 1px rgba(229, 9, 20, 0.08), 0 20px 50px rgba(0, 0, 0, 0.45);
+      box-shadow:
+        0 0 0 1px rgba(229, 9, 20, 0.1),
+        0 24px 64px rgba(0, 0, 0, 0.55);
+    }
+    .cta-inner::before {
+      content: "";
+      position: absolute;
+      top: -50%;
+      left: 50%;
+      width: 120%;
+      height: 100%;
+      transform: translateX(-50%);
+      background: radial-gradient(ellipse, rgba(78, 205, 196, 0.12) 0%, transparent 65%);
+      pointer-events: none;
     }
     .cta-inner h2 {
+      position: relative;
       margin: 0 0 0.5rem;
-      font-size: 1.35rem;
+      font-size: clamp(1.25rem, 2.5vw, 1.5rem);
+      font-weight: 700;
       color: #fff;
     }
     .cta-inner p {
-      margin: 0 0 1.25rem;
+      position: relative;
+      margin: 0 0 1.35rem;
       color: var(--text-muted);
-      font-size: 0.95rem;
+      font-size: 0.98rem;
     }
+    .cta-inner .btn-install { position: relative; }
     /* Footer */
     footer {
       border-top: 1px solid var(--border);
-      padding: 2.5rem 1.25rem;
-      max-width: 72rem;
+      padding: 2.75rem 1.25rem;
+      max-width: var(--max);
       margin: 0 auto;
       display: grid;
       gap: 2rem;
       grid-template-columns: 1fr;
+      background: rgba(0, 0, 0, 0.25);
     }
     @media (min-width: 640px) {
       footer {
@@ -396,17 +698,18 @@
       }
     }
     .footer-brand {
-      font-weight: 600;
+      font-weight: 700;
       color: #fff;
       letter-spacing: -0.02em;
+      font-size: 1.05rem;
     }
     .footer-brand .share { color: var(--accent); }
     .footer-col h4 {
       margin: 0 0 0.75rem;
-      font-size: 0.75rem;
-      font-weight: 600;
+      font-size: 0.6875rem;
+      font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.1em;
+      letter-spacing: 0.12em;
       color: var(--text-muted);
     }
     .footer-col ul {
@@ -414,9 +717,9 @@
       padding: 0;
       margin: 0;
     }
-    .footer-col li { margin: 0.4rem 0; }
-    .footer-col a { color: var(--text-muted); font-weight: 400; }
-    .footer-col a:hover { color: var(--teal); }
+    .footer-col li { margin: 0.45rem 0; }
+    .footer-col a { color: var(--text-muted); font-weight: 400; text-decoration: none; }
+    .footer-col a:hover { color: var(--teal); text-decoration: underline; }
     .footer-copy {
       grid-column: 1 / -1;
       padding-top: 1.5rem;
@@ -443,30 +746,73 @@
   </header>
 
   <main id="main">
-    <section class="hero" aria-labelledby="hero-title">
-      <h1 id="hero-title">Watch together, stay in sync</h1>
-      <p class="tagline">
-        PlayShare is a browser extension that syncs playback and adds group chat on the streaming sites you already use.
-        Everyone needs their own subscription—we’re not affiliated with Netflix, YouTube, Prime Video, or other providers.
-      </p>
-      <div class="hero-cta">
-        <a class="btn-install" data-install-link data-label-ready="Add to Chrome — free" data-label-pending="Coming soon — Chrome Web Store" href="#" rel="noopener noreferrer">Add to Chrome — free</a>
-        <a class="btn-secondary" href="#how-it-works">How it works</a>
+    <div class="hero-billboard">
+      <section class="hero hero-billboard-inner" aria-labelledby="hero-title">
+        <p class="hero-eyebrow"><span class="hero-eyebrow-dot" aria-hidden="true"></span> Chrome extension · Watch parties</p>
+        <h1 id="hero-title">
+          Same scene.<br />Same second.<br />
+          <span class="line-accent">Together on the apps you love.</span>
+        </h1>
+        <p class="tagline">
+          PlayShare syncs play, pause, and seek on the streaming sites you already use—plus side chat in the room.
+          Everyone keeps their own subscription; we’re not affiliated with Netflix, YouTube, Prime Video, or other providers.
+        </p>
+        <div class="hero-badges">
+          <span class="hero-badge"><strong>Real-time</strong> playback sync</span>
+          <span class="hero-badge"><strong>In-page</strong> chat &amp; presence</span>
+          <span class="hero-badge"><strong>Room codes</strong> &amp; invites</span>
+        </div>
+        <div class="hero-cta">
+          <a class="btn-install" data-install-link data-label-ready="Add to Chrome — free" data-label-pending="Coming soon — Chrome Web Store" href="#" rel="noopener noreferrer">Add to Chrome — free</a>
+          <a class="btn-secondary" href="#how-it-works">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 5v14l11-7L8 5z" fill="currentColor"/></svg>
+            How it works
+          </a>
+        </div>
+        <p class="hero-note">HD quality and buffering depend on the streaming service and your connection—not PlayShare.</p>
+        <p class="hero-note" style="margin-top:0.65rem">
+          <a href="/privacy">Privacy Policy</a> — how we handle your data
+        </p>
+        <div id="install-soon" hidden>
+          <strong>Chrome Web Store link coming soon.</strong>
+          If you’re the operator, set the environment variable <code style="font-size:0.85em;background:rgba(0,0,0,0.35);padding:0.15em 0.4em;border-radius:4px">PLAYSHARE_CHROME_STORE_URL</code> on your server to the full Web Store listing URL so the install buttons go live automatically.
+        </div>
+      </section>
+      <div class="hero-tile-strip-wrap" aria-hidden="true">
+        <div class="hero-tile-strip">
+          <div class="tile-card"><span class="tile-play"><svg width="12" height="14" viewBox="0 0 24 28" fill="#0a0a0a" aria-hidden="true"><path d="M0 4a4 4 0 014-4h1l15 10a4 4 0 010 6.7L5 27H4a4 4 0 01-4-4V4z"/></svg></span></div>
+          <div class="tile-card"><span class="tile-play"><svg width="12" height="14" viewBox="0 0 24 28" fill="#0a0a0a" aria-hidden="true"><path d="M0 4a4 4 0 014-4h1l15 10a4 4 0 010 6.7L5 27H4a4 4 0 01-4-4V4z"/></svg></span></div>
+          <div class="tile-card"><span class="tile-play"><svg width="12" height="14" viewBox="0 0 24 28" fill="#0a0a0a" aria-hidden="true"><path d="M0 4a4 4 0 014-4h1l15 10a4 4 0 010 6.7L5 27H4a4 4 0 01-4-4V4z"/></svg></span></div>
+          <div class="tile-card"><span class="tile-play"><svg width="12" height="14" viewBox="0 0 24 28" fill="#0a0a0a" aria-hidden="true"><path d="M0 4a4 4 0 014-4h1l15 10a4 4 0 010 6.7L5 27H4a4 4 0 01-4-4V4z"/></svg></span></div>
+          <div class="tile-card"><span class="tile-play"><svg width="12" height="14" viewBox="0 0 24 28" fill="#0a0a0a" aria-hidden="true"><path d="M0 4a4 4 0 014-4h1l15 10a4 4 0 010 6.7L5 27H4a4 4 0 01-4-4V4z"/></svg></span></div>
+          <div class="tile-card"><span class="tile-play"><svg width="12" height="14" viewBox="0 0 24 28" fill="#0a0a0a" aria-hidden="true"><path d="M0 4a4 4 0 014-4h1l15 10a4 4 0 010 6.7L5 27H4a4 4 0 01-4-4V4z"/></svg></span></div>
+          <div class="tile-card"><span class="tile-play"><svg width="12" height="14" viewBox="0 0 24 28" fill="#0a0a0a" aria-hidden="true"><path d="M0 4a4 4 0 014-4h1l15 10a4 4 0 010 6.7L5 27H4a4 4 0 01-4-4V4z"/></svg></span></div>
+        </div>
       </div>
-      <p class="hero-note">HD quality and buffering depend on the streaming service and your connection—not PlayShare.</p>
-      <p class="hero-note" style="margin-top:0.5rem">
-        <a href="/privacy">Privacy Policy</a> — how we handle your data
-      </p>
-      <div id="install-soon" hidden>
-        <strong>Chrome Web Store link coming soon.</strong>
-        If you’re the operator, set the environment variable <code style="font-size:0.85em;background:rgba(0,0,0,0.35);padding:0.15em 0.4em;border-radius:4px">PLAYSHARE_CHROME_STORE_URL</code> on your server to the full Web Store listing URL so the install buttons go live automatically.
-      </div>
-    </section>
+    </div>
 
-    <section id="platforms" aria-labelledby="platforms-title">
+    <div class="highlight-strip">
+      <div class="highlight-inner">
+        <div class="highlight-item">
+          <strong>Works in Chrome</strong>
+          <span>Lightweight extension on the watch page—no separate video player.</span>
+        </div>
+        <div class="highlight-item">
+          <strong>Built for latency</strong>
+          <span>Designed around real networks so sync feels natural, not robotic.</span>
+        </div>
+        <div class="highlight-item">
+          <strong>Your logins stay yours</strong>
+          <span>We don’t run the stream; each person uses their own provider account.</span>
+        </div>
+      </div>
+    </div>
+
+    <section class="section-stream" id="platforms" aria-labelledby="platforms-title">
+      <p class="section-eyebrow">Where you watch</p>
       <h2 class="section-title" id="platforms-title">Supported streaming platforms</h2>
-      <p class="section-lead">Create a room on a supported site, share your code or invite, and watch the same moment together.</p>
-      <div class="platforms-grid">
+      <p class="section-lead">Start a room on a supported site, share your code or invite, and hit play—everyone lands on the same beat.</p>
+      <div class="platforms-row">
         <span class="platform-pill">Netflix</span>
         <span class="platform-pill">YouTube</span>
         <span class="platform-pill">Prime Video</span>
@@ -480,44 +826,54 @@
       </div>
     </section>
 
-    <section aria-labelledby="features-title">
-      <h2 class="section-title" id="features-title">Built for watch parties</h2>
-      <p class="section-lead">Sync, chat, and simple room invites—without replacing your favorite apps.</p>
-      <div class="features">
-        <article class="feature-card">
-          <div class="feature-icon" aria-hidden="true">↻</div>
-          <h3>Stay in sync</h3>
-          <p>Play, pause, and seeks stay aligned across everyone in the room so you react to the same scene at the same time.</p>
-        </article>
-        <article class="feature-card">
-          <div class="feature-icon" aria-hidden="true">💬</div>
-          <h3>Chat together</h3>
-          <p>Side chat and presence live next to the video so you can share reactions without leaving the watch page.</p>
-        </article>
-        <article class="feature-card">
-          <div class="feature-icon" aria-hidden="true">🔒</div>
-          <h3>Your accounts, your rules</h3>
-          <p>We don’t collect streaming logins. You use the providers you already pay for; PlayShare only coordinates playback and chat.</p>
-        </article>
+    <div class="features-wrap">
+      <div class="features-inner section-center">
+        <p class="section-eyebrow">Why PlayShare</p>
+        <h2 class="section-title" id="features-title">Built for watch parties</h2>
+        <p class="section-lead">Sync, chat, and simple invites—without replacing the apps you already pay for.</p>
+        <div class="features">
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 012.12 9.36L1 14"/></svg>
+            </div>
+            <h3>Stay in sync</h3>
+            <p>Play, pause, and seeks stay aligned across the room so reactions land on the same frame.</p>
+          </article>
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+            </div>
+            <h3>Chat together</h3>
+            <p>Side chat and presence live next to the video—stay in the moment without juggling tabs.</p>
+          </article>
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+            </div>
+            <h3>Your accounts, your rules</h3>
+            <p>We don’t collect streaming passwords. PlayShare only coordinates playback and chat through your browser.</p>
+          </article>
+        </div>
       </div>
-    </section>
+    </div>
 
-    <section id="how-it-works" aria-labelledby="steps-title">
+    <section class="steps-wrap section-stream section-center" id="how-it-works" aria-labelledby="steps-title">
+      <p class="section-eyebrow">Start in minutes</p>
       <h2 class="section-title" id="steps-title">How PlayShare works</h2>
-      <p class="section-lead">Get started in a few steps—same idea as other watch-party extensions, tuned for clarity.</p>
+      <p class="section-lead">A straight path from install to watch party—no new subscription for our piece of the puzzle.</p>
       <ol class="steps">
-        <li><strong>Install PlayShare</strong> from the Chrome Web Store (button above).</li>
-        <li><strong>Pin the extension</strong> so the PlayShare icon stays easy to reach in your toolbar.</li>
+        <li><strong>Install PlayShare</strong> from the Chrome Web Store (button in the header).</li>
+        <li><strong>Pin the extension</strong> so the icon stays one click away while you browse.</li>
         <li><strong>Open a video</strong> on a supported site and pick something to watch.</li>
-        <li><strong>Start a room</strong> from the extension, then share the room code or invite link with friends.</li>
-        <li><strong>Join a room</strong> on the same title—everyone keeps their own provider login; playback and chat sync through PlayShare.</li>
+        <li><strong>Start a room</strong> from the extension, then share the room code or invite link.</li>
+        <li><strong>Join on the same title</strong>—everyone uses their own provider login; sync and chat run through PlayShare.</li>
       </ol>
     </section>
 
     <div class="cta-band">
       <div class="cta-inner">
-        <h2>Ready to start a watch party?</h2>
-        <p>Add PlayShare to Chrome and open your favorite supported streaming site.</p>
+        <h2>Ready for your next watch party?</h2>
+        <p>Add PlayShare to Chrome and open a supported streaming site to create or join a room.</p>
         <a class="btn-install" data-install-link data-label-ready="Add to Chrome" data-label-pending="Coming soon" href="#" rel="noopener noreferrer">Add to Chrome</a>
       </div>
     </div>
@@ -526,8 +882,8 @@
   <footer>
     <div>
       <div class="footer-brand"><span class="play">Play</span><span class="share">Share</span></div>
-      <p style="margin:0.75rem 0 0;font-size:0.875rem;color:var(--text-muted);max-width:20rem">
-        Watch together on the streaming platforms you already use. Chrome extension; own subscription required.
+      <p style="margin:0.75rem 0 0;font-size:0.875rem;color:var(--text-muted);max-width:22rem;line-height:1.6">
+        Watch together on the platforms you already use. Chrome extension; each viewer needs their own streaming access.
       </p>
     </div>
     <div class="footer-col">
