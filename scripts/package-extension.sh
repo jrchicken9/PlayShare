@@ -16,6 +16,7 @@ zip -r "$OUT" \
   sidebar \
   join \
   shared/streaming-hosts.generated.js \
+  shared/join-link-utils.js \
   shared/signal-permissions.js \
   shared/brand-mark.png \
   icons/icon16.png \

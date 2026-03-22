@@ -25,8 +25,11 @@ export function runUrlJoinFromQuery() {
   const srv = params.get('ps_srv');
   if (code.length < 4 || !srv) return;
 
-  const host = decodeURIComponent(srv);
-  const serverUrl = host.startsWith('ws') ? host : 'ws://' + host + (host.includes(':') ? '' : ':8765');
+  const serverUrl =
+    typeof globalThis.PlayShareJoinLink?.wsUrlFromInvitePsSrv === 'function'
+      ? globalThis.PlayShareJoinLink.wsUrlFromInvitePsSrv(srv)
+      : null;
+  if (!serverUrl) return;
   params.delete('playshare');
   params.delete('ps_srv');
   const newSearch = params.toString() ? '?' + params.toString() : '';

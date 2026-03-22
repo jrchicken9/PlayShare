@@ -2258,7 +2258,11 @@ export function runPlayShareContent() {
             return;
           }
           const serverUrl = linkData.serverUrl;
-          let httpJoinUrl = serverUrl ? serverUrl.replace(/^ws:/, 'http:') + '/join?code=' + linkData.roomCode : null;
+          const httpBase =
+            typeof globalThis.PlayShareJoinLink?.wsUrlToHttpBase === 'function'
+              ? globalThis.PlayShareJoinLink.wsUrlToHttpBase(serverUrl)
+              : null;
+          let httpJoinUrl = httpBase ? `${httpBase}/join?code=${linkData.roomCode}` : null;
           if (httpJoinUrl && linkData.videoUrl) httpJoinUrl += '&url=' + encodeURIComponent(linkData.videoUrl);
           const textToCopy = httpJoinUrl || linkData.roomCode;
           navigator.clipboard.writeText(textToCopy).then(() => {

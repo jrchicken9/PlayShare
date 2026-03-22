@@ -105,8 +105,8 @@
     const code = (params.get("playshare") || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
     const srv = params.get("ps_srv");
     if (code.length < 4 || !srv) return;
-    const host = decodeURIComponent(srv);
-    const serverUrl = host.startsWith("ws") ? host : "ws://" + host + (host.includes(":") ? "" : ":8765");
+    const serverUrl = typeof globalThis.PlayShareJoinLink?.wsUrlFromInvitePsSrv === "function" ? globalThis.PlayShareJoinLink.wsUrlFromInvitePsSrv(srv) : null;
+    if (!serverUrl) return;
     params.delete("playshare");
     params.delete("ps_srv");
     const newSearch = params.toString() ? "?" + params.toString() : "";
@@ -3389,7 +3389,8 @@
               return;
             }
             const serverUrl = linkData.serverUrl;
-            let httpJoinUrl = serverUrl ? serverUrl.replace(/^ws:/, "http:") + "/join?code=" + linkData.roomCode : null;
+            const httpBase = typeof globalThis.PlayShareJoinLink?.wsUrlToHttpBase === "function" ? globalThis.PlayShareJoinLink.wsUrlToHttpBase(serverUrl) : null;
+            let httpJoinUrl = httpBase ? `${httpBase}/join?code=${linkData.roomCode}` : null;
             if (httpJoinUrl && linkData.videoUrl) httpJoinUrl += "&url=" + encodeURIComponent(linkData.videoUrl);
             const textToCopy = httpJoinUrl || linkData.roomCode;
             navigator.clipboard.writeText(textToCopy).then(() => {

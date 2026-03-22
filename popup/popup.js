@@ -581,7 +581,11 @@ btnCopyLink.addEventListener('click', () => {
   chrome.runtime.sendMessage({ source: 'playshare', type: 'GET_ROOM_LINK_DATA' }, (linkData) => {
     if (!linkData) return;
     const serverUrl = linkData.serverUrl;
-    let httpJoinUrl = serverUrl ? serverUrl.replace(/^ws:/, 'http:') + '/join?code=' + currentState.roomCode : null;
+    const httpBase =
+      typeof globalThis.PlayShareJoinLink?.wsUrlToHttpBase === 'function'
+        ? globalThis.PlayShareJoinLink.wsUrlToHttpBase(serverUrl)
+        : null;
+    let httpJoinUrl = httpBase ? `${httpBase}/join?code=${currentState.roomCode}` : null;
     if (httpJoinUrl && linkData.videoUrl) httpJoinUrl += '&url=' + encodeURIComponent(linkData.videoUrl);
     const textToCopy = httpJoinUrl || currentState.roomCode;
     navigator.clipboard.writeText(textToCopy).then(() => {
