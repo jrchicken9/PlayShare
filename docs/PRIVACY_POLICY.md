@@ -1,154 +1,171 @@
-# PlayShare — Privacy Policy
+# Privacy Policy for PlayShare
 
-**Effective date:** March 22, 2026
+**Last updated:** March 22, 2026
 
-This Privacy Policy describes how the **PlayShare** browser extension (the “**Extension**”) and related services (the “**Services**”) collect, use, disclose, and protect information when you use the Extension.
+## 1. Introduction
 
-**Data controller / operator:** **Ibrahim Haddad** (“**we**,” “**us**,” “**our**”).  
-**Contact for privacy inquiries:** **i.haddad009@gmail.com**
+PlayShare (“we”, “our”, or “us”) is a browser extension that helps people watch streaming content together in sync and communicate via chat. This Privacy Policy explains how we handle information when you use PlayShare.
 
-By installing or using the Extension, you acknowledge this policy. If you do not agree, please do not use the Extension.
+**Data controller / operator:** **Ibrahim Haddad**. For questions about this Policy, see [Section 13. Contact](#13-contact).
 
----
-
-## 1. What PlayShare is
-
-PlayShare helps people watch video on **supported streaming websites** in sync with others and provides **text chat** and room features (such as invites and room codes). **Each user must have their own lawful access** to the streaming service they use. The Extension does not supply video content, does not sell subscriptions to third-party services, and is **not affiliated with** streaming platform operators.
+By installing or using PlayShare, you agree to the practices described in this policy. If you do not agree, please do not use the Extension.
 
 ---
 
-## 2. Information we collect and process
+## 2. What PlayShare is
 
-We process the categories of information described below. They may correspond to labels used in app store or regulatory disclosures (for example, identifiers, communications content, authentication data, network or location-related identifiers, and links to web pages).
+PlayShare runs on **supported streaming websites** only. It provides **text chat**, room codes, and synchronized playback with others. **Each user must have their own lawful access** to the streaming service they use. PlayShare does not supply video, does not sell third-party subscriptions, and is **not affiliated with** streaming platform operators.
 
-### 2.1 Information stored on your device
-
-The Extension uses the browser’s local storage API (**`chrome.storage.local`**) for data such as:
-
-- **Room state** — e.g. room code, host status, member metadata needed for the Extension to operate, and related session fields.  
-- **Display name** — the name you provide or that is associated with optional sign-in.  
-- **Signaling server address** — the default server or a **custom** server you configure (e.g. via invite parameters or advanced settings).  
-- **Pending join codes** and similar short-lived values used to complete join flows.  
-- **Authentication session data** — if you use sign-in, tokens or session identifiers needed to maintain your session (see Supabase below).  
-- **Interface preferences** — e.g. sidebar-related settings.
-
-This information remains on your device unless transmitted as described in the following sections.
-
-### 2.2 Information processed by the signaling server
-
-To coordinate rooms, the Extension communicates over **WebSocket** with a **signaling server** (by default operated by us or our hosting provider; you may configure another server where the product allows). That processing may include:
-
-- **Room identifier** (room code) and **client or session identifiers** generated for the session.  
-- **Display name** and **presence** fields (e.g. color) shown to other participants.  
-- **Chat messages** and related metadata (e.g. sender name).  
-- **Playback coordination data** — e.g. play, pause, seek, and timeline-related values, and technical fields such as timestamps or correlation identifiers where used.  
-- **Other protocol messages** required for features you use (e.g. reactions, typing indicators, or diagnostic messages sent by the Extension as designed).
-
-Do not submit passwords, payment card numbers, government identifiers, or other highly sensitive data in chat or as a display name.
-
-### 2.3 Network and location-related identifiers
-
-Servers that receive your connections may process **network identifiers**, including **IP addresses**. IP addresses may be used to derive **approximate** geographic information (e.g. region). We use such data in the ordinary course of operating, securing, and maintaining the Services (e.g. abuse prevention, troubleshooting, capacity planning).
-
-We do **not** use the Extension to collect precise **GPS** location from your device.
-
-### 2.4 Page links (URLs)
-
-For invites and similar flows, the Extension may store or transmit the **URL** of the watch page you are viewing so others can open the same title. That is a link to a page; it is **not** a copy of the video file.
-
-The Extension reads **playback state** from the page’s media element to perform sync; it does **not** upload the video stream to us.
-
-### 2.5 Optional sign-in (authentication)
-
-If you use email/password or other sign-in offered in the Extension, **Supabase** (or another provider configured in the build) may process authentication on our behalf, including:
-
-- **Email address** and **password** (or other credentials) transmitted to Supabase over TLS.  
-- **Session tokens** or similar credentials returned to the Extension and stored locally until you sign out.
-
-The Extension uses Supabase client configuration (including a publishable client key) as required for that integration. Supabase’s handling of personal data is described in its privacy policy: https://supabase.com/privacy
-
-Guest use may be available without an account; if you do not sign in, the authentication data above does not apply.
-
-### 2.6 What we do not use the Extension to collect
-
-- Passwords for third-party streaming accounts (we do not request them in PlayShare).  
-- Payment card numbers or financial account details for in-Extension purchases.  
-- A general log of all websites you visit (the Extension is limited to declared supported sites).  
-- Keystroke logging or mouse tracking for advertising profiling.
-
-If any abbreviated summary of our practices conflicts with this Policy, this document prevails unless applicable law requires otherwise.
+The Extension reads **playback state** from the page to stay in sync; it does **not** upload the video stream to us.
 
 ---
 
-## 3. How we use information
+## 3. Information we collect
 
-We use the information above to:
+We collect and process only what is needed to run the core features, plus optional account features where you choose to use them.
 
-- Provide and operate **rooms, sync, and chat**.  
-- Operate, secure, and improve the **signaling service** (including troubleshooting and abuse prevention).  
-- Provide **optional accounts** and maintain sessions through Supabase where enabled.  
-- Generate **invite links** that may include room codes and optional watch URLs.
+### a) User-provided information
 
-We do **not** sell your personal information.
+- **Chat messages** you send in a room  
+- **Display name** and similar fields you choose (shown to other participants)  
+- **Optional sign-in:** if you create or use an account, **email address** and **password** (or other credentials) are sent to our authentication provider (**Supabase**) over TLS—not to the signaling server as part of normal chat/sync
 
----
+### b) Information stored on your device
 
-## 4. How we share information
+The Extension uses **`chrome.storage.local`** for items such as room state, display name, signaling server URL (default or **custom**), pending join codes, optional **auth session** tokens, and UI preferences. This stays on your device until you clear it, sign out, or remove the Extension.
 
-- **Service providers** (e.g. hosting or infrastructure) may process data on our behalf under appropriate safeguards.  
-- **Supabase** receives authentication-related data when you use sign-in features.  
-- If you use a **non-default signaling server**, your room traffic is processed by that operator; we are not responsible for their practices.
+### c) Information processed in real time (signaling server)
 
-We may disclose information if required by **law**, regulation, legal process, or to protect **rights, safety, and security**.
+To coordinate rooms, the Extension uses **WebSocket** to a **signaling server** (by default ours on a host such as Railway; you may point to another server where the product allows). That traffic can include:
 
----
+- **Room / session identifiers** (e.g. room codes, client IDs)  
+- **Display name** and **presence** (e.g. color)  
+- **Chat messages** and related metadata (e.g. sender name)  
+- **Playback coordination** — play, pause, seek, timeline-related values, timestamps, and other protocol fields needed for sync  
+- **Other protocol messages** for features you use (e.g. reactions, typing indicators)
 
-## 5. Retention
+**Do not** put passwords, payment data, government IDs, or similarly sensitive information in chat or your display name.
 
-- **Server-side:** we retain data only as long as needed for **operating the Services**, **security**, and **legal obligations**. Retention periods may vary by data type; we may delete or aggregate data over time.  
-- **Device-side:** data in `chrome.storage.local` remains until you remove it, clear extension data, or uninstall the Extension.
+### d) Automatically collected / technical information
 
----
+- **IP address** and related network data when you connect to our servers (or a custom server’s). This may be used to operate, secure, and troubleshoot the service and can imply **approximate** region—not precise GPS from your device.  
+- **Page URLs** may be included in invites so others can open the same title; that is a **link**, not a copy of the video file.
 
-## 6. Security
+### e) What we do not use PlayShare to collect
 
-We use **TLS** (HTTPS/WSS) for connections where configured. No electronic transmission or storage is completely secure; please avoid sharing sensitive information in chat or room fields.
+- Passwords or full credentials for **third-party streaming** accounts  
+- Payment card numbers for in-Extension purchases  
+- A general log of **every** website you visit (access is limited to declared supported sites)  
+- Keystroke logging or mouse tracking for **advertising** or **profiling**
 
----
-
-## 7. Children’s privacy
-
-The Extension is **not directed to children under 13** (or the age of digital consent in your jurisdiction, if higher). Do not use the Extension if you are below that age. If you believe we have collected information from a child inappropriately, contact us using the email below and we will take appropriate steps.
-
----
-
-## 8. International transfers
-
-If you access the Services from outside the country where servers are located, your information may be **transferred to** and **processed in** other countries where privacy laws may differ.
+If any short summary of our practices conflicts with this Policy, **this document controls** unless applicable law says otherwise.
 
 ---
 
-## 9. Your choices
+## 4. How we use information
 
-- Leave a room or uninstall the Extension.  
-- Clear Extension data in Chrome via extension settings (e.g. remove the Extension or clear stored data for it).  
-- Avoid optional sign-in if you do not want Supabase authentication.  
-- Do not connect to custom servers you do not trust.
+We use the information above strictly to:
+
+- Enable **synchronized playback** between users  
+- Deliver **real-time chat** and room features  
+- Operate, secure, and improve the **signaling service** (including abuse prevention and troubleshooting)  
+- Provide **optional accounts** and sessions through **Supabase** when you sign in  
+- Build **invite links** that may include room codes and watch URLs
+
+We do **not** use your data for:
+
+- **Advertising** or ad profiling  
+- **Selling** personal information to third parties
 
 ---
 
-## 10. Changes to this policy
+## 5. Data sharing
 
-We may update this Privacy Policy periodically. We will revise the **Effective date** at the top when we do. Continued use of the Extension after changes constitutes acceptance of the updated policy, except where applicable law requires additional notice or consent.
+We do **not** sell, rent, or trade your personal information.
+
+Information may be:
+
+- **Visible or delivered to other participants** in a session (e.g. chat, playback state, display name)  
+- **Processed on our servers** (or infrastructure providers such as hosting / edge networks) solely to run sync, chat, and the public **privacy policy page**  
+- **Sent to Supabase** when you use optional sign-in, under their terms: https://supabase.com/privacy  
+- **Processed by a custom signaling server** if you configure one—we are not responsible for that operator’s practices
+
+We may disclose information if **required by law** or to protect **rights, safety, and security**.
 
 ---
 
-## 11. Contact
+## 6. Data storage and retention
 
-**Ibrahim Haddad**  
-**Email:** i.haddad009@gmail.com  
+- **Chat and live session data** on our default signaling path are **ephemeral** in nature: they exist to deliver real-time sync and chat and are **not** kept as a long-term message archive or user profile database **on that server**. Retention on infrastructure may still include **short-lived processing**, **security logs**, or **backups** as needed to operate and secure the service.  
+- **On your device**, data in `chrome.storage.local` remains until you clear extension data or uninstall.  
+- **Optional accounts:** Supabase may **store** account-related data (e.g. email) according to their service and your use of sign-in—this is **not** the same as “no accounts anywhere.” If you do not sign in, Supabase account data above does not apply.
 
-For privacy-related requests or questions about this Policy, please contact us at the email above.
+We do **not** build advertising profiles from PlayShare usage.
+
+---
+
+## 7. Security
+
+We use **TLS** (HTTPS/WSS) for connections where configured (e.g. default production server and Supabase). No method of transmission over the internet is 100% secure; please avoid sharing highly sensitive information in chat or room fields.
+
+---
+
+## 8. Third-party services
+
+- **Streaming platforms** (e.g. Netflix, Prime Video): PlayShare interacts with the site you are on but does **not** collect or store your **streaming login** or credentials for those services. We are **not responsible** for their privacy practices.  
+- **Supabase:** optional authentication.  
+- **Hosting / infrastructure** (e.g. cloud or edge providers): may process network and service metadata when you connect.
+
+---
+
+## 9. International transfers
+
+If you use PlayShare from outside the country where servers are located, information may be **transferred to** and **processed in** other countries where privacy laws may differ.
+
+---
+
+## 10. Your privacy rights and choices
+
+Depending on your location, you may have rights to access, correct, delete, or object to certain processing. Because much of our processing is **session-based**, you can also:
+
+- **Leave a room** or **uninstall** the Extension  
+- **Clear** PlayShare data in Chrome’s extension settings  
+- **Avoid optional sign-in** if you do not want Supabase to process account data  
+- **Avoid custom servers** you do not trust  
+
+For requests that apply to **Supabase-held** account data, you may need to use their tools or contact us as below.
+
+---
+
+## 11. Children’s privacy
+
+PlayShare is **not intended for children under 13**, and we do not knowingly collect personal information from children. If you believe we have done so, contact us and we will take appropriate steps.
+
+---
+
+## 12. Changes to this policy
+
+We may update this Privacy Policy from time to time. We will revise the **Last updated** date at the top when we do. Continued use after changes means you accept the updated policy, except where applicable law requires more.
+
+---
+
+## 13. Contact
+
+If you have questions about this Privacy Policy:
+
+**Primary (privacy inquiries):** [i.haddad009@gmail.com](mailto:i.haddad009@gmail.com)
+
+**Support email:** We plan to offer **support@playshare.app** in the future; until that address is active, please use the email above.
+
+---
+
+## 14. Summary (plain English)
+
+- We only process what’s needed for **sync**, **chat**, **rooms**, and **optional sign-in**.  
+- We **don’t** sell your data or use it for **ads** or **profiling**.  
+- Live room traffic is **temporary** on our signaling path—not a long-term chat archive; **device** storage and **Supabase** (if you sign in) work differently, as described above.  
+- We **don’t** want your **streaming passwords**; third-party sites have their own policies.  
+- **TLS** is used for default production connections where configured.
 
 ---
 
