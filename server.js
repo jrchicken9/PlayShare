@@ -805,29 +805,17 @@ function logStartupBanner() {
   console.log(`   Join page: ${getHttpJoinUrl()}/join?code=XXXXXX`);
 }
 
-let listenV6Attempted = false;
-function onListenError(err) {
-  httpServer.removeListener('error', onListenError);
-  if (!listenV6Attempted && (err.code === 'EAFNOSUPPORT' || err.code === 'EINVAL')) {
-    listenV6Attempted = true;
-    httpServer.on('error', onListenError);
-    httpServer.listen(PORT, '0.0.0.0', () => {
-      httpServer.removeListener('error', onListenError);
-      const a = httpServer.address();
-      if (a && typeof a === 'object') console.log(`✅ Listening ${a.address}:${a.port} (${a.family})`);
-      logStartupBanner();
-    });
-    return;
-  }
+// Railway expects IPv4 bind on 0.0.0.0 + process.env.PORT (see Railway networking docs).
+httpServer.on('error', (err) => {
   if (err.code === 'EADDRINUSE') console.error('Port already in use:', err.message);
   else console.error('Server listen error:', err.message);
   process.exit(1);
-}
+});
 
-httpServer.on('error', onListenError);
-httpServer.listen({ port: PORT, host: '::', ipv6Only: false }, () => {
-  httpServer.removeListener('error', onListenError);
+httpServer.listen(PORT, '0.0.0.0', () => {
   const a = httpServer.address();
-  if (a && typeof a === 'object') console.log(`✅ Listening ${a.address}:${a.port} (${a.family})`);
+  if (a && typeof a === 'object') {
+    console.log(`✅ Listening ${a.address}:${a.port} (${a.family})`);
+  }
   logStartupBanner();
 });
