@@ -285,6 +285,30 @@ try {
   console.warn('[PlayShare] public/privacy.html missing — /privacy will return 503:', e.message);
 }
 
+const INDEX_HTML_PATH = path.join(__dirname, 'public', 'index.html');
+let homepageTemplate = '';
+try {
+  homepageTemplate = fs.readFileSync(INDEX_HTML_PATH, 'utf8');
+  console.log(`[PlayShare] Homepage: GET / (${homepageTemplate.length} bytes template)`);
+} catch (e) {
+  console.warn('[PlayShare] public/index.html missing — / will stay health text:', e.message);
+}
+
+/** Escape double quotes for embedding in HTML attribute values. */
+function escapeHtmlAttr(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;');
+}
+
+function renderHomepageHtml() {
+  if (!homepageTemplate) return null;
+  const storeUrl = String(process.env.PLAYSHARE_CHROME_STORE_URL || '').trim();
+  const bodyAttrs = storeUrl ? ` data-chrome-store-url="${escapeHtmlAttr(storeUrl)}"` : '';
+  return homepageTemplate.replace('{{BODY_ATTRS}}', bodyAttrs);
+}
+
 const httpServer = http.createServer((req, res) => {
   // WebSocket clients hit `/` (or any path) with Upgrade: websocket — do not send 404 here or the
   // handshake fails (Railway/extension saw "Unexpected response code: 404").
@@ -307,6 +331,22 @@ const httpServer = http.createServer((req, res) => {
     });
     res.end(req.method === 'HEAD' ? undefined : privacyPolicyHtml);
     return;
+  }
+  if (
+    (url.pathname === '/' ||
+      url.pathname === '/index.html' ||
+      url.pathname === '/index.html/') &&
+    (req.method === 'GET' || req.method === 'HEAD')
+  ) {
+    const html = renderHomepageHtml();
+    if (html) {
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'public, max-age=300'
+      });
+      res.end(req.method === 'HEAD' ? undefined : html);
+      return;
+    }
   }
   if (url.pathname === '/brand-mark.png' && req.method === 'GET') {
     const pngPath = path.join(__dirname, 'public', 'brand-mark.png');
@@ -375,10 +415,19 @@ function openSite(u){window.open(u,'_blank');}
     res.end(html);
     return;
   }
-  // Health checks (GET or HEAD) — some dashboards default to /health
+  // Health checks — use /health (plain text). GET / serves the marketing homepage when public/index.html exists.
   if (
-    (url.pathname === '/' || url.pathname === '/health') &&
+    url.pathname === '/health' &&
     (req.method === 'GET' || req.method === 'HEAD')
+  ) {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(req.method === 'HEAD' ? undefined : 'PlayShare signaling OK\n');
+    return;
+  }
+  if (
+    url.pathname === '/' &&
+    (req.method === 'GET' || req.method === 'HEAD') &&
+    !homepageTemplate
   ) {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end(req.method === 'HEAD' ? undefined : 'PlayShare signaling OK\n');
@@ -866,6 +915,13 @@ function logStartupBanner() {
   console.log(`   Join page: ${getHttpJoinUrl()}/join?code=XXXXXX`);
   if (privacyPolicyHtml) {
     console.log(`   Privacy policy: ${getHttpJoinUrl()}/privacy`);
+  }
+  if (homepageTemplate) {
+    console.log(`   Homepage: ${getHttpJoinUrl()}/`);
+    const store = String(process.env.PLAYSHARE_CHROME_STORE_URL || '').trim();
+    if (!store) {
+      console.log('   (Set PLAYSHARE_CHROME_STORE_URL for live Chrome Web Store install buttons.)');
+    }
   }
 }
 
