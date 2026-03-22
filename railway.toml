@@ -1,0 +1,6 @@
+# https://docs.railway.com/deploy/config-as-code
+# Run Node directly so Railway does not wrap the process in `npm start` (cleaner SIGTERM handling, no npm production warning).
+[deploy]
+startCommand = "node server.js"
+healthcheckPath = "/"
+healthcheckTimeout = 300

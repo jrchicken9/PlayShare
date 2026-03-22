@@ -20,6 +20,8 @@ const RATE_MAX_MESSAGES = parseInt(process.env.PLAYSHARE_RATE_MAX_MESSAGES || '4
 
 function getServerUrl() {
   if (process.env.PLAYSHARE_PUBLIC_URL) return process.env.PLAYSHARE_PUBLIC_URL;
+  const railDomain = process.env.RAILWAY_PUBLIC_DOMAIN;
+  if (railDomain) return `wss://${railDomain.replace(/^https?:\/\//, '')}`;
   const isIPv4 = (f) => f === 'IPv4' || f === 4;
   for (const nets of Object.values(os.networkInterfaces())) {
     if (!nets) continue;
