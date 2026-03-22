@@ -8,7 +8,7 @@ PlayShare (“we”, “our”, or “us”) is a browser extension that helps p
 
 **Data controller / operator:** **Ibrahim Haddad**. For questions about this Policy, see [Section 13. Contact](#13-contact).
 
-By installing or using PlayShare, you agree to the practices described in this policy. If you do not agree, please do not use the Extension.
+By installing or using PlayShare, you agree to the practices described in this policy.
 
 ---
 
@@ -48,7 +48,7 @@ To coordinate rooms, the Extension uses **WebSocket** to a **signaling server** 
 
 ### d) Automatically collected / technical information
 
-- **Basic technical information** (such as connection data required to establish real-time communication), used as needed to operate, secure, and troubleshoot the service. We do **not** use the Extension to collect precise **GPS** location from your device.  
+- **Technical data required for communication** (including basic **connection data** needed to establish real-time sessions), used as needed to operate, secure, and troubleshoot the service. We do **not** use the Extension to collect precise **GPS** location from your device.  
 - **Page URLs** may be included in invites so others can open the same title; that is a **link**, not a copy of the video file.
 
 ### e) What we do not use PlayShare to collect
@@ -83,7 +83,7 @@ We do **not** use your data for:
 
 We do **not** sell, rent, or trade your personal information.
 
-Data is processed through secure servers hosted by our infrastructure provider to enable real-time synchronization and messaging.
+Data is processed through secure servers to enable real-time synchronization and messaging.
 
 Information may be:
 
@@ -108,7 +108,7 @@ We do **not** build advertising profiles from PlayShare usage.
 
 ## 7. Security
 
-All data transmission is encrypted using secure protocols (HTTPS/WSS).
+All data is transmitted using secure encryption protocols (HTTPS/WSS).
 
 We use **TLS** for connections where configured (e.g. default production signaling server and optional Supabase sign-in). No method of transmission over the internet is 100% secure; please avoid sharing highly sensitive information in chat or room fields.
 
@@ -171,7 +171,7 @@ If you have questions about this Privacy Policy:
 - We **don’t** sell your data or use it for **ads** or **profiling**.  
 - Live room traffic is **temporary** on our signaling path—not a long-term chat archive; **device** storage and **Supabase** (if you sign in) work differently, as described above.  
 - We **don’t** access streaming accounts or store streaming **logins**; third-party sites have their own policies.  
-- Data is sent over **encrypted** channels (**HTTPS/WSS**) for default production and sign-in where configured.
+- **HTTPS/WSS** encryption applies for default production and sign-in where configured.
 
 ---
 
