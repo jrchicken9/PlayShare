@@ -375,7 +375,7 @@
 
           <h3>d) Automatically collected / technical information</h3>
           <ul>
-            <li><strong>Technical data required for communication</strong> (including basic <strong>connection data</strong> needed to establish real-time sessions), used as needed to operate, secure, and troubleshoot the service. We do <strong>not</strong> use the Extension to collect precise <strong>GPS</strong> location from your device.</li>
+            <li><strong>Technical data required for communication</strong> — information the network stack needs to deliver real-time features, such as <strong>session handshakes</strong>, <strong>routing metadata</strong> (so messages reach the right room), <strong>timestamps</strong> tied to connection or delivery, <strong>protocol version</strong> fields, and <strong>error or status codes</strong> when something fails. This is used to operate, secure, and troubleshoot the service. We do <strong>not</strong> use the Extension to collect precise <strong>GPS</strong> location from your device.</li>
             <li><strong>Page URLs</strong> may be included in invites so others can open the same title; that is a <strong>link</strong>, not a copy of the video file.</li>
           </ul>
 
@@ -387,6 +387,12 @@
             <li>Keystroke logging or mouse tracking for <strong>advertising</strong> or <strong>profiling</strong></li>
           </ul>
           <p>If any short summary of our practices conflicts with this Policy, <strong>this document controls</strong> unless applicable law says otherwise.</p>
+
+          <h3>f) Signaling server vs. Supabase (separate roles)</h3>
+          <ul>
+            <li><strong>Signaling server</strong> (our default service or a <strong>custom</strong> URL you set): handles <strong>live room traffic only</strong>—WebSocket messages for sync, chat, presence, and room coordination as described above. It does <strong>not</strong> process optional <strong>account passwords</strong> for Supabase; sign-in traffic goes <strong>between the Extension and Supabase</strong>, not through the signaling server for authentication.</li>
+            <li><strong>Supabase</strong> (optional): handles <strong>authentication</strong> when you choose to sign up or sign in—credential checks, account records, and session tokens under <a href="https://supabase.com/privacy" rel="noopener noreferrer">Supabase’s policies</a>. It is <strong>separate</strong> from the signaling path used for watch-party messaging.</li>
+          </ul>
 
           <h2>4. How we use information</h2>
           <p>We use the information above strictly to:</p>
@@ -409,13 +415,15 @@
             <li><strong>Sent to Supabase</strong> when you use optional sign-in, under their terms: <a href="https://supabase.com/privacy" rel="noopener noreferrer">https://supabase.com/privacy</a></li>
             <li><strong>Processed by a custom signaling server</strong> if you configure one—we are not responsible for that operator’s practices</li>
           </ul>
+          <p>If you use a <strong>custom signaling server</strong>, <strong>you are responsible</strong> for that server’s privacy, security, and data practices; this Policy describes <strong>our default service</strong> unless we say otherwise.</p>
           <p>We may disclose information if <strong>required by law</strong> or to protect <strong>rights, safety, and security</strong>.</p>
 
           <h2>6. Data storage and retention</h2>
           <ul>
-            <li><strong>Chat and live session data</strong> on our default signaling path are <strong>ephemeral</strong> in nature: they exist to deliver real-time sync and chat and are <strong>not</strong> kept as a long-term message archive or user profile database <strong>on that server</strong>. Retention on infrastructure may still include <strong>short-lived processing</strong>, <strong>security logs</strong>, or <strong>backups</strong> as needed to operate and secure the service.</li>
+            <li><strong>Chat and live session data</strong> on our default signaling path are <strong>ephemeral</strong> in nature: they exist to deliver real-time sync and chat and are <strong>not</strong> kept as a long-term message archive or user profile database <strong>on that server</strong>. When a session ends or clients disconnect, that live state is <strong>not</strong> retained for replay like a mailbox.</li>
+            <li><strong>Temporary storage and logs</strong> on our default infrastructure may still exist for <strong>short periods</strong>—for example, <strong>rolling server or edge logs</strong> (connection events, errors, coarse traffic metadata) and <strong>brief buffering</strong> while messages are in flight. These are used to <strong>run, secure, and debug</strong> the service, <strong>not</strong> for advertising or building marketing profiles. Retention periods depend on hosting and operational needs and are <strong>not</strong> indefinite for chat content.</li>
             <li><strong>On your device</strong>, data in <code>chrome.storage.local</code> remains until you clear extension data or uninstall.</li>
-            <li><strong>Optional accounts:</strong> Supabase may <strong>store</strong> account-related data (e.g. email) according to their service and your use of sign-in—this is <strong>not</strong> the same as “no accounts anywhere.” If you do not sign in, Supabase account data above does not apply.</li>
+            <li><strong>Optional accounts (Supabase):</strong> Supabase may <strong>store</strong> account-related data (e.g. email) according to their service and your use of sign-in—this is <strong>not</strong> the same as “no accounts anywhere.” If you do not sign in, Supabase account data above does not apply. That storage is <strong>independent</strong> of signaling-server session data above.</li>
           </ul>
           <p>We do <strong>not</strong> build advertising profiles from PlayShare usage.</p>
 
@@ -427,7 +435,7 @@
           <p class="callout">PlayShare does not access, collect, or store login credentials or account data from any third-party streaming services.</p>
           <ul>
             <li><strong>Streaming platforms</strong> (e.g. Netflix, Prime Video): PlayShare interacts with the page you are on for sync and chat only; it does <strong>not</strong> read or harvest your <strong>streaming login</strong> or credentials for those services. We are <strong>not responsible</strong> for their privacy practices.</li>
-            <li><strong>Supabase:</strong> optional authentication.</li>
+            <li><strong>Supabase:</strong> optional authentication and account storage—separate from the signaling server (see <strong>Section 3f</strong>).</li>
             <li><strong>Hosting / infrastructure</strong> (e.g. cloud or edge providers): may process network and service metadata when you connect.</li>
           </ul>
 
@@ -443,6 +451,7 @@
             <li><strong>Avoid custom servers</strong> you do not trust</li>
           </ul>
           <p>For requests that apply to <strong>Supabase-held</strong> account data, you may need to use their tools or contact us as below.</p>
+          <p>To <strong>request deletion</strong> of information tied to <strong>our default signaling or privacy-page hosting</strong> (where applicable law applies), email us at the address in <strong><a href="#13-contact">Section 13. Contact</a></strong> with a clear description of your request; we will respond as required by law.</p>
 
           <h2>11. Children’s privacy</h2>
           <p>PlayShare is <strong>not intended for children under 13</strong>, and we do not knowingly collect personal information from children. If you believe we have done so, contact us and we will take appropriate steps.</p>
@@ -451,7 +460,7 @@
           <p>We may update this Privacy Policy from time to time. We will revise the <strong>Last updated</strong> date at the top when we do. Continued use after changes means you accept the updated policy, except where applicable law requires more.</p>
 
           <div class="contact-block">
-            <h2>13. Contact</h2>
+            <h2 id="13-contact">13. Contact</h2>
             <p>If you have questions about this Privacy Policy:</p>
             <p><strong>Primary (privacy inquiries):</strong> <a href="mailto:i.haddad009@gmail.com">i.haddad009@gmail.com</a></p>
             <p><strong>Support email:</strong> We plan to offer <strong>support@playshare.app</strong> in the future; until that address is active, please use the email above.</p>
@@ -465,6 +474,8 @@
               <li>Live room traffic is <strong>temporary</strong> on our signaling path—not a long-term chat archive; <strong>device</strong> storage and <strong>Supabase</strong> (if you sign in) work differently, as described above.</li>
               <li>We <strong>don’t</strong> access streaming accounts or store streaming <strong>logins</strong>; third-party sites have their own policies.</li>
               <li><strong>HTTPS/WSS</strong> encryption applies for default production and sign-in where configured.</li>
+              <li><strong>Signaling</strong> (rooms/sync/chat) and <strong>Supabase</strong> (optional accounts) are <strong>separate</strong>; <strong>custom servers</strong> are your responsibility.</li>
+              <li>You can <strong>request deletion</strong> for our default services by email (see <strong>Section 10</strong>).</li>
             </ul>
           </div>
         </article>
