@@ -113,7 +113,7 @@
         <p class="ws-lobby-panel-lead">You’ll get a room code to share. Friends can open your invite link or enter the code.</p>
         <div class="ws-section">
           <label class="ws-label" for="serverUrlInputCreate">Server WebSocket URL</label>
-          <input type="text" id="serverUrlInputCreate" class="ws-input" placeholder="ws://10.0.0.92:8765" autocomplete="off" />
+          <input type="text" id="serverUrlInputCreate" class="ws-input" placeholder="wss://playshare-production.up.railway.app" autocomplete="off" />
           <p class="ws-field-hint" id="serverUrlCreateHint">If <code>node server.js</code> runs on <strong>another</strong> computer (e.g. your MacBook), paste the URL shown in that machine’s terminal — not <code>localhost</code> on this PC.</p>
         </div>
         <label class="ws-setting-row">
@@ -137,8 +137,8 @@
           <input type="text" id="roomCodeInput" class="ws-input ws-input-code" placeholder="ABC123" maxlength="6" autocomplete="off" />
         </div>
         <div class="ws-section">
-          <label class="ws-label" for="serverUrlInput">Server URL <span class="ws-label-hint">(on another computer: use this PC’s LAN IP, e.g. ws://192.168.x.x:8765 — not localhost)</span></label>
-          <input type="text" id="serverUrlInput" class="ws-input" placeholder="ws://10.0.0.92:8765" autocomplete="off" />
+          <label class="ws-label" for="serverUrlInput">Server URL <span class="ws-label-hint">(default: cloud server; use ws://… only for a machine on your LAN)</span></label>
+          <input type="text" id="serverUrlInput" class="ws-input" placeholder="wss://playshare-production.up.railway.app" autocomplete="off" />
         </div>
         <button type="button" class="ws-btn ws-btn-ghost ws-btn-paste" id="btnPasteInvite" title="Paste from clipboard (after copying from join page)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2" stroke="currentColor" stroke-width="2"/><rect x="8" y="2" width="8" height="4" rx="1" stroke="currentColor" stroke-width="2"/></svg>

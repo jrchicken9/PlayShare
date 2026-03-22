@@ -449,7 +449,7 @@ btnCreate.addEventListener('click', () => {
         if (!res?.roomState && res?.connectionStatus !== 'connected' && lobbyError) {
           lobbyError.style.color = '#E50914';
           lobbyError.textContent =
-            'Could not connect to the server. If node server.js runs on another computer (e.g. your MacBook), set Server WebSocket URL to ws:// that machine’s LAN IP :8765 — not localhost on this PC.';
+            'Could not connect to the server. Check the Server WebSocket URL (default is the cloud server). For a server on your own network use ws:// that machine’s IP and port — not localhost on another PC.';
         }
       });
     }, 4500);

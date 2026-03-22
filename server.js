@@ -254,6 +254,11 @@ function isValidVideoUrl(u) {
 }
 
 const httpServer = http.createServer((req, res) => {
+  // WebSocket clients hit `/` (or any path) with Upgrade: websocket — do not send 404 here or the
+  // handshake fails (Railway/extension saw "Unexpected response code: 404").
+  if (String(req.headers.upgrade || '').toLowerCase() === 'websocket') {
+    return;
+  }
   const url = new URL(req.url || '/', `http://localhost:${PORT}`);
   if (url.pathname === '/join' && req.method === 'GET') {
     const code = (url.searchParams.get('code') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
@@ -305,6 +310,12 @@ function openSite(u){window.open(u,'_blank');}
 </script></body></html>`;
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(html);
+    return;
+  }
+  // Health check for Railway / load balancers (GET /)
+  if (url.pathname === '/' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('PlayShare signaling OK\n');
     return;
   }
   res.writeHead(404);

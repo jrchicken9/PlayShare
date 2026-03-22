@@ -38,7 +38,7 @@ let lastWsClosedAt = null;
 /** Count of dropped server messages (WebSocket not OPEN). Resets with service worker. */
 let wsSendFailures = 0;
 let lastWsSendFailureAt = null;
-const DEFAULT_SERVER_URL = typeof PLAYSHARE_SERVER_URL !== 'undefined' ? PLAYSHARE_SERVER_URL : 'ws://localhost:8765';
+const DEFAULT_SERVER_URL = typeof PLAYSHARE_SERVER_URL !== 'undefined' ? PLAYSHARE_SERVER_URL : 'wss://playshare-production.up.railway.app';
 
 /** First install / empty storage: persist default so popup shows the same URL the service worker uses. */
 function ensureDefaultServerUrlSeeded() {
@@ -55,10 +55,12 @@ chrome.runtime.onInstalled.addListener(() => {
   // Move installs off the old localhost default when this build targets a household Mac server.
   chrome.storage.local.get(['serverUrl'], (data) => {
     const u = data.serverUrl != null ? String(data.serverUrl).trim() : '';
-    if (
-      DEFAULT_SERVER_URL !== 'ws://localhost:8765' &&
-      (u === 'ws://localhost:8765' || u === 'ws://127.0.0.1:8765')
-    ) {
+    const legacyLocal =
+      u === 'ws://localhost:8765' ||
+      u === 'ws://127.0.0.1:8765' ||
+      /^ws:\/\/10\.0\.0\.\d+:8765\/?$/.test(u) ||
+      /^ws:\/\/192\.168\.\d+\.\d+:8765\/?$/.test(u);
+    if (DEFAULT_SERVER_URL.startsWith('wss://') && legacyLocal) {
       chrome.storage.local.set({ serverUrl: DEFAULT_SERVER_URL });
     }
   });
@@ -139,7 +141,7 @@ function connect(onOpen) {
       ws.onerror = () => {
         console.error(
           `[PlayShare] WebSocket failed for ${url}. ` +
-            'net::ERR_CONNECTION_REFUSED usually means no server on that host/port — start it in the project folder with `npm start` (listens on 0.0.0.0:8765), or change Server URL in the extension popup if the server runs on another computer (use ws://that-machine-LAN-IP:8765, not localhost).'
+            'net::ERR_CONNECTION_REFUSED means nothing accepted the connection — check Server URL in the popup (default is wss:// to Railway). For self-hosted, run `npm start` or use ws://your-server:port on the same network.'
         );
       };
     } catch (e) {

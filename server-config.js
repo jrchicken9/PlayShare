@@ -1,11 +1,9 @@
 /**
- * Default signaling server for every Chrome install that loads this extension build.
+ * Default WebSocket URL for every Chrome install that loads this extension build.
  *
- * Set PLAYSHARE_SERVER_HOST to your MacBook’s LAN IPv4 (System Settings → Network, or the
- * “Phones & other PCs on your LAN” line printed when you run `npm start` on the Mac).
- * All household machines can use the same default; override in the popup if your IP changes.
+ * Production signaling server on Railway (always on). Use wss:// on the public hostname;
+ * do not append :8765 — Railway maps HTTPS/WSS on port 443 to the app’s internal PORT.
  *
- * Tip: Chrome on the MacBook can use this ws://<same-LAN-IP>:8765 URL too (it reaches itself).
+ * For local-only dev, change this to ws://127.0.0.1:8765 or your LAN IP, or override in the popup.
  */
-var PLAYSHARE_SERVER_HOST = '10.0.0.92';
-var PLAYSHARE_SERVER_URL = 'ws://' + PLAYSHARE_SERVER_HOST + ':8765';
+var PLAYSHARE_SERVER_URL = 'wss://playshare-production.up.railway.app';
