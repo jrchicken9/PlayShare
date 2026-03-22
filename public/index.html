@@ -20,7 +20,7 @@
       --text-muted: #949494;
       --accent: #e50914;
       --accent-hover: #ff1a26;
-      --accent-glow: rgba(229, 9, 20, 0.35);
+      --accent-glow: rgba(229, 9, 20, 0.42);
       --teal: #4ecdc4;
       --teal-dim: rgba(78, 205, 196, 0.14);
       --radius: 18px;
@@ -61,9 +61,11 @@
       pointer-events: none;
       z-index: 0;
       background:
-        radial-gradient(ellipse 120% 70% at 50% -15%, rgba(229, 9, 20, 0.14) 0%, transparent 52%),
-        radial-gradient(ellipse 80% 50% at 100% 10%, rgba(78, 205, 196, 0.07) 0%, transparent 45%),
-        radial-gradient(ellipse 60% 40% at 0% 30%, rgba(229, 9, 20, 0.05) 0%, transparent 42%);
+        radial-gradient(ellipse 135% 90% at 50% -12%, rgba(229, 9, 20, 0.32) 0%, rgba(229, 9, 20, 0.06) 42%, transparent 58%),
+        radial-gradient(ellipse 95% 70% at 95% 8%, rgba(229, 9, 20, 0.16) 0%, transparent 48%),
+        radial-gradient(ellipse 75% 55% at 5% 22%, rgba(229, 9, 20, 0.14) 0%, transparent 46%),
+        radial-gradient(ellipse 110% 65% at 50% 102%, rgba(229, 9, 20, 0.12) 0%, transparent 52%),
+        radial-gradient(ellipse 85% 55% at 100% 12%, rgba(78, 205, 196, 0.07) 0%, transparent 45%);
     }
     #main, .nav, footer { position: relative; z-index: 1; }
     a { color: var(--teal); text-decoration: none; font-weight: 500; }
@@ -218,10 +220,20 @@
     .hero-billboard::before {
       content: "";
       position: absolute;
-      inset: -40% -20% 35%;
+      inset: -45% -25% 30%;
       background:
-        conic-gradient(from 200deg at 70% 40%, rgba(229, 9, 20, 0.15) 0deg, transparent 55deg, rgba(78, 205, 196, 0.08) 120deg, transparent 220deg);
-      opacity: 0.9;
+        conic-gradient(
+          from 188deg at 62% 36%,
+          rgba(229, 9, 20, 0.38) 0deg,
+          rgba(180, 25, 35, 0.18) 42deg,
+          transparent 72deg,
+          rgba(229, 9, 20, 0.12) 118deg,
+          rgba(78, 205, 196, 0.1) 148deg,
+          transparent 215deg,
+          rgba(229, 9, 20, 0.08) 280deg,
+          transparent 360deg
+        );
+      opacity: 1;
       animation: hero-shift 18s ease-in-out infinite alternate;
     }
     @keyframes hero-shift {
@@ -232,7 +244,13 @@
       content: "";
       position: absolute;
       inset: 0;
-      background: linear-gradient(180deg, transparent 0%, rgba(3, 3, 3, 0.4) 45%, var(--bg) 100%);
+      background: linear-gradient(
+        180deg,
+        rgba(3, 3, 3, 0.08) 0%,
+        rgba(3, 3, 3, 0.28) 38%,
+        rgba(3, 3, 3, 0.55) 72%,
+        var(--bg) 100%
+      );
       pointer-events: none;
     }
     .hero-billboard-inner {
@@ -303,18 +321,21 @@
       padding: 1px;
       background: linear-gradient(
         125deg,
-        rgba(78, 205, 196, 0.35) 0%,
-        rgba(255, 255, 255, 0.08) 25%,
-        rgba(229, 9, 20, 0.3) 50%,
-        rgba(255, 255, 255, 0.06) 75%,
-        rgba(78, 205, 196, 0.25) 100%
+        rgba(78, 205, 196, 0.32) 0%,
+        rgba(255, 255, 255, 0.07) 18%,
+        rgba(229, 9, 20, 0.55) 42%,
+        rgba(255, 60, 70, 0.22) 52%,
+        rgba(255, 255, 255, 0.05) 72%,
+        rgba(78, 205, 196, 0.28) 100%
       );
-      background-size: 240% 240%;
+      background-size: 260% 260%;
       animation: hero-border-flow 28s ease-in-out infinite alternate;
       box-shadow:
         0 24px 80px rgba(0, 0, 0, 0.55),
-        0 0 60px rgba(229, 9, 20, 0.06),
-        inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        0 0 50px rgba(229, 9, 20, 0.18),
+        0 0 100px rgba(229, 9, 20, 0.1),
+        0 0 140px rgba(229, 9, 20, 0.05),
+        inset 0 1px 0 rgba(255, 255, 255, 0.07);
     }
     @keyframes hero-border-flow {
       0% { background-position: 0% 40%; }
@@ -368,9 +389,9 @@
     }
     .hero-spotlight-layer-a {
       background:
-        radial-gradient(ellipse 70% 60% at 30% 40%, rgba(229, 9, 20, 0.45) 0%, transparent 55%),
+        radial-gradient(ellipse 75% 65% at 28% 38%, rgba(229, 9, 20, 0.58) 0%, rgba(229, 9, 20, 0.12) 48%, transparent 58%),
         radial-gradient(ellipse 50% 45% at 75% 55%, rgba(78, 205, 196, 0.22) 0%, transparent 50%),
-        linear-gradient(165deg, #120808 0%, #050506 100%);
+        linear-gradient(165deg, #160a0c 0%, #050506 100%);
       animation: hero-drift-a 48s ease-in-out infinite alternate;
     }
     .hero-spotlight-layer-b {
