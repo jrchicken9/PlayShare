@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="PlayShare — watch streaming together in sync with friends. Chat, rooms, and playback sync for Netflix, YouTube, Prime Video, and more. Your subscription required." />
-  <title>PlayShare — Watch together</title>
+  <meta name="description" content="PlayShare is a Chrome extension that keeps play, pause, and seek aligned for watch parties—plus in-tab chat. Works on major streaming sites; each person uses their own subscription." />
+  <title>PlayShare — Synced watch parties in Chrome</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -943,6 +943,11 @@
       margin: 0 auto;
       max-width: 36rem;
     }
+    .cta-inner .cta-back-install {
+      position: relative;
+      margin: 1.35rem 0 0;
+      font-size: 0.9375rem;
+    }
     /* Footer */
     footer {
       border-top: 1px solid var(--border);
@@ -1011,7 +1016,7 @@
   <main id="main">
     <div class="hero-billboard">
       <section class="hero hero-billboard-inner" aria-labelledby="hero-title">
-        <p class="hero-eyebrow"><span class="hero-eyebrow-dot" aria-hidden="true"></span> Chrome extension · Watch parties</p>
+        <p class="hero-eyebrow"><span class="hero-eyebrow-dot" aria-hidden="true"></span> Chrome · On the real watch page</p>
         <h1 id="hero-title" class="hero-title-block">
           Same scene.<br />Same second.<br />
           <span class="line-accent">Together on the apps you love.</span>
@@ -1027,13 +1032,13 @@
                 <div class="hero-spotlight-shimmer"></div>
               </div>
               <div class="hero-spotlight-ui">
-                <div class="hero-spotlight-badge">In sync</div>
-                <p class="hero-spotlight-card-title">Everyone on the same moment</p>
+                <div class="hero-spotlight-badge">Live room</div>
+                <p class="hero-spotlight-card-title">One timeline, whole group</p>
                 <div class="hero-spotlight-meta">
                   <span class="hero-spotlight-avatars"><span></span><span></span><span></span></span>
-                  <span>Friends in room</span>
+                  <span>Illustration only</span>
                   <span class="dot">·</span>
-                  <span>Decorative preview—not your data</span>
+                  <span>Not a recording of your session</span>
                 </div>
                 <div class="hero-spotlight-scrub" aria-hidden="true">
                   <div class="hero-scrub-playhead"></div>
@@ -1052,13 +1057,12 @@
         </div>
 
         <p class="tagline">
-          PlayShare syncs play, pause, and seek on the streaming sites you already use—plus side chat in the room.
-          Everyone keeps their own subscription; we’re not affiliated with Netflix, YouTube, Prime Video, or other providers.
+          Line up the timeline for everyone watching—play, pause, and scrub stay together, with a sidebar for chat while the stream stays on the service you already use.
         </p>
         <div class="hero-badges">
-          <span class="hero-badge"><strong>Real-time</strong> playback sync</span>
-          <span class="hero-badge"><strong>In-page</strong> chat &amp; presence</span>
-          <span class="hero-badge"><strong>Room codes</strong> &amp; invites</span>
+          <span class="hero-badge"><strong>Native player</strong> — no upload or mirror</span>
+          <span class="hero-badge"><strong>Room sidebar</strong> — chat &amp; who’s here</span>
+          <span class="hero-badge"><strong>Share fast</strong> — codes &amp; invite links</span>
         </div>
         <div class="hero-cta" id="get-extension">
           <div class="install-options" role="group" aria-label="Install PlayShare">
@@ -1066,13 +1070,13 @@
               <p class="install-option-title">Direct download</p>
               <a class="btn-install" data-zip-install href="#" rel="noopener noreferrer">Download .zip</a>
               <span class="install-option-version" data-extension-version-label aria-live="polite"></span>
-              <p class="install-option-desc">Unzip the folder, open <strong>chrome://extensions</strong>, turn on Developer mode, then <strong>Load unpacked</strong> and choose that folder.</p>
+              <p class="install-option-desc">Unzip once, then Chrome → <strong>Extensions</strong> → Developer mode → <strong>Load unpacked</strong> and point at that folder.</p>
             </div>
             <div class="install-option install-option-store" id="install-store-soon">
               <p class="install-option-title">Chrome Web Store</p>
               <a class="btn-secondary" data-store-install href="#" rel="noopener noreferrer">Open in Chrome Web Store</a>
               <span class="install-soon-pill" data-store-soon-badge>Coming soon</span>
-              <p class="install-option-desc">One-click install when the listing is live. Same build as the .zip when both are offered.</p>
+              <p class="install-option-desc">The usual one-click install from Google—this option lights up when the listing is approved.</p>
             </div>
           </div>
           <div class="hero-cta-row">
@@ -1082,9 +1086,9 @@
             </a>
           </div>
         </div>
-        <p class="hero-note">HD quality and buffering depend on the streaming service and your connection—not PlayShare.</p>
+        <p class="hero-note">Picture quality and buffering come from the provider and your network—not from PlayShare.</p>
         <p class="hero-note" style="margin-top:0.65rem">
-          <a href="/privacy">Privacy Policy</a> — how we handle your data
+          <a href="/privacy">How we handle data</a> · We’re not affiliated with the services named on this page.
         </p>
         <div id="install-soon" hidden>
           <strong>No install package on this server yet.</strong>
@@ -1096,24 +1100,24 @@
     <div class="highlight-strip">
       <div class="highlight-inner">
         <div class="highlight-item">
-          <strong>Works in Chrome</strong>
-          <span>Lightweight extension on the watch page—no separate video player.</span>
+          <strong>Chrome-first</strong>
+          <span>Adds a slim layer on top of the site’s player—nothing to cast or upload.</span>
         </div>
         <div class="highlight-item">
-          <strong>Built for latency</strong>
-          <span>Designed around real networks so sync feels natural, not robotic.</span>
+          <strong>Feels human on real networks</strong>
+          <span>Sync is tuned for delay and jitter so the room doesn’t stutter on everyday Wi-Fi.</span>
         </div>
         <div class="highlight-item">
-          <strong>Your logins stay yours</strong>
-          <span>We don’t run the stream; each person uses their own provider account.</span>
+          <strong>BYO subscription</strong>
+          <span>We coordinate timing and chat; every viewer still signs into the stream the usual way.</span>
         </div>
       </div>
     </div>
 
     <section class="section-stream" id="platforms" aria-labelledby="platforms-title">
       <p class="section-eyebrow">Where you watch</p>
-      <h2 class="section-title" id="platforms-title">Supported streaming platforms</h2>
-      <p class="section-lead">Start a room on a supported site, share your code or invite, and hit play—everyone lands on the same beat.</p>
+      <h2 class="section-title" id="platforms-title">Where PlayShare plugs in</h2>
+      <p class="section-lead">We maintain hooks per service below. Queue the same title, start a room from the toolbar, and you’re set.</p>
       <div class="platforms-row">
         <span class="platform-pill">Netflix</span>
         <span class="platform-pill">YouTube</span>
@@ -1131,29 +1135,29 @@
     <div class="features-wrap">
       <div class="features-inner section-center">
         <p class="section-eyebrow">Why PlayShare</p>
-        <h2 class="section-title" id="features-title">Built for watch parties</h2>
-        <p class="section-lead">Sync, chat, and simple invites—without replacing the apps you already pay for.</p>
+        <h2 class="section-title" id="features-title">What you get in the room</h2>
+        <p class="section-lead">Less tab-hopping, fewer “wait, what second are you on?” moments—without a second video app.</p>
         <div class="features">
           <article class="feature-card">
             <div class="feature-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 012.12 9.36L1 14"/></svg>
             </div>
-            <h3>Stay in sync</h3>
-            <p>Play, pause, and seeks stay aligned across the room so reactions land on the same frame.</p>
+            <h3>One remote, many couches</h3>
+            <p>Whoever hosts or joins can drive play and pause; optional host-only mode when you want one person steering.</p>
           </article>
           <article class="feature-card">
             <div class="feature-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
             </div>
-            <h3>Chat together</h3>
-            <p>Side chat and presence live next to the video—stay in the moment without juggling tabs.</p>
+            <h3>Chat without leaving the frame</h3>
+            <p>Reactions and running commentary sit beside the video so you’re not alt-tabbing to a group thread.</p>
           </article>
           <article class="feature-card">
             <div class="feature-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
             </div>
-            <h3>Your accounts, your rules</h3>
-            <p>We don’t collect streaming passwords. PlayShare only coordinates playback and chat through your browser.</p>
+            <h3>No streaming passwords here</h3>
+            <p>Credentials stay with the provider. PlayShare moves timing and messages through the extension—details in the <a href="/privacy">privacy policy</a>.</p>
           </article>
         </div>
       </div>
@@ -1161,35 +1165,24 @@
 
     <section class="steps-wrap section-stream section-center" id="how-it-works" aria-labelledby="steps-title">
       <p class="section-eyebrow">Start in minutes</p>
-      <h2 class="section-title" id="steps-title">How PlayShare works</h2>
-      <p class="section-lead">A straight path from install to watch party—no new subscription for our piece of the puzzle.</p>
+      <h2 class="section-title" id="steps-title">From install to first room</h2>
+      <p class="section-lead">No second bill from us—just the extension and the streaming accounts your group already has.</p>
       <ol class="steps">
-        <li><strong>Install PlayShare</strong> from the <a href="#get-extension">Chrome Web Store or the .zip download</a> (see <em>Get extension</em> above).</li>
-        <li><strong>Pin the extension</strong> so the icon stays one click away while you browse.</li>
-        <li><strong>Open a video</strong> on a supported site and pick something to watch.</li>
-        <li><strong>Start a room</strong> from the extension, then share the room code or invite link.</li>
-        <li><strong>Join on the same title</strong>—everyone uses their own provider login; sync and chat run through PlayShare.</li>
+        <li><strong>Add PlayShare</strong> via the <a href="#get-extension">install options at the top</a> (Chrome Web Store when live, or the .zip for sideload).</li>
+        <li><strong>Pin it</strong> in Chrome so the icon stays visible on watch sites.</li>
+        <li><strong>Open a title</strong> on any supported service from the list above.</li>
+        <li><strong>Create a room</strong> from the extension popup, then drop the code or invite link to your friends.</li>
+        <li><strong>They join the same show</strong> with their own logins; PlayShare keeps playback and the sidebar aligned.</li>
       </ol>
     </section>
 
     <div class="cta-band">
       <div class="cta-inner">
-        <h2>Ready for your next watch party?</h2>
-        <p>Add PlayShare to Chrome and open a supported streaming site to create or join a room.</p>
-        <div class="install-options" role="group" aria-label="Install PlayShare">
-          <div class="install-option install-option-zip" data-install-zip-block hidden>
-            <p class="install-option-title">Direct download</p>
-            <a class="btn-install" data-zip-install href="#" rel="noopener noreferrer">Download .zip</a>
-            <span class="install-option-version" data-extension-version-label aria-live="polite"></span>
-            <p class="install-option-desc">Unzip, then <strong>chrome://extensions</strong> → Developer mode → <strong>Load unpacked</strong>.</p>
-          </div>
-          <div class="install-option install-option-store">
-            <p class="install-option-title">Chrome Web Store</p>
-            <a class="btn-secondary" data-store-install href="#" rel="noopener noreferrer">Open in Chrome Web Store</a>
-            <span class="install-soon-pill" data-store-soon-badge>Coming soon</span>
-            <p class="install-option-desc">One-click install when the listing is live.</p>
-          </div>
-        </div>
+        <h2>Scroll up when you’re ready to install</h2>
+        <p>The buttons above stay the source of truth for Web Store vs .zip. After that, pick a platform, hit play, and invite the room.</p>
+        <p class="cta-back-install">
+          <a class="btn-install" href="#get-extension">↑ Back to install options</a>
+        </p>
       </div>
     </div>
   </main>
@@ -1198,7 +1191,7 @@
     <div>
       <div class="footer-brand"><span class="play">Play</span><span class="share">Share</span></div>
       <p style="margin:0.75rem 0 0;font-size:0.875rem;color:var(--text-muted);max-width:22rem;line-height:1.6">
-        Watch together on the platforms you already use. Chrome extension; each viewer needs their own streaming access.
+        Co-watch in Chrome on the services you already pay for—timing and chat through PlayShare, video from the provider.
       </p>
     </div>
     <div class="footer-col">
@@ -1214,7 +1207,7 @@
         <li><a href="mailto:i.haddad009@gmail.com">i.haddad009@gmail.com</a></li>
       </ul>
     </div>
-    <p class="footer-copy">© 2026 PlayShare · Not affiliated with streaming services listed above.</p>
+    <p class="footer-copy">© 2026 PlayShare · Independent project; not affiliated with Netflix, YouTube, Prime Video, Disney+, or other listed brands.</p>
   </footer>
 
   <script>
