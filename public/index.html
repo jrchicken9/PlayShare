@@ -37,6 +37,10 @@
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
       .feature-card, .btn-install, .btn-secondary, .btn-secondary.is-pending:hover { transition: none !important; }
+      .install-option { transition: none !important; }
+      .install-option,
+      .install-option::before,
+      .install-option::after { animation: none !important; }
       .hero-billboard::before { animation: none !important; }
       .hero-spotlight { animation: none !important; }
       .hero-spotlight-art *,
@@ -586,32 +590,198 @@
       justify-content: center;
       align-items: center;
     }
+    @keyframes install-card-enter {
+      from {
+        opacity: 0;
+        transform: translateY(14px) scale(0.98);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+    @keyframes install-card-glow {
+      0%, 100% {
+        opacity: 0.55;
+        transform: scale(1) translate(0, 0);
+      }
+      50% {
+        opacity: 0.9;
+        transform: scale(1.08) translate(4px, -3px);
+      }
+    }
+    @keyframes install-card-shine {
+      0%, 86% {
+        opacity: 0;
+        transform: translateX(-140%) skewX(-14deg);
+      }
+      88% {
+        opacity: 1;
+      }
+      96% {
+        opacity: 0.35;
+        transform: translateX(200%) skewX(-14deg);
+      }
+      100% {
+        opacity: 0;
+        transform: translateX(200%) skewX(-14deg);
+      }
+    }
     .install-options {
       display: grid;
-      gap: 0.85rem;
+      gap: 1rem;
       grid-template-columns: 1fr;
       width: 100%;
+      perspective: 900px;
     }
     @media (min-width: 560px) {
       .install-options {
         grid-template-columns: 1fr 1fr;
-        gap: 1rem;
+        gap: 1.15rem;
       }
     }
     .install-option {
-      padding: 1.2rem 1.1rem;
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--border);
-      background: rgba(0, 0, 0, 0.22);
+      --install-glow: rgba(78, 205, 196, 0.22);
+      --install-ring: rgba(78, 205, 196, 0.45);
+      position: relative;
+      isolation: isolate;
+      overflow: hidden;
+      padding: 1.4rem 1.25rem 1.35rem;
+      border-radius: var(--radius);
       text-align: center;
+      background: linear-gradient(
+        165deg,
+        rgba(24, 24, 26, 0.92) 0%,
+        rgba(10, 10, 12, 0.88) 100%
+      );
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(18px) saturate(1.15);
+      -webkit-backdrop-filter: blur(18px) saturate(1.15);
+      box-shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.35),
+        0 4px 6px rgba(0, 0, 0, 0.22),
+        0 28px 56px rgba(0, 0, 0, 0.55),
+        0 0 48px var(--install-glow);
+      transition:
+        transform 0.4s var(--ease-out),
+        box-shadow 0.4s var(--ease-out),
+        border-color 0.35s ease;
+      animation: install-card-enter 0.7s var(--ease-out) backwards;
+    }
+    .install-option:nth-child(1) {
+      animation-delay: 0.05s;
+    }
+    .install-option:nth-child(2) {
+      animation-delay: 0.14s;
+    }
+    .install-option::before {
+      content: "";
+      position: absolute;
+      inset: -40%;
+      z-index: 0;
+      background:
+        radial-gradient(
+          circle at 30% 0%,
+          var(--install-glow) 0%,
+          transparent 42%
+        ),
+        radial-gradient(
+          circle at 100% 80%,
+          rgba(229, 9, 20, 0.12) 0%,
+          transparent 45%
+        );
+      opacity: 0.75;
+      pointer-events: none;
+      animation: install-card-glow 6.5s ease-in-out infinite;
+    }
+    .install-option::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 55%;
+      height: 100%;
+      z-index: 1;
+      opacity: 0;
+      background: linear-gradient(
+        105deg,
+        transparent 0%,
+        rgba(255, 255, 255, 0.12) 45%,
+        transparent 70%
+      );
+      pointer-events: none;
+      animation: install-card-shine 11s ease-in-out infinite;
+    }
+    .install-option-zip {
+      --install-glow: rgba(78, 205, 196, 0.2);
+      --install-ring: rgba(78, 205, 196, 0.5);
+      border-color: rgba(78, 205, 196, 0.28);
+      box-shadow:
+        0 0 0 1px rgba(78, 205, 196, 0.12),
+        0 4px 8px rgba(0, 0, 0, 0.25),
+        0 28px 56px rgba(0, 0, 0, 0.58),
+        0 0 64px rgba(78, 205, 196, 0.14);
+    }
+    .install-option-store {
+      --install-glow: rgba(110, 145, 255, 0.18);
+      --install-ring: rgba(130, 165, 255, 0.45);
+      border-color: rgba(130, 160, 255, 0.26);
+      box-shadow:
+        0 0 0 1px rgba(130, 160, 255, 0.1),
+        0 4px 8px rgba(0, 0, 0, 0.25),
+        0 28px 56px rgba(0, 0, 0, 0.58),
+        0 0 56px rgba(100, 130, 255, 0.12);
+    }
+    .install-option-store::before {
+      background:
+        radial-gradient(
+          circle at 70% 0%,
+          rgba(130, 165, 255, 0.28) 0%,
+          transparent 44%
+        ),
+        radial-gradient(
+          circle at 0% 100%,
+          rgba(78, 205, 196, 0.08) 0%,
+          transparent 40%
+        );
+    }
+    @media (hover: hover) {
+      .install-option:hover {
+        transform: translateY(-5px) scale(1.01);
+        border-color: var(--install-ring);
+        box-shadow:
+          0 0 0 1px rgba(255, 255, 255, 0.08),
+          0 12px 24px rgba(0, 0, 0, 0.35),
+          0 36px 72px rgba(0, 0, 0, 0.5),
+          0 0 72px var(--install-glow),
+          0 0 100px var(--install-glow);
+      }
+    }
+    .install-option:focus-within {
+      border-color: var(--install-ring);
+      box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.1),
+        0 28px 56px rgba(0, 0, 0, 0.58),
+        0 0 48px var(--install-glow),
+        0 0 80px var(--install-glow);
+    }
+    .install-option > * {
+      position: relative;
+      z-index: 2;
     }
     .install-option-title {
-      margin: 0 0 0.65rem;
-      font-size: 0.7rem;
+      margin: 0 0 0.7rem;
+      font-size: 0.68rem;
       font-weight: 800;
-      letter-spacing: 0.12em;
+      letter-spacing: 0.14em;
       text-transform: uppercase;
-      color: var(--text-muted);
+      color: rgba(255, 255, 255, 0.5);
+    }
+    .install-option-zip .install-option-title {
+      color: rgba(126, 232, 222, 0.75);
+    }
+    .install-option-store .install-option-title {
+      color: rgba(180, 200, 255, 0.78);
     }
     .install-option .btn-install,
     .install-option .btn-secondary {
@@ -620,11 +790,12 @@
     }
     .install-option-version {
       display: block;
-      margin-top: 0.45rem;
+      margin-top: 0.5rem;
       font-size: 0.8125rem;
       font-weight: 700;
       color: var(--teal);
       letter-spacing: 0.02em;
+      text-shadow: 0 0 24px rgba(78, 205, 196, 0.35);
     }
     .install-option-version:empty,
     .install-option-version[hidden] {
@@ -632,25 +803,32 @@
     }
     .install-soon-pill {
       display: inline-block;
-      margin-top: 0.45rem;
-      padding: 0.2rem 0.55rem;
+      margin-top: 0.5rem;
+      padding: 0.28rem 0.65rem;
       border-radius: 999px;
-      font-size: 0.65rem;
+      font-size: 0.62rem;
       font-weight: 800;
-      letter-spacing: 0.1em;
+      letter-spacing: 0.12em;
       text-transform: uppercase;
-      color: rgba(255, 255, 255, 0.75);
-      background: rgba(255, 255, 255, 0.08);
-      border: 1px solid var(--border);
+      color: rgba(255, 255, 255, 0.88);
+      background: linear-gradient(
+        180deg,
+        rgba(255, 255, 255, 0.12) 0%,
+        rgba(255, 255, 255, 0.04) 100%
+      );
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      box-shadow:
+        0 0 20px rgba(130, 165, 255, 0.15),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1);
     }
     .install-soon-pill[hidden] {
       display: none !important;
     }
     .install-option-desc {
-      margin: 0.65rem 0 0;
-      font-size: 0.78rem;
-      color: var(--text-muted);
-      line-height: 1.5;
+      margin: 0.7rem 0 0;
+      font-size: 0.8rem;
+      color: rgba(180, 180, 185, 0.95);
+      line-height: 1.55;
       text-align: center;
     }
     .hero-note {
