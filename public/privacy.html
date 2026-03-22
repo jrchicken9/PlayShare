@@ -313,21 +313,95 @@
       letter-spacing: 0.02em;
     }
     footer.page-foot span { color: var(--text-sec); }
+    footer.page-foot a {
+      color: var(--teal);
+      font-weight: 500;
+      text-decoration: none;
+    }
+    footer.page-foot a:hover {
+      text-decoration: underline;
+      color: #6ee0d7;
+    }
+    .site-nav-top {
+      margin: 0 0 1rem;
+    }
+    @media (min-width: 640px) {
+      .site-nav-top { margin-bottom: 1.25rem; }
+    }
+    .nav-home-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.65rem 1.15rem;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-strong);
+      background: var(--bg-surface);
+      color: var(--teal);
+      font-weight: 600;
+      font-size: 0.9375rem;
+      text-decoration: none;
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+    .nav-home-btn:hover {
+      border-color: rgba(78, 205, 196, 0.45);
+      background: var(--bg-raised);
+      color: #6ee0d7;
+    }
+    .nav-home-btn:focus-visible {
+      outline: 2px solid var(--teal);
+      outline-offset: 3px;
+    }
+    .card-header-home {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex: 1;
+      min-width: 0;
+      width: 100%;
+      text-decoration: none;
+      color: inherit;
+      border-radius: 12px;
+      margin: -4px;
+      padding: 4px;
+      transition: background 0.15s ease;
+    }
+    .card-header-home:hover {
+      background: rgba(255, 255, 255, 0.04);
+    }
+    .card-header-home:focus-visible {
+      outline: 2px solid var(--teal);
+      outline-offset: 2px;
+    }
+    .policy-back-cta {
+      margin-top: 2.5rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+      text-align: center;
+    }
+    .policy-back-cta .nav-home-btn {
+      padding: 0.75rem 1.35rem;
+      font-size: 1rem;
+    }
   </style>
 </head>
 <body>
   <div class="shell">
+    <nav class="site-nav-top" aria-label="Site pages">
+      <a class="nav-home-btn" href="/">← Back to PlayShare home</a>
+    </nav>
     <div class="card">
       <header class="card-header">
-        <div class="brand-mark-wrap" aria-hidden="true">
-          <img src="/brand-mark.png" width="32" height="32" alt="" decoding="async" />
-        </div>
-        <div class="brand-text">
-          <div class="brand-name">
-            <span class="brand-play">Play</span><span class="brand-share">Share</span>
+        <a class="card-header-home" href="/" aria-label="PlayShare — go to homepage">
+          <div class="brand-mark-wrap" aria-hidden="true">
+            <img src="/brand-mark.png" width="32" height="32" alt="" decoding="async" />
           </div>
-          <div class="brand-sub">Privacy policy</div>
-        </div>
+          <div class="brand-text">
+            <div class="brand-name">
+              <span class="brand-play">Play</span><span class="brand-share">Share</span>
+            </div>
+            <div class="brand-sub">Privacy policy</div>
+          </div>
+        </a>
       </header>
       <div class="card-body">
         <article class="policy-article">
@@ -478,11 +552,15 @@
               <li>You can <strong>request deletion</strong> for our default services by email (see <strong>Section 10</strong>).</li>
             </ul>
           </div>
+
+          <p class="policy-back-cta">
+            <a class="nav-home-btn" href="/">← Return to PlayShare homepage</a>
+          </p>
         </article>
       </div>
     </div>
     <footer class="page-foot">
-      <span>PlayShare</span> · Privacy Policy · © 2026 Ibrahim Haddad
+      <a href="/">PlayShare homepage</a> · <span>Privacy Policy</span> · © 2026 Ibrahim Haddad
     </footer>
   </div>
 </body>
