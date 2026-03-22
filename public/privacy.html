@@ -5,239 +5,374 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="description" content="Privacy Policy for the PlayShare browser extension." />
   <title>Privacy Policy — PlayShare</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <style>
+    :root {
+      --bg-outer: #030303;
+      --bg-base: #0a0a0a;
+      --bg-surface: #121212;
+      --bg-raised: #1a1a1a;
+      --border: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.12);
+      --text-pri: #f0f0f0;
+      --text-sec: #9a9a9a;
+      --text-muted: #6a6a6a;
+      --accent: #e50914;
+      --accent-soft: rgba(229, 9, 20, 0.12);
+      --teal: #4ecdc4;
+      --radius: 16px;
+      --radius-sm: 12px;
+    }
     * { box-sizing: border-box; }
-    html { font-size: 16px; -webkit-text-size-adjust: 100%; }
+    html {
+      font-size: 16px;
+      -webkit-text-size-adjust: 100%;
+      background: var(--bg-outer);
+      background-image: radial-gradient(120% 90% at 50% 0%, rgba(229, 9, 20, 0.07) 0%, transparent 55%);
+      min-height: 100%;
+    }
     body {
       margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      font-size: 1rem;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 15px;
       line-height: 1.65;
-      color: #1a1a1a;
-      background: #ffffff;
-    }
-    .wrap {
-      max-width: 40rem;
-      margin: 0 auto;
-      padding: 2.75rem 1.5rem 4rem;
+      color: var(--text-pri);
+      -webkit-font-smoothing: antialiased;
+      min-height: 100%;
+      padding: 1.5rem 1rem 3rem;
     }
     @media (min-width: 640px) {
-      .wrap { padding: 3.5rem 2rem 5rem; }
+      body { padding: 2.5rem 1.5rem 4rem; }
     }
-    .doc-label {
+    .shell {
+      max-width: 44rem;
+      margin: 0 auto;
+    }
+    .card {
+      border-radius: var(--radius);
+      background: var(--bg-base);
+      box-shadow:
+        0 0 0 1px var(--border),
+        0 0 0 1px rgba(229, 9, 20, 0.06),
+        0 14px 36px rgba(0, 0, 0, 0.55),
+        0 0 48px rgba(229, 9, 20, 0.07);
+      overflow: hidden;
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 18px 20px;
+      background: linear-gradient(165deg, #161616 0%, #0c0c0c 55%, #080808 100%);
+      border-bottom: 1px solid var(--border);
+    }
+    .brand-mark-wrap {
+      flex-shrink: 0;
+      width: 44px;
+      height: 44px;
+      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background:
+        linear-gradient(165deg, rgba(255, 255, 255, 0.11) 0%, rgba(255, 255, 255, 0.02) 38%, transparent 52%),
+        linear-gradient(210deg, rgba(78, 205, 196, 0.06) 0%, transparent 42%),
+        rgba(0, 0, 0, 0.32);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.12),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.32),
+        0 0 0 1px rgba(255, 255, 255, 0.08),
+        0 5px 14px rgba(0, 0, 0, 0.38),
+        0 0 18px rgba(229, 9, 20, 0.18),
+        0 0 28px rgba(78, 205, 196, 0.05);
+    }
+    .brand-mark-wrap img {
+      width: 32px;
+      height: 32px;
+      object-fit: contain;
+      display: block;
+      filter: drop-shadow(0 2px 6px rgba(229, 9, 20, 0.24)) drop-shadow(0 0 8px rgba(78, 205, 196, 0.1));
+    }
+    .brand-text { min-width: 0; }
+    .brand-name {
+      font-size: 1.25rem;
+      font-weight: 600;
+      letter-spacing: -0.034em;
+      line-height: 1.15;
+      color: #fff;
+    }
+    .brand-play { color: rgba(255, 255, 255, 0.96); }
+    .brand-share {
+      margin-left: 2px;
+      background: linear-gradient(100deg, #ff6a6a 0%, #e50914 38%, #c40812 92%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      color: var(--accent);
+    }
+    @supports not ((-webkit-background-clip: text) or (background-clip: text)) {
+      .brand-share {
+        -webkit-text-fill-color: unset;
+        color: var(--accent);
+        background: none;
+      }
+    }
+    .brand-sub {
+      margin-top: 4px;
       font-size: 0.6875rem;
       font-weight: 600;
       letter-spacing: 0.12em;
       text-transform: uppercase;
-      color: #636366;
-      margin: 0 0 0.75rem;
+      color: rgba(154, 154, 154, 0.92);
     }
-    h1 {
-      font-size: 1.75rem;
+    .card-body {
+      padding: 1.75rem 1.5rem 2.25rem;
+    }
+    @media (min-width: 640px) {
+      .card-body { padding: 2rem 2.25rem 2.75rem; }
+    }
+    h1.policy-title {
+      font-size: 1.35rem;
       font-weight: 600;
-      letter-spacing: -0.025em;
-      line-height: 1.25;
-      margin: 0 0 1.25rem;
-      color: #000000;
+      letter-spacing: -0.02em;
+      margin: 0 0 0.75rem;
+      color: #fff;
     }
     .effective {
       font-size: 0.9375rem;
-      color: #48484a;
-      margin: 0 0 2rem;
-      padding-bottom: 1.75rem;
-      border-bottom: 1px solid #e5e5ea;
+      color: var(--text-sec);
+      margin: 0 0 1.75rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border);
     }
     h2 {
       font-size: 1.0625rem;
       font-weight: 600;
-      margin: 2.25rem 0 0.875rem;
-      color: #000000;
-      letter-spacing: -0.01em;
+      margin: 2rem 0 0.75rem;
+      color: #fff;
+      letter-spacing: -0.015em;
+      padding-left: 12px;
+      border-left: 3px solid var(--teal);
     }
     h2:first-of-type { margin-top: 0; }
     h3 {
       font-size: 0.9375rem;
       font-weight: 600;
-      margin: 1.5rem 0 0.5rem;
-      color: #1c1c1e;
+      margin: 1.35rem 0 0.5rem;
+      color: rgba(255, 255, 255, 0.92);
     }
-    p { margin: 0 0 0.875rem; }
+    p { margin: 0 0 0.875rem; color: rgba(240, 240, 240, 0.9); }
     ul {
       margin: 0 0 1rem;
       padding-left: 1.35rem;
+      color: rgba(240, 240, 240, 0.88);
     }
-    li { margin: 0.375rem 0; }
-    li::marker { color: #aeaeb2; }
+    li { margin: 0.4rem 0; }
+    li::marker { color: var(--text-muted); }
     a {
-      color: #0066cc;
+      color: var(--teal);
       text-decoration: none;
+      font-weight: 500;
     }
-    a:hover { text-decoration: underline; }
-    strong { font-weight: 600; color: #000000; }
+    a:hover {
+      text-decoration: underline;
+      color: #6ee0d7;
+    }
+    strong { font-weight: 600; color: #fff; }
     code {
-      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-      font-size: 0.9em;
-      background: #f2f2f7;
-      padding: 0.1em 0.35em;
-      border-radius: 4px;
-      color: #1c1c1e;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.86em;
+      background: var(--bg-raised);
+      padding: 0.12em 0.4em;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      color: rgba(78, 205, 196, 0.95);
     }
     .contact-block {
-      margin-top: 2.5rem;
-      padding-top: 1.75rem;
-      border-top: 1px solid #e5e5ea;
-    }
-    footer {
-      margin-top: 3rem;
+      margin-top: 2.25rem;
       padding-top: 1.5rem;
-      border-top: 1px solid #e5e5ea;
+      border-top: 1px solid var(--border);
+      background: linear-gradient(180deg, transparent 0%, var(--accent-soft) 100%);
+      margin-left: -1.5rem;
+      margin-right: -1.5rem;
+      padding-left: 1.5rem;
+      padding-right: 1.5rem;
+      padding-bottom: 0.25rem;
+    }
+    @media (min-width: 640px) {
+      .contact-block {
+        margin-left: -2.25rem;
+        margin-right: -2.25rem;
+        padding-left: 2.25rem;
+        padding-right: 2.25rem;
+      }
+    }
+    footer.page-foot {
+      margin-top: 2rem;
+      text-align: center;
       font-size: 0.8125rem;
-      color: #8e8e93;
+      color: var(--text-muted);
       line-height: 1.5;
     }
+    footer.page-foot span { color: var(--text-sec); }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <p class="doc-label">Legal</p>
-    <h1>Privacy Policy</h1>
-    <p class="effective"><strong>Effective date:</strong> March 22, 2026</p>
+  <div class="shell">
+    <div class="card">
+      <header class="card-header">
+        <div class="brand-mark-wrap" aria-hidden="true">
+          <img src="/brand-mark.png" width="32" height="32" alt="" decoding="async" />
+        </div>
+        <div class="brand-text">
+          <div class="brand-name">
+            <span class="brand-play">Play</span><span class="brand-share">Share</span>
+          </div>
+          <div class="brand-sub">Privacy policy</div>
+        </div>
+      </header>
+      <div class="card-body">
+        <article>
+          <h1 class="policy-title">Privacy Policy</h1>
+          <p class="effective"><strong>Effective date:</strong> March 22, 2026</p>
 
-    <article>
-      <p>
-        This Privacy Policy describes how the <strong>PlayShare</strong> browser extension (the “<strong>Extension</strong>”) and related services (the “<strong>Services</strong>”) collect, use, disclose, and protect information when you use the Extension.
-      </p>
-      <p>
-        <strong>Data controller / operator:</strong> <strong>Ibrahim Haddad</strong> (“<strong>we</strong>,” “<strong>us</strong>,” “<strong>our</strong>”).<br />
-        <strong>Contact for privacy inquiries:</strong> <a href="mailto:i.haddad009@gmail.com">i.haddad009@gmail.com</a>
-      </p>
-      <p>By installing or using the Extension, you acknowledge this policy. If you do not agree, please do not use the Extension.</p>
+          <p>
+            This Privacy Policy describes how the <strong>PlayShare</strong> browser extension (the “<strong>Extension</strong>”) and related services (the “<strong>Services</strong>”) collect, use, disclose, and protect information when you use the Extension.
+          </p>
+          <p>
+            <strong>Data controller / operator:</strong> <strong>Ibrahim Haddad</strong> (“<strong>we</strong>,” “<strong>us</strong>,” “<strong>our</strong>”).<br />
+            <strong>Contact for privacy inquiries:</strong> <a href="mailto:i.haddad009@gmail.com">i.haddad009@gmail.com</a>
+          </p>
+          <p>By installing or using the Extension, you acknowledge this policy. If you do not agree, please do not use the Extension.</p>
 
-      <h2>1. What PlayShare is</h2>
-      <p>
-        PlayShare helps people watch video on <strong>supported streaming websites</strong> in sync with others and provides <strong>text chat</strong> and room features (such as invites and room codes). <strong>Each user must have their own lawful access</strong> to the streaming service they use. The Extension does not supply video content, does not sell subscriptions to third-party services, and is <strong>not affiliated with</strong> streaming platform operators.
-      </p>
+          <h2>1. What PlayShare is</h2>
+          <p>
+            PlayShare helps people watch video on <strong>supported streaming websites</strong> in sync with others and provides <strong>text chat</strong> and room features (such as invites and room codes). <strong>Each user must have their own lawful access</strong> to the streaming service they use. The Extension does not supply video content, does not sell subscriptions to third-party services, and is <strong>not affiliated with</strong> streaming platform operators.
+          </p>
 
-      <h2>2. Information we collect and process</h2>
-      <p>
-        We process the categories of information described below. They may correspond to labels used in app store or regulatory disclosures (for example, identifiers, communications content, authentication data, network or location-related identifiers, and links to web pages).
-      </p>
+          <h2>2. Information we collect and process</h2>
+          <p>
+            We process the categories of information described below. They may correspond to labels used in app store or regulatory disclosures (for example, identifiers, communications content, authentication data, network or location-related identifiers, and links to web pages).
+          </p>
 
-      <h3>2.1 Information stored on your device</h3>
-      <p>The Extension uses the browser’s local storage API (<strong><code>chrome.storage.local</code></strong>) for data such as:</p>
-      <ul>
-        <li><strong>Room state</strong> — e.g. room code, host status, member metadata needed for the Extension to operate, and related session fields.</li>
-        <li><strong>Display name</strong> — the name you provide or that is associated with optional sign-in.</li>
-        <li><strong>Signaling server address</strong> — the default server or a <strong>custom</strong> server you configure (e.g. via invite parameters or advanced settings).</li>
-        <li><strong>Pending join codes</strong> and similar short-lived values used to complete join flows.</li>
-        <li><strong>Authentication session data</strong> — if you use sign-in, tokens or session identifiers needed to maintain your session (see Supabase below).</li>
-        <li><strong>Interface preferences</strong> — e.g. sidebar-related settings.</li>
-      </ul>
-      <p>This information remains on your device unless transmitted as described in the following sections.</p>
+          <h3>2.1 Information stored on your device</h3>
+          <p>The Extension uses the browser’s local storage API (<strong><code>chrome.storage.local</code></strong>) for data such as:</p>
+          <ul>
+            <li><strong>Room state</strong> — e.g. room code, host status, member metadata needed for the Extension to operate, and related session fields.</li>
+            <li><strong>Display name</strong> — the name you provide or that is associated with optional sign-in.</li>
+            <li><strong>Signaling server address</strong> — the default server or a <strong>custom</strong> server you configure (e.g. via invite parameters or advanced settings).</li>
+            <li><strong>Pending join codes</strong> and similar short-lived values used to complete join flows.</li>
+            <li><strong>Authentication session data</strong> — if you use sign-in, tokens or session identifiers needed to maintain your session (see Supabase below).</li>
+            <li><strong>Interface preferences</strong> — e.g. sidebar-related settings.</li>
+          </ul>
+          <p>This information remains on your device unless transmitted as described in the following sections.</p>
 
-      <h3>2.2 Information processed by the signaling server</h3>
-      <p>
-        To coordinate rooms, the Extension communicates over <strong>WebSocket</strong> with a <strong>signaling server</strong> (by default operated by us or our hosting provider; you may configure another server where the product allows). That processing may include:
-      </p>
-      <ul>
-        <li><strong>Room identifier</strong> (room code) and <strong>client or session identifiers</strong> generated for the session.</li>
-        <li><strong>Display name</strong> and <strong>presence</strong> fields (e.g. color) shown to other participants.</li>
-        <li><strong>Chat messages</strong> and related metadata (e.g. sender name).</li>
-        <li><strong>Playback coordination data</strong> — e.g. play, pause, seek, and timeline-related values, and technical fields such as timestamps or correlation identifiers where used.</li>
-        <li><strong>Other protocol messages</strong> required for features you use (e.g. reactions, typing indicators, or diagnostic messages sent by the Extension as designed).</li>
-      </ul>
-      <p>Do not submit passwords, payment card numbers, government identifiers, or other highly sensitive data in chat or as a display name.</p>
+          <h3>2.2 Information processed by the signaling server</h3>
+          <p>
+            To coordinate rooms, the Extension communicates over <strong>WebSocket</strong> with a <strong>signaling server</strong> (by default operated by us or our hosting provider; you may configure another server where the product allows). That processing may include:
+          </p>
+          <ul>
+            <li><strong>Room identifier</strong> (room code) and <strong>client or session identifiers</strong> generated for the session.</li>
+            <li><strong>Display name</strong> and <strong>presence</strong> fields (e.g. color) shown to other participants.</li>
+            <li><strong>Chat messages</strong> and related metadata (e.g. sender name).</li>
+            <li><strong>Playback coordination data</strong> — e.g. play, pause, seek, and timeline-related values, and technical fields such as timestamps or correlation identifiers where used.</li>
+            <li><strong>Other protocol messages</strong> required for features you use (e.g. reactions, typing indicators, or diagnostic messages sent by the Extension as designed).</li>
+          </ul>
+          <p>Do not submit passwords, payment card numbers, government identifiers, or other highly sensitive data in chat or as a display name.</p>
 
-      <h3>2.3 Network and location-related identifiers</h3>
-      <p>
-        Servers that receive your connections may process <strong>network identifiers</strong>, including <strong>IP addresses</strong>. IP addresses may be used to derive <strong>approximate</strong> geographic information (e.g. region). We use such data in the ordinary course of operating, securing, and maintaining the Services (e.g. abuse prevention, troubleshooting, capacity planning).
-      </p>
-      <p>We do <strong>not</strong> use the Extension to collect precise <strong>GPS</strong> location from your device.</p>
+          <h3>2.3 Network and location-related identifiers</h3>
+          <p>
+            Servers that receive your connections may process <strong>network identifiers</strong>, including <strong>IP addresses</strong>. IP addresses may be used to derive <strong>approximate</strong> geographic information (e.g. region). We use such data in the ordinary course of operating, securing, and maintaining the Services (e.g. abuse prevention, troubleshooting, capacity planning).
+          </p>
+          <p>We do <strong>not</strong> use the Extension to collect precise <strong>GPS</strong> location from your device.</p>
 
-      <h3>2.4 Page links (URLs)</h3>
-      <p>
-        For invites and similar flows, the Extension may store or transmit the <strong>URL</strong> of the watch page you are viewing so others can open the same title. That is a link to a page; it is <strong>not</strong> a copy of the video file.
-      </p>
-      <p>The Extension reads <strong>playback state</strong> from the page’s media element to perform sync; it does <strong>not</strong> upload the video stream to us.</p>
+          <h3>2.4 Page links (URLs)</h3>
+          <p>
+            For invites and similar flows, the Extension may store or transmit the <strong>URL</strong> of the watch page you are viewing so others can open the same title. That is a link to a page; it is <strong>not</strong> a copy of the video file.
+          </p>
+          <p>The Extension reads <strong>playback state</strong> from the page’s media element to perform sync; it does <strong>not</strong> upload the video stream to us.</p>
 
-      <h3>2.5 Optional sign-in (authentication)</h3>
-      <p>If you use email/password or other sign-in offered in the Extension, <strong>Supabase</strong> (or another provider configured in the build) may process authentication on our behalf, including:</p>
-      <ul>
-        <li><strong>Email address</strong> and <strong>password</strong> (or other credentials) transmitted to Supabase over TLS.</li>
-        <li><strong>Session tokens</strong> or similar credentials returned to the Extension and stored locally until you sign out.</li>
-      </ul>
-      <p>
-        The Extension uses Supabase client configuration (including a publishable client key) as required for that integration. Supabase’s handling of personal data is described in its privacy policy: <a href="https://supabase.com/privacy" rel="noopener noreferrer">https://supabase.com/privacy</a>
-      </p>
-      <p>Guest use may be available without an account; if you do not sign in, the authentication data above does not apply.</p>
+          <h3>2.5 Optional sign-in (authentication)</h3>
+          <p>If you use email/password or other sign-in offered in the Extension, <strong>Supabase</strong> (or another provider configured in the build) may process authentication on our behalf, including:</p>
+          <ul>
+            <li><strong>Email address</strong> and <strong>password</strong> (or other credentials) transmitted to Supabase over TLS.</li>
+            <li><strong>Session tokens</strong> or similar credentials returned to the Extension and stored locally until you sign out.</li>
+          </ul>
+          <p>
+            The Extension uses Supabase client configuration (including a publishable client key) as required for that integration. Supabase’s handling of personal data is described in its privacy policy: <a href="https://supabase.com/privacy" rel="noopener noreferrer">https://supabase.com/privacy</a>
+          </p>
+          <p>Guest use may be available without an account; if you do not sign in, the authentication data above does not apply.</p>
 
-      <h3>2.6 What we do not use the Extension to collect</h3>
-      <ul>
-        <li>Passwords for third-party streaming accounts (we do not request them in PlayShare).</li>
-        <li>Payment card numbers or financial account details for in-Extension purchases.</li>
-        <li>A general log of all websites you visit (the Extension is limited to declared supported sites).</li>
-        <li>Keystroke logging or mouse tracking for advertising profiling.</li>
-      </ul>
-      <p>If any abbreviated summary of our practices conflicts with this Policy, this document prevails unless applicable law requires otherwise.</p>
+          <h3>2.6 What we do not use the Extension to collect</h3>
+          <ul>
+            <li>Passwords for third-party streaming accounts (we do not request them in PlayShare).</li>
+            <li>Payment card numbers or financial account details for in-Extension purchases.</li>
+            <li>A general log of all websites you visit (the Extension is limited to declared supported sites).</li>
+            <li>Keystroke logging or mouse tracking for advertising profiling.</li>
+          </ul>
+          <p>If any abbreviated summary of our practices conflicts with this Policy, this document prevails unless applicable law requires otherwise.</p>
 
-      <h2>3. How we use information</h2>
-      <p>We use the information above to:</p>
-      <ul>
-        <li>Provide and operate <strong>rooms, sync, and chat</strong>.</li>
-        <li>Operate, secure, and improve the <strong>signaling service</strong> (including troubleshooting and abuse prevention).</li>
-        <li>Provide <strong>optional accounts</strong> and maintain sessions through Supabase where enabled.</li>
-        <li>Generate <strong>invite links</strong> that may include room codes and optional watch URLs.</li>
-      </ul>
-      <p>We do <strong>not</strong> sell your personal information.</p>
+          <h2>3. How we use information</h2>
+          <p>We use the information above to:</p>
+          <ul>
+            <li>Provide and operate <strong>rooms, sync, and chat</strong>.</li>
+            <li>Operate, secure, and improve the <strong>signaling service</strong> (including troubleshooting and abuse prevention).</li>
+            <li>Provide <strong>optional accounts</strong> and maintain sessions through Supabase where enabled.</li>
+            <li>Generate <strong>invite links</strong> that may include room codes and optional watch URLs.</li>
+          </ul>
+          <p>We do <strong>not</strong> sell your personal information.</p>
 
-      <h2>4. How we share information</h2>
-      <ul>
-        <li><strong>Service providers</strong> (e.g. hosting or infrastructure) may process data on our behalf under appropriate safeguards.</li>
-        <li><strong>Supabase</strong> receives authentication-related data when you use sign-in features.</li>
-        <li>If you use a <strong>non-default signaling server</strong>, your room traffic is processed by that operator; we are not responsible for their practices.</li>
-      </ul>
-      <p>We may disclose information if required by <strong>law</strong>, regulation, legal process, or to protect <strong>rights, safety, and security</strong>.</p>
+          <h2>4. How we share information</h2>
+          <ul>
+            <li><strong>Service providers</strong> (e.g. hosting or infrastructure) may process data on our behalf under appropriate safeguards.</li>
+            <li><strong>Supabase</strong> receives authentication-related data when you use sign-in features.</li>
+            <li>If you use a <strong>non-default signaling server</strong>, your room traffic is processed by that operator; we are not responsible for their practices.</li>
+          </ul>
+          <p>We may disclose information if required by <strong>law</strong>, regulation, legal process, or to protect <strong>rights, safety, and security</strong>.</p>
 
-      <h2>5. Retention</h2>
-      <ul>
-        <li><strong>Server-side:</strong> we retain data only as long as needed for <strong>operating the Services</strong>, <strong>security</strong>, and <strong>legal obligations</strong>. Retention periods may vary by data type; we may delete or aggregate data over time.</li>
-        <li><strong>Device-side:</strong> data in <code>chrome.storage.local</code> remains until you remove it, clear extension data, or uninstall the Extension.</li>
-      </ul>
+          <h2>5. Retention</h2>
+          <ul>
+            <li><strong>Server-side:</strong> we retain data only as long as needed for <strong>operating the Services</strong>, <strong>security</strong>, and <strong>legal obligations</strong>. Retention periods may vary by data type; we may delete or aggregate data over time.</li>
+            <li><strong>Device-side:</strong> data in <code>chrome.storage.local</code> remains until you remove it, clear extension data, or uninstall the Extension.</li>
+          </ul>
 
-      <h2>6. Security</h2>
-      <p>We use <strong>TLS</strong> (HTTPS/WSS) for connections where configured. No electronic transmission or storage is completely secure; please avoid sharing sensitive information in chat or room fields.</p>
+          <h2>6. Security</h2>
+          <p>We use <strong>TLS</strong> (HTTPS/WSS) for connections where configured. No electronic transmission or storage is completely secure; please avoid sharing sensitive information in chat or room fields.</p>
 
-      <h2>7. Children’s privacy</h2>
-      <p>
-        The Extension is <strong>not directed to children under 13</strong> (or the age of digital consent in your jurisdiction, if higher). Do not use the Extension if you are below that age. If you believe we have collected information from a child inappropriately, contact us using the email below and we will take appropriate steps.
-      </p>
+          <h2>7. Children’s privacy</h2>
+          <p>
+            The Extension is <strong>not directed to children under 13</strong> (or the age of digital consent in your jurisdiction, if higher). Do not use the Extension if you are below that age. If you believe we have collected information from a child inappropriately, contact us using the email below and we will take appropriate steps.
+          </p>
 
-      <h2>8. International transfers</h2>
-      <p>If you access the Services from outside the country where servers are located, your information may be <strong>transferred to</strong> and <strong>processed in</strong> other countries where privacy laws may differ.</p>
+          <h2>8. International transfers</h2>
+          <p>If you access the Services from outside the country where servers are located, your information may be <strong>transferred to</strong> and <strong>processed in</strong> other countries where privacy laws may differ.</p>
 
-      <h2>9. Your choices</h2>
-      <ul>
-        <li>Leave a room or uninstall the Extension.</li>
-        <li>Clear Extension data in Chrome via extension settings (e.g. remove the Extension or clear stored data for it).</li>
-        <li>Avoid optional sign-in if you do not want Supabase authentication.</li>
-        <li>Do not connect to custom servers you do not trust.</li>
-      </ul>
+          <h2>9. Your choices</h2>
+          <ul>
+            <li>Leave a room or uninstall the Extension.</li>
+            <li>Clear Extension data in Chrome via extension settings (e.g. remove the Extension or clear stored data for it).</li>
+            <li>Avoid optional sign-in if you do not want Supabase authentication.</li>
+            <li>Do not connect to custom servers you do not trust.</li>
+          </ul>
 
-      <h2>10. Changes to this policy</h2>
-      <p>
-        We may update this Privacy Policy periodically. We will revise the <strong>Effective date</strong> at the top when we do. Continued use of the Extension after changes constitutes acceptance of the updated policy, except where applicable law requires additional notice or consent.
-      </p>
+          <h2>10. Changes to this policy</h2>
+          <p>
+            We may update this Privacy Policy periodically. We will revise the <strong>Effective date</strong> at the top when we do. Continued use of the Extension after changes constitutes acceptance of the updated policy, except where applicable law requires additional notice or consent.
+          </p>
 
-      <div class="contact-block">
-        <h2>11. Contact</h2>
-        <p><strong>Ibrahim Haddad</strong></p>
-        <p><strong>Email:</strong> <a href="mailto:i.haddad009@gmail.com">i.haddad009@gmail.com</a></p>
-        <p>For privacy-related requests or questions about this Policy, please contact us at the email above.</p>
+          <div class="contact-block">
+            <h2>11. Contact</h2>
+            <p><strong>Ibrahim Haddad</strong></p>
+            <p><strong>Email:</strong> <a href="mailto:i.haddad009@gmail.com">i.haddad009@gmail.com</a></p>
+            <p>For privacy-related requests or questions about this Policy, please contact us at the email above.</p>
+          </div>
+        </article>
       </div>
-    </article>
-
-    <footer>
-      PlayShare · Privacy Policy · © 2026 Ibrahim Haddad
+    </div>
+    <footer class="page-foot">
+      <span>PlayShare</span> · Privacy Policy · © 2026 Ibrahim Haddad
     </footer>
   </div>
 </body>

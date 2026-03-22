@@ -308,6 +308,21 @@ const httpServer = http.createServer((req, res) => {
     res.end(req.method === 'HEAD' ? undefined : privacyPolicyHtml);
     return;
   }
+  if (url.pathname === '/brand-mark.png' && req.method === 'GET') {
+    const pngPath = path.join(__dirname, 'public', 'brand-mark.png');
+    try {
+      const buf = fs.readFileSync(pngPath);
+      res.writeHead(200, {
+        'Content-Type': 'image/png',
+        'Cache-Control': 'public, max-age=86400'
+      });
+      res.end(buf);
+    } catch {
+      res.writeHead(404);
+      res.end();
+    }
+    return;
+  }
   if (url.pathname === '/join' && req.method === 'GET') {
     const code = (url.searchParams.get('code') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
     let videoUrl = null;
