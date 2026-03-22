@@ -1219,6 +1219,7 @@
       SIDEBAR_WIDTH
     } = contentConstants;
     const DIAG_EVENTS = new Set(contentConstants.DIAG_EVENT_NAMES);
+    const diagnosticsUiEnabled = false;
     const platform = contentConstants.detectPlatform(hostname);
     const playbackProfile = getPlaybackProfile(hostname, location.pathname);
     const drmSyncPrompt = createDrmSyncPromptHost();
@@ -4177,6 +4178,7 @@
     }
     let diagRefreshInterval = null;
     function toggleDiagnostic() {
+      if (!diagnosticsUiEnabled) return;
       diagVisible = !diagVisible;
       if (diagVisible) {
         if (!diagOverlay) injectDiagnosticOverlay();
@@ -4212,7 +4214,7 @@
       }
     }
     function injectDiagnosticOverlay() {
-      if (diagOverlay) return;
+      if (!diagnosticsUiEnabled || diagOverlay) return;
       diagOverlay = document.createElement("div");
       diagOverlay.id = "ws-diag-overlay";
       diagOverlay.setAttribute("aria-hidden", "true");
@@ -4658,11 +4660,12 @@
     `;
       document.head.appendChild(diagStyles);
     }
-    const diagToggleBtn = document.createElement("button");
-    diagToggleBtn.id = "ws-diag-toggle";
-    diagToggleBtn.title = "Sync diagnostics (dev) — Ctrl+Shift+D";
-    diagToggleBtn.textContent = "⚙";
-    diagToggleBtn.style.cssText = `
+    if (diagnosticsUiEnabled) {
+      const diagToggleBtn = document.createElement("button");
+      diagToggleBtn.id = "ws-diag-toggle";
+      diagToggleBtn.title = "Sync diagnostics (dev) — Ctrl+Shift+D";
+      diagToggleBtn.textContent = "⚙";
+      diagToggleBtn.style.cssText = `
     position:fixed;bottom:16px;left:16px;z-index:2147483646;
     width:36px;height:36px;border-radius:10px;
     background:rgba(18,20,24,0.92);border:1px solid rgba(78,205,196,0.35);
@@ -4671,27 +4674,28 @@
     transition:background 0.2s,color 0.2s,transform 0.15s;
     box-shadow:0 4px 16px rgba(0,0,0,0.35);
   `;
-    diagToggleBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      toggleDiagnostic();
-    });
-    diagToggleBtn.addEventListener("mouseenter", () => {
-      diagToggleBtn.style.background = "rgba(30,40,40,0.98)";
-      diagToggleBtn.style.color = "#5eead4";
-      diagToggleBtn.style.transform = "scale(1.05)";
-    });
-    diagToggleBtn.addEventListener("mouseleave", () => {
-      diagToggleBtn.style.background = "rgba(18,20,24,0.92)";
-      diagToggleBtn.style.color = "#4ECDC4";
-      diagToggleBtn.style.transform = "scale(1)";
-    });
-    document.body.appendChild(diagToggleBtn);
-    document.addEventListener("keydown", (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "D") {
-        e.preventDefault();
+      diagToggleBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
         toggleDiagnostic();
-      }
-    });
+      });
+      diagToggleBtn.addEventListener("mouseenter", () => {
+        diagToggleBtn.style.background = "rgba(30,40,40,0.98)";
+        diagToggleBtn.style.color = "#5eead4";
+        diagToggleBtn.style.transform = "scale(1.05)";
+      });
+      diagToggleBtn.addEventListener("mouseleave", () => {
+        diagToggleBtn.style.background = "rgba(18,20,24,0.92)";
+        diagToggleBtn.style.color = "#4ECDC4";
+        diagToggleBtn.style.transform = "scale(1)";
+      });
+      document.body.appendChild(diagToggleBtn);
+      document.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "D") {
+          e.preventDefault();
+          toggleDiagnostic();
+        }
+      });
+    }
     const style = document.createElement("style");
     style.textContent = `
     @keyframes wsFadeIn { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
