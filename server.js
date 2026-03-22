@@ -10,7 +10,10 @@ const os = require('os');
 const { WebSocketServer, WebSocket } = require('ws');
 const { v4: uuidv4 } = require('uuid');
 
-const PORT = process.env.PORT || 8765;
+const PORT = (() => {
+  const n = Number.parseInt(String(process.env.PORT || '').trim(), 10);
+  return Number.isFinite(n) && n > 0 ? n : 8765;
+})();
 
 /** Drop oversized frames before JSON.parse (abuse / accidental huge payloads). */
 const MAX_WS_MESSAGE_BYTES = parseInt(process.env.PLAYSHARE_MAX_MESSAGE_BYTES || '65536', 10);
@@ -314,10 +317,10 @@ function openSite(u){window.open(u,'_blank');}
     res.end(html);
     return;
   }
-  // Health check for Railway / load balancers (GET /)
-  if (url.pathname === '/' && req.method === 'GET') {
+  // Health check for Railway / load balancers (GET or HEAD /)
+  if (url.pathname === '/' && (req.method === 'GET' || req.method === 'HEAD')) {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('PlayShare signaling OK\n');
+    res.end(req.method === 'HEAD' ? undefined : 'PlayShare signaling OK\n');
     return;
   }
   res.writeHead(404);
@@ -792,7 +795,7 @@ function handleLeave(ws, client) {
   });
 }
 
-httpServer.listen(PORT, '0.0.0.0', () => {
+function logStartupBanner() {
   const lanWs = getServerUrl();
   console.log('✅ PlayShare server running (signaling host = this computer)');
   console.log(`   Extension on this machine: ws://localhost:${PORT}`);
@@ -800,4 +803,31 @@ httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`   Phones & other PCs on your LAN: ${lanWs}`);
   }
   console.log(`   Join page: ${getHttpJoinUrl()}/join?code=XXXXXX`);
+}
+
+let listenV6Attempted = false;
+function onListenError(err) {
+  httpServer.removeListener('error', onListenError);
+  if (!listenV6Attempted && (err.code === 'EAFNOSUPPORT' || err.code === 'EINVAL')) {
+    listenV6Attempted = true;
+    httpServer.on('error', onListenError);
+    httpServer.listen(PORT, '0.0.0.0', () => {
+      httpServer.removeListener('error', onListenError);
+      const a = httpServer.address();
+      if (a && typeof a === 'object') console.log(`✅ Listening ${a.address}:${a.port} (${a.family})`);
+      logStartupBanner();
+    });
+    return;
+  }
+  if (err.code === 'EADDRINUSE') console.error('Port already in use:', err.message);
+  else console.error('Server listen error:', err.message);
+  process.exit(1);
+}
+
+httpServer.on('error', onListenError);
+httpServer.listen({ port: PORT, host: '::', ipv6Only: false }, () => {
+  httpServer.removeListener('error', onListenError);
+  const a = httpServer.address();
+  if (a && typeof a === 'object') console.log(`✅ Listening ${a.address}:${a.port} (${a.family})`);
+  logStartupBanner();
 });
