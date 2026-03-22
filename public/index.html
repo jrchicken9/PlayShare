@@ -37,6 +37,11 @@
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
       .feature-card, .btn-install, .btn-secondary, .btn-secondary.is-pending:hover { transition: none !important; }
+      .cta-inner,
+      .cta-panel-btn { transition: none !important; }
+      @media (hover: hover) {
+        .cta-panel-btn:hover { transform: none !important; }
+      }
       .install-option { transition: none !important; }
       .install-option,
       .install-option::before,
@@ -1082,49 +1087,104 @@
     }
     .cta-inner {
       position: relative;
-      padding: 2.75rem 1.75rem;
+      z-index: 0;
+      padding: 2.85rem 1.85rem;
       border-radius: var(--radius);
       text-align: center;
       overflow: hidden;
-      background: linear-gradient(165deg, #161616 0%, #0a0a0a 100%);
-      border: 1px solid var(--border);
+      background: linear-gradient(168deg, rgba(22, 22, 24, 0.98) 0%, rgba(8, 8, 10, 0.99) 55%, #0a0a0a 100%);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
       box-shadow:
-        0 0 0 1px rgba(229, 9, 20, 0.1),
-        0 24px 64px rgba(0, 0, 0, 0.55);
+        0 0 0 1px rgba(78, 205, 196, 0.1),
+        0 0 60px rgba(229, 9, 20, 0.07),
+        0 28px 72px rgba(0, 0, 0, 0.58);
+      transition: box-shadow 0.35s var(--ease-out), border-color 0.35s ease;
+    }
+    @media (hover: hover) {
+      .cta-inner:hover {
+        border-color: rgba(255, 255, 255, 0.14);
+        box-shadow:
+          0 0 0 1px rgba(78, 205, 196, 0.16),
+          0 0 72px rgba(78, 205, 196, 0.1),
+          0 0 80px rgba(229, 9, 20, 0.08),
+          0 32px 80px rgba(0, 0, 0, 0.55);
+      }
     }
     .cta-inner::before {
       content: "";
       position: absolute;
-      top: -50%;
+      z-index: 0;
+      top: -55%;
       left: 50%;
-      width: 120%;
+      width: 125%;
       height: 100%;
       transform: translateX(-50%);
-      background: radial-gradient(ellipse, rgba(78, 205, 196, 0.12) 0%, transparent 65%);
+      background: radial-gradient(ellipse, rgba(78, 205, 196, 0.14) 0%, transparent 62%);
       pointer-events: none;
     }
-    .cta-inner h2 {
+    .cta-inner::after {
+      content: "";
+      position: absolute;
+      z-index: 0;
+      inset: auto -20% -45% -20%;
+      height: 70%;
+      background: radial-gradient(ellipse 80% 70% at 50% 100%, rgba(229, 9, 20, 0.11), transparent 58%);
+      pointer-events: none;
+    }
+    .cta-inner > * {
       position: relative;
-      margin: 0 0 0.5rem;
-      font-size: clamp(1.25rem, 2.5vw, 1.5rem);
+      z-index: 1;
+    }
+    .cta-inner h2 {
+      margin: 0 0 0.65rem;
+      font-size: clamp(1.35rem, 2.8vw, 1.65rem);
       font-weight: 700;
       color: #fff;
+      letter-spacing: -0.02em;
+      line-height: 1.25;
     }
     .cta-inner p {
-      position: relative;
-      margin: 0 0 1.35rem;
-      color: var(--text-muted);
-      font-size: 0.98rem;
+      margin: 0 auto 1.5rem;
+      max-width: 38rem;
+      color: rgba(180, 180, 185, 0.95);
+      font-size: 1rem;
+      line-height: 1.65;
+    }
+    .cta-panel-eyebrow {
+      margin: 0 0 0.6rem;
+      font-size: 0.6875rem;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: rgba(126, 232, 222, 0.85);
+    }
+    .cta-panel-lead {
+      margin-bottom: 1.65rem !important;
+    }
+    .cta-panel-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      margin-top: 0.15rem;
+      box-shadow:
+        0 4px 24px var(--accent-glow),
+        0 0 40px rgba(229, 9, 20, 0.2);
+      transition: transform 0.25s var(--ease-out), box-shadow 0.25s var(--ease-out);
+    }
+    @media (hover: hover) {
+      .cta-panel-btn:hover {
+        transform: translateY(-2px);
+        box-shadow:
+          0 8px 32px rgba(229, 9, 20, 0.45),
+          0 0 48px rgba(229, 9, 20, 0.25);
+      }
     }
     .cta-inner .install-options {
       position: relative;
       margin: 0 auto;
       max-width: 36rem;
-    }
-    .cta-inner .cta-back-install {
-      position: relative;
-      margin: 1.35rem 0 0;
-      font-size: 0.9375rem;
     }
     /* Footer */
     footer {
@@ -1355,12 +1415,15 @@
     </section>
 
     <div class="cta-band">
-      <div class="cta-inner">
-        <h2>Scroll up when you’re ready to install</h2>
-        <p>The buttons above stay the source of truth for Web Store vs .zip. After that, pick a platform, hit play, and invite the room.</p>
-        <p class="cta-back-install">
-          <a class="btn-install" href="#get-extension">↑ Back to install options</a>
+      <div class="cta-inner" aria-labelledby="cta-panel-title">
+        <p class="cta-panel-eyebrow">Before you go</p>
+        <h2 id="cta-panel-title">Add PlayShare, then press play</h2>
+        <p class="cta-panel-lead">
+          At the top of this page, pick the Chrome Web Store (when it’s live) or the .zip download. Add PlayShare to Chrome, open something on a supported service, press play, and share a room—your friends stay on the same moment with you.
         </p>
+        <a class="btn-install cta-panel-btn" href="#get-extension">
+          <span aria-hidden="true">↑</span> Jump to install
+        </a>
       </div>
     </div>
   </main>
