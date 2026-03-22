@@ -27,3 +27,9 @@ zip -r "$OUT" \
 
 echo "Wrote $(pwd)/$OUT ($(wc -c < "$OUT" | tr -d ' ') bytes)"
 echo "Load in Chrome: chrome://extensions → Developer mode → Load unpacked (unzip first) or upload this zip to the Web Store."
+
+# Homepage shows this next to the .zip download; matches manifest baked into the zip.
+VERSION="$(node -p "JSON.parse(require('fs').readFileSync('manifest.json','utf8')).version")"
+mkdir -p public/install
+printf '%s\n' "$VERSION" > public/install/playshare-extension.version
+echo "Wrote public/install/playshare-extension.version ($VERSION)"

@@ -21,7 +21,7 @@ Use this when filling the developer dashboard (privacy, permissions justificatio
    node scripts/bump-extension-version.mjs         # print current version only
    ```
    Then rebuild the zip (`npm run package:extension`) and upload.
-8. **Pre–Web Store homepage install** — If `PLAYSHARE_CHROME_STORE_URL` is unset, the marketing site can offer **`GET /install/playshare-extension.zip`** when that file exists at **`public/install/playshare-extension.zip`**. The **Dockerfile** build runs `npm run package:extension` and copies the store zip there automatically; you can also copy it manually for non-Docker hosts. After the listing is live, set `PLAYSHARE_CHROME_STORE_URL` so buttons point to the Web Store instead.
+8. **Homepage install (Web Store + .zip)** — The marketing site shows **two** choices: **Chrome Web Store** (live link when `PLAYSHARE_CHROME_STORE_URL` is set, otherwise a **Coming soon** state) and **Direct download** when **`public/install/playshare-extension.zip`** exists (`GET /install/playshare-extension.zip`). The shown **download version** comes from **`public/install/playshare-extension.version`**, which `npm run package:extension` writes from `manifest.json` whenever you build the store zip—so it tracks the packaged build, not a separate hand-edited string. If the sidecar is missing but the zip exists, the server falls back to the repo’s `manifest.json` (useful in dev). The **Dockerfile** runs `package:extension`, then copies both the zip and `.version` into the runtime image. After the listing is live, set `PLAYSHARE_CHROME_STORE_URL`; you can keep shipping the .zip for operators who sideload.
 
 ## Single purpose
 

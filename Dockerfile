@@ -17,5 +17,6 @@ COPY server.js ./
 COPY shared ./shared/
 COPY public ./public/
 COPY --from=pack /app/public/install/playshare-extension.zip ./public/install/playshare-extension.zip
+COPY --from=pack /app/public/install/playshare-extension.version ./public/install/playshare-extension.version
 ENV NODE_ENV=production
 CMD ["node", "server.js"]

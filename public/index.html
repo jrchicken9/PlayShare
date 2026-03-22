@@ -36,7 +36,7 @@
     }
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
-      .feature-card, .btn-install, .btn-secondary { transition: none !important; }
+      .feature-card, .btn-install, .btn-secondary, .btn-secondary.is-pending:hover { transition: none !important; }
       .hero-billboard::before { animation: none !important; }
       .hero-spotlight { animation: none !important; }
       .hero-spotlight-art *,
@@ -211,6 +211,14 @@
       background: rgba(255, 255, 255, 0.1);
       text-decoration: none !important;
       transform: translateY(-1px);
+    }
+    .btn-secondary.is-pending,
+    .btn-secondary.is-pending:hover {
+      opacity: 0.72;
+      cursor: not-allowed;
+      transform: none;
+      border-color: var(--border);
+      background: rgba(255, 255, 255, 0.04);
     }
     .btn-secondary svg { opacity: 0.85; flex-shrink: 0; }
     /* Hero billboard */
@@ -565,11 +573,85 @@
     .hero-badge strong { color: var(--teal); font-weight: 700; }
     .hero-cta {
       display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 1rem;
+      max-width: 40rem;
+      margin: 0 auto 1.25rem;
+    }
+    .hero-cta-row {
+      display: flex;
       flex-wrap: wrap;
       gap: 0.75rem 1rem;
       justify-content: center;
       align-items: center;
-      margin-bottom: 1.25rem;
+    }
+    .install-options {
+      display: grid;
+      gap: 0.85rem;
+      grid-template-columns: 1fr;
+      width: 100%;
+    }
+    @media (min-width: 560px) {
+      .install-options {
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+      }
+    }
+    .install-option {
+      padding: 1.2rem 1.1rem;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: rgba(0, 0, 0, 0.22);
+      text-align: center;
+    }
+    .install-option-title {
+      margin: 0 0 0.65rem;
+      font-size: 0.7rem;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+    .install-option .btn-install,
+    .install-option .btn-secondary {
+      width: 100%;
+      justify-content: center;
+    }
+    .install-option-version {
+      display: block;
+      margin-top: 0.45rem;
+      font-size: 0.8125rem;
+      font-weight: 700;
+      color: var(--teal);
+      letter-spacing: 0.02em;
+    }
+    .install-option-version:empty,
+    .install-option-version[hidden] {
+      display: none !important;
+    }
+    .install-soon-pill {
+      display: inline-block;
+      margin-top: 0.45rem;
+      padding: 0.2rem 0.55rem;
+      border-radius: 999px;
+      font-size: 0.65rem;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.75);
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border);
+    }
+    .install-soon-pill[hidden] {
+      display: none !important;
+    }
+    .install-option-desc {
+      margin: 0.65rem 0 0;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+      text-align: center;
     }
     .hero-note {
       font-size: 0.8125rem;
@@ -856,7 +938,11 @@
       color: var(--text-muted);
       font-size: 0.98rem;
     }
-    .cta-inner .btn-install { position: relative; }
+    .cta-inner .install-options {
+      position: relative;
+      margin: 0 auto;
+      max-width: 36rem;
+    }
     /* Footer */
     footer {
       border-top: 1px solid var(--border);
@@ -918,7 +1004,7 @@
       <a href="#platforms">Platforms</a>
       <a href="#how-it-works">How it works</a>
       <a href="/privacy">Privacy Policy</a>
-      <a class="btn-install" data-install-link data-label-ready="Add to Chrome" data-label-zip="Download .zip (Chrome)" data-label-pending="Coming soon" href="#" rel="noopener noreferrer">Add to Chrome</a>
+      <a class="btn-install" href="#get-extension">Get extension</a>
     </nav>
   </header>
 
@@ -974,20 +1060,35 @@
           <span class="hero-badge"><strong>In-page</strong> chat &amp; presence</span>
           <span class="hero-badge"><strong>Room codes</strong> &amp; invites</span>
         </div>
-        <div class="hero-cta">
-          <a class="btn-install" data-install-link data-label-ready="Add to Chrome — free" data-label-zip="Download .zip — install in Chrome" data-label-pending="Coming soon — Chrome Web Store" href="#" rel="noopener noreferrer">Add to Chrome — free</a>
-          <a class="btn-secondary" href="#how-it-works">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 5v14l11-7L8 5z" fill="currentColor"/></svg>
-            How it works
-          </a>
+        <div class="hero-cta" id="get-extension">
+          <div class="install-options" role="group" aria-label="Install PlayShare">
+            <div class="install-option install-option-zip" data-install-zip-block hidden>
+              <p class="install-option-title">Direct download</p>
+              <a class="btn-install" data-zip-install href="#" rel="noopener noreferrer">Download .zip</a>
+              <span class="install-option-version" data-extension-version-label aria-live="polite"></span>
+              <p class="install-option-desc">Unzip the folder, open <strong>chrome://extensions</strong>, turn on Developer mode, then <strong>Load unpacked</strong> and choose that folder.</p>
+            </div>
+            <div class="install-option install-option-store" id="install-store-soon">
+              <p class="install-option-title">Chrome Web Store</p>
+              <a class="btn-secondary" data-store-install href="#" rel="noopener noreferrer">Open in Chrome Web Store</a>
+              <span class="install-soon-pill" data-store-soon-badge>Coming soon</span>
+              <p class="install-option-desc">One-click install when the listing is live. Same build as the .zip when both are offered.</p>
+            </div>
+          </div>
+          <div class="hero-cta-row">
+            <a class="btn-secondary" href="#how-it-works">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 5v14l11-7L8 5z" fill="currentColor"/></svg>
+              How it works
+            </a>
+          </div>
         </div>
         <p class="hero-note">HD quality and buffering depend on the streaming service and your connection—not PlayShare.</p>
         <p class="hero-note" style="margin-top:0.65rem">
           <a href="/privacy">Privacy Policy</a> — how we handle your data
         </p>
         <div id="install-soon" hidden>
-          <strong>Chrome Web Store link coming soon.</strong>
-          If you’re the operator: set <code style="font-size:0.85em;background:rgba(0,0,0,0.35);padding:0.15em 0.4em;border-radius:4px">PLAYSHARE_CHROME_STORE_URL</code> for one-click store installs, or ship <code style="font-size:0.85em;background:rgba(0,0,0,0.35);padding:0.15em 0.4em;border-radius:4px">public/install/playshare-extension.zip</code> (e.g. Docker build) so the homepage can offer a .zip download until the listing is live.
+          <strong>No install package on this server yet.</strong>
+          Operators: run <code style="font-size:0.85em;background:rgba(0,0,0,0.35);padding:0.15em 0.4em;border-radius:4px">npm run package:extension</code> and add <code style="font-size:0.85em;background:rgba(0,0,0,0.35);padding:0.15em 0.4em;border-radius:4px">public/install/playshare-extension.zip</code>, or deploy the Docker image that builds it. Set <code style="font-size:0.85em;background:rgba(0,0,0,0.35);padding:0.15em 0.4em;border-radius:4px">PLAYSHARE_CHROME_STORE_URL</code> when the Chrome Web Store listing is live.
         </div>
       </section>
     </div>
@@ -1063,7 +1164,7 @@
       <h2 class="section-title" id="steps-title">How PlayShare works</h2>
       <p class="section-lead">A straight path from install to watch party—no new subscription for our piece of the puzzle.</p>
       <ol class="steps">
-        <li><strong>Install PlayShare</strong> from the Chrome Web Store (button in the header).</li>
+        <li><strong>Install PlayShare</strong> from the <a href="#get-extension">Chrome Web Store or the .zip download</a> (see <em>Get extension</em> above).</li>
         <li><strong>Pin the extension</strong> so the icon stays one click away while you browse.</li>
         <li><strong>Open a video</strong> on a supported site and pick something to watch.</li>
         <li><strong>Start a room</strong> from the extension, then share the room code or invite link.</li>
@@ -1075,7 +1176,20 @@
       <div class="cta-inner">
         <h2>Ready for your next watch party?</h2>
         <p>Add PlayShare to Chrome and open a supported streaming site to create or join a room.</p>
-        <a class="btn-install" data-install-link data-label-ready="Add to Chrome" data-label-zip="Download .zip (Chrome)" data-label-pending="Coming soon" href="#" rel="noopener noreferrer">Add to Chrome</a>
+        <div class="install-options" role="group" aria-label="Install PlayShare">
+          <div class="install-option install-option-zip" data-install-zip-block hidden>
+            <p class="install-option-title">Direct download</p>
+            <a class="btn-install" data-zip-install href="#" rel="noopener noreferrer">Download .zip</a>
+            <span class="install-option-version" data-extension-version-label aria-live="polite"></span>
+            <p class="install-option-desc">Unzip, then <strong>chrome://extensions</strong> → Developer mode → <strong>Load unpacked</strong>.</p>
+          </div>
+          <div class="install-option install-option-store">
+            <p class="install-option-title">Chrome Web Store</p>
+            <a class="btn-secondary" data-store-install href="#" rel="noopener noreferrer">Open in Chrome Web Store</a>
+            <span class="install-soon-pill" data-store-soon-badge>Coming soon</span>
+            <p class="install-option-desc">One-click install when the listing is live.</p>
+          </div>
+        </div>
       </div>
     </div>
   </main>
@@ -1108,41 +1222,80 @@
       document.addEventListener('DOMContentLoaded', function () {
         var storeUrl = document.body.getAttribute('data-chrome-store-url');
         var zipUrl = document.body.getAttribute('data-extension-zip-url');
-        var links = document.querySelectorAll('[data-install-link]');
+        var zipVer = document.body.getAttribute('data-extension-zip-version');
         var soon = document.getElementById('install-soon');
         var zipHint =
           'Unzip the folder, then open chrome://extensions → Developer mode → Load unpacked and choose that folder.';
+        var zipBlocks = document.querySelectorAll('[data-install-zip-block]');
+        var zipLinks = document.querySelectorAll('[data-zip-install]');
+        var storeLinks = document.querySelectorAll('[data-store-install]');
+        var verLabels = document.querySelectorAll('[data-extension-version-label]');
+        var storeBadges = document.querySelectorAll('[data-store-soon-badge]');
+
+        if (zipUrl) {
+          zipBlocks.forEach(function (el) {
+            el.hidden = false;
+          });
+          zipLinks.forEach(function (a) {
+            a.setAttribute('href', zipUrl);
+            a.removeAttribute('target');
+            a.setAttribute('download', '');
+            a.setAttribute('title', zipHint);
+          });
+          verLabels.forEach(function (el) {
+            if (zipVer) {
+              el.textContent = 'Version ' + zipVer;
+              el.hidden = false;
+            } else {
+              el.textContent = '';
+              el.hidden = true;
+            }
+          });
+        } else {
+          zipBlocks.forEach(function (el) {
+            el.hidden = true;
+          });
+          verLabels.forEach(function (el) {
+            el.textContent = '';
+            el.hidden = true;
+          });
+        }
+
         if (storeUrl) {
-          links.forEach(function (a) {
+          storeLinks.forEach(function (a) {
             a.setAttribute('href', storeUrl);
             a.setAttribute('target', '_blank');
             a.setAttribute('rel', 'noopener noreferrer');
-            a.removeAttribute('title');
             a.classList.remove('is-pending');
-            var ready = a.getAttribute('data-label-ready');
-            if (ready) a.textContent = ready;
+            a.removeAttribute('aria-disabled');
           });
-          if (soon) soon.hidden = true;
-        } else if (zipUrl) {
-          links.forEach(function (a) {
-            a.setAttribute('href', zipUrl);
+          storeBadges.forEach(function (el) {
+            el.hidden = true;
+          });
+        } else {
+          storeLinks.forEach(function (a) {
+            a.setAttribute('href', '#install-store-soon');
             a.removeAttribute('target');
             a.setAttribute('rel', 'noopener noreferrer');
-            a.setAttribute('title', zipHint);
-            a.classList.remove('is-pending');
-            var z = a.getAttribute('data-label-zip');
-            if (z) a.textContent = z;
-          });
-          if (soon) soon.hidden = true;
-        } else {
-          links.forEach(function (a) {
-            a.setAttribute('href', '#install-soon');
-            a.removeAttribute('title');
             a.classList.add('is-pending');
-            var pend = a.getAttribute('data-label-pending') || 'Coming soon';
-            a.textContent = pend;
+            a.setAttribute('aria-disabled', 'true');
           });
-          if (soon) soon.hidden = false;
+          storeBadges.forEach(function (el) {
+            el.hidden = false;
+          });
+          storeLinks.forEach(function (a) {
+            a.addEventListener(
+              'click',
+              function (e) {
+                e.preventDefault();
+              },
+              true
+            );
+          });
+        }
+
+        if (soon) {
+          soon.hidden = !!(zipUrl || storeUrl);
         }
       });
     })();

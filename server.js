@@ -304,6 +304,7 @@ function escapeHtmlAttr(s) {
 
 const EXTENSION_ZIP_PATH = path.join(__dirname, 'public', 'install', 'playshare-extension.zip');
 const EXTENSION_ZIP_URL_PATH = '/install/playshare-extension.zip';
+const EXTENSION_VERSION_PATH = path.join(__dirname, 'public', 'install', 'playshare-extension.version');
 
 function extensionZipAvailable() {
   try {
@@ -314,13 +315,42 @@ function extensionZipAvailable() {
   }
 }
 
+/** Safe fragment for HTML attributes (semver / manifest version). */
+function sanitizeExtensionVersion(raw) {
+  const s = String(raw || '').trim();
+  if (!s || s.length > 32) return '';
+  return /^[0-9A-Za-z._+-]+$/.test(s) ? s : '';
+}
+
+/**
+ * Version of the .zip offered at /install/playshare-extension.zip.
+ * Prefer sidecar from `npm run package:extension`; else root manifest when zip exists (dev fallback).
+ */
+function readExtensionZipVersion() {
+  if (!extensionZipAvailable()) return '';
+  try {
+    const line = fs.readFileSync(EXTENSION_VERSION_PATH, 'utf8').split(/\r?\n/)[0];
+    const fromFile = sanitizeExtensionVersion(line);
+    if (fromFile) return fromFile;
+  } catch {}
+  try {
+    const manifestPath = path.join(__dirname, 'manifest.json');
+    const m = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    return sanitizeExtensionVersion(m && m.version);
+  } catch {
+    return '';
+  }
+}
+
 function renderHomepageHtml() {
   if (!homepageTemplate) return null;
   const storeUrl = String(process.env.PLAYSHARE_CHROME_STORE_URL || '').trim();
   const attrs = [];
   if (storeUrl) attrs.push(`data-chrome-store-url="${escapeHtmlAttr(storeUrl)}"`);
-  if (!storeUrl && extensionZipAvailable()) {
+  if (extensionZipAvailable()) {
     attrs.push(`data-extension-zip-url="${escapeHtmlAttr(EXTENSION_ZIP_URL_PATH)}"`);
+    const ver = readExtensionZipVersion();
+    if (ver) attrs.push(`data-extension-zip-version="${escapeHtmlAttr(ver)}"`);
   }
   const bodyAttrs = attrs.length ? ` ${attrs.join(' ')}` : '';
   return homepageTemplate.replace('{{BODY_ATTRS}}', bodyAttrs);
@@ -967,14 +997,20 @@ function logStartupBanner() {
     console.log(`   Homepage: ${getHttpJoinUrl()}/`);
     const store = String(process.env.PLAYSHARE_CHROME_STORE_URL || '').trim();
     if (extensionZipAvailable()) {
-      console.log(`   Extension .zip (pre–Web Store): ${getHttpJoinUrl()}${EXTENSION_ZIP_URL_PATH}`);
-    }
-    if (!store && !extensionZipAvailable()) {
+      const v = readExtensionZipVersion();
       console.log(
-        '   (Set PLAYSHARE_CHROME_STORE_URL for store install, or add public/install/playshare-extension.zip for download.)'
+        `   Extension .zip: ${getHttpJoinUrl()}${EXTENSION_ZIP_URL_PATH}` + (v ? ` (v${v})` : '')
       );
-    } else if (!store) {
-      console.log('   (Set PLAYSHARE_CHROME_STORE_URL when the listing is live; until then homepage uses .zip download.)');
+    }
+    if (!store) {
+      console.log(
+        '   Chrome Web Store: set PLAYSHARE_CHROME_STORE_URL when the listing is live (homepage shows both .zip and store options).'
+      );
+    }
+    if (!extensionZipAvailable()) {
+      console.log(
+        '   (No .zip yet: run npm run package:extension and add public/install/playshare-extension.zip, or deploy the Docker image that builds it.)'
+      );
     }
   }
 }
