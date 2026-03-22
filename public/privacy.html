@@ -279,7 +279,7 @@
 
           <h3>d) Automatically collected / technical information</h3>
           <ul>
-            <li><strong>IP address</strong> and related network data when you connect to our servers (or a custom server’s). This may be used to operate, secure, and troubleshoot the service and can imply <strong>approximate</strong> region—not precise GPS from your device.</li>
+            <li><strong>Basic technical information</strong> (such as connection data required to establish real-time communication), used as needed to operate, secure, and troubleshoot the service. We do <strong>not</strong> use the Extension to collect precise <strong>GPS</strong> location from your device.</li>
             <li><strong>Page URLs</strong> may be included in invites so others can open the same title; that is a <strong>link</strong>, not a copy of the video file.</li>
           </ul>
 
@@ -305,6 +305,7 @@
 
           <h2>5. Data sharing</h2>
           <p>We do <strong>not</strong> sell, rent, or trade your personal information.</p>
+          <p>Data is processed through secure servers hosted by our infrastructure provider to enable real-time synchronization and messaging.</p>
           <p>Information may be:</p>
           <ul>
             <li><strong>Visible or delivered to other participants</strong> in a session (e.g. chat, playback state, display name)</li>
@@ -323,11 +324,13 @@
           <p>We do <strong>not</strong> build advertising profiles from PlayShare usage.</p>
 
           <h2>7. Security</h2>
-          <p>We use <strong>TLS</strong> (HTTPS/WSS) for connections where configured (e.g. default production server and Supabase). No method of transmission over the internet is 100% secure; please avoid sharing highly sensitive information in chat or room fields.</p>
+          <p>All data transmission is encrypted using secure protocols (HTTPS/WSS).</p>
+          <p>We use <strong>TLS</strong> for connections where configured (e.g. default production signaling server and optional Supabase sign-in). No method of transmission over the internet is 100% secure; please avoid sharing highly sensitive information in chat or room fields.</p>
 
           <h2>8. Third-party services</h2>
+          <p>PlayShare does not access, collect, or store login credentials or account data from any third-party streaming services.</p>
           <ul>
-            <li><strong>Streaming platforms</strong> (e.g. Netflix, Prime Video): PlayShare interacts with the site you are on but does <strong>not</strong> collect or store your <strong>streaming login</strong> or credentials for those services. We are <strong>not responsible</strong> for their privacy practices.</li>
+            <li><strong>Streaming platforms</strong> (e.g. Netflix, Prime Video): PlayShare interacts with the page you are on for sync and chat only; it does <strong>not</strong> read or harvest your <strong>streaming login</strong> or credentials for those services. We are <strong>not responsible</strong> for their privacy practices.</li>
             <li><strong>Supabase:</strong> optional authentication.</li>
             <li><strong>Hosting / infrastructure</strong> (e.g. cloud or edge providers): may process network and service metadata when you connect.</li>
           </ul>
@@ -363,8 +366,8 @@
             <li>We only process what’s needed for <strong>sync</strong>, <strong>chat</strong>, <strong>rooms</strong>, and <strong>optional sign-in</strong>.</li>
             <li>We <strong>don’t</strong> sell your data or use it for <strong>ads</strong> or <strong>profiling</strong>.</li>
             <li>Live room traffic is <strong>temporary</strong> on our signaling path—not a long-term chat archive; <strong>device</strong> storage and <strong>Supabase</strong> (if you sign in) work differently, as described above.</li>
-            <li>We <strong>don’t</strong> want your <strong>streaming passwords</strong>; third-party sites have their own policies.</li>
-            <li><strong>TLS</strong> is used for default production connections where configured.</li>
+            <li>We <strong>don’t</strong> access streaming accounts or store streaming <strong>logins</strong>; third-party sites have their own policies.</li>
+            <li>Data is sent over <strong>encrypted</strong> channels (<strong>HTTPS/WSS</strong>) for default production and sign-in where configured.</li>
           </ul>
         </article>
       </div>

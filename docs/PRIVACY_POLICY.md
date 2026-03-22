@@ -48,7 +48,7 @@ To coordinate rooms, the Extension uses **WebSocket** to a **signaling server** 
 
 ### d) Automatically collected / technical information
 
-- **IP address** and related network data when you connect to our servers (or a custom server’s). This may be used to operate, secure, and troubleshoot the service and can imply **approximate** region—not precise GPS from your device.  
+- **Basic technical information** (such as connection data required to establish real-time communication), used as needed to operate, secure, and troubleshoot the service. We do **not** use the Extension to collect precise **GPS** location from your device.  
 - **Page URLs** may be included in invites so others can open the same title; that is a **link**, not a copy of the video file.
 
 ### e) What we do not use PlayShare to collect
@@ -83,6 +83,8 @@ We do **not** use your data for:
 
 We do **not** sell, rent, or trade your personal information.
 
+Data is processed through secure servers hosted by our infrastructure provider to enable real-time synchronization and messaging.
+
 Information may be:
 
 - **Visible or delivered to other participants** in a session (e.g. chat, playback state, display name)  
@@ -106,13 +108,17 @@ We do **not** build advertising profiles from PlayShare usage.
 
 ## 7. Security
 
-We use **TLS** (HTTPS/WSS) for connections where configured (e.g. default production server and Supabase). No method of transmission over the internet is 100% secure; please avoid sharing highly sensitive information in chat or room fields.
+All data transmission is encrypted using secure protocols (HTTPS/WSS).
+
+We use **TLS** for connections where configured (e.g. default production signaling server and optional Supabase sign-in). No method of transmission over the internet is 100% secure; please avoid sharing highly sensitive information in chat or room fields.
 
 ---
 
 ## 8. Third-party services
 
-- **Streaming platforms** (e.g. Netflix, Prime Video): PlayShare interacts with the site you are on but does **not** collect or store your **streaming login** or credentials for those services. We are **not responsible** for their privacy practices.  
+PlayShare does not access, collect, or store login credentials or account data from any third-party streaming services.
+
+- **Streaming platforms** (e.g. Netflix, Prime Video): PlayShare interacts with the page you are on for sync and chat only; it does **not** read or harvest your **streaming login** or credentials for those services. We are **not responsible** for their privacy practices.  
 - **Supabase:** optional authentication.  
 - **Hosting / infrastructure** (e.g. cloud or edge providers): may process network and service metadata when you connect.
 
@@ -164,8 +170,8 @@ If you have questions about this Privacy Policy:
 - We only process what’s needed for **sync**, **chat**, **rooms**, and **optional sign-in**.  
 - We **don’t** sell your data or use it for **ads** or **profiling**.  
 - Live room traffic is **temporary** on our signaling path—not a long-term chat archive; **device** storage and **Supabase** (if you sign in) work differently, as described above.  
-- We **don’t** want your **streaming passwords**; third-party sites have their own policies.  
-- **TLS** is used for default production connections where configured.
+- We **don’t** access streaming accounts or store streaming **logins**; third-party sites have their own policies.  
+- Data is sent over **encrypted** channels (**HTTPS/WSS**) for default production and sign-in where configured.
 
 ---
 
