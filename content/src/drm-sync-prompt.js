@@ -1,7 +1,10 @@
 /**
  * Lightweight “Sync to host?” UI for DRM-passive platforms (user-confirmed one-shot seek).
+ * @param {{ getMountParent?: () => HTMLElement }} [opts] — e.g. mount inside fullscreen element so the prompt stays visible over fullscreen video.
  */
-export function createDrmSyncPromptHost() {
+export function createDrmSyncPromptHost(opts = {}) {
+  const getMountParent =
+    typeof opts.getMountParent === 'function' ? opts.getMountParent : () => document.body;
   let lastOfferAt = 0;
   let activeEl = null;
 
@@ -66,8 +69,26 @@ export function createDrmSyncPromptHost() {
       wrap.appendChild(h);
       wrap.appendChild(d);
       wrap.appendChild(row);
-      document.body.appendChild(wrap);
+      try {
+        getMountParent().appendChild(wrap);
+      } catch {
+        try {
+          document.body.appendChild(wrap);
+        } catch {
+          /* ignore */
+        }
+      }
       activeEl = wrap;
+    },
+    /** Call on fullscreen changes so an open prompt stays in the top layer. */
+    reparentIfVisible() {
+      if (!activeEl || !activeEl.parentNode) return;
+      const p = getMountParent();
+      try {
+        if (activeEl.parentElement !== p) p.appendChild(activeEl);
+      } catch {
+        /* ignore */
+      }
     }
   };
 }

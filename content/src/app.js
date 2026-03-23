@@ -10,8 +10,25 @@ import {
   attachVideoDomObserver
 } from "./video-page.js";
 import { formatTime } from "./format-time.js";
-import { buildDiagnosticExport, pushDiagTimeline, updateDriftEwm } from "./diagnostics/helpers.js";
+import {
+  buildDiagnosticExport,
+  computeCorrelationTraceDelivery,
+  pushDiagTimeline,
+  updateDriftEwm
+} from "./diagnostics/helpers.js";
+import { createVideoPlayerProfiler } from "./diagnostics/video-player-profiler.js";
 import { getPlaybackProfile, getApplyDelayMs } from "./platform-profiles.js";
+import { getSiteSyncAdapter } from "./sites/site-sync-adapter.js";
+import {
+  capturePrimeMissedAdDebugPayload,
+  capturePrimePlayerSyncDebugPayload,
+  getPrimeAdDetectionSnapshot,
+  isPrimeMainPlayerShell,
+  isPrimeVideoHostname,
+  PRIME_AD_BREAK_MONITOR_OPTIONS,
+  PRIME_SYNC_DEBUG_STORAGE_KEY,
+  tryCapturePrimeVideoFramePng
+} from "./sites/prime-video-sync.js";
 import { createDrmSyncPromptHost } from "./drm-sync-prompt.js";
 import { createAdBreakMonitor } from "./ad-detection.js";
 import { wsUrlToHttpBase } from "./join-link-helpers.js";
@@ -43,6 +60,7 @@ export function runPlayShareContent() {
     CLUSTER_SYNC_SPREAD_SEC,
     COUNTDOWN_SECONDS,
     DIAG_DEBOUNCE_MS,
+    DIAG_PEER_DEV_SHARE_MS,
     TIME_JUMP_THRESHOLD,
     PLAYBACK_ECHO_SUPPRESS_MS,
     SIDEBAR_WIDTH
@@ -52,7 +70,24 @@ export function runPlayShareContent() {
   const diagnosticsUiEnabled = PLAYSHARE_CONTENT_DIAGNOSTICS;
   const platform = PS_C.detectPlatform(hostname);
   const playbackProfile = getPlaybackProfile(hostname, location.pathname);
-  const drmSyncPrompt = createDrmSyncPromptHost();
+  const siteSync = getSiteSyncAdapter(hostname, location.pathname);
+
+  /**
+   * Browsers only paint DOM inside `document.fullscreenElement` while fullscreen. Used for mounting
+   * chat, toasts, and prompts. Raw `<video>` fullscreen cannot host HTML overlays (falls back to body).
+   */
+  function getFullscreenUiHost() {
+    try {
+      const fs =
+        document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement;
+      if (fs && fs instanceof HTMLElement && fs.tagName !== 'VIDEO') return fs;
+    } catch {
+      /* ignore */
+    }
+    return document.body;
+  }
+
+  const drmSyncPrompt = createDrmSyncPromptHost({ getMountParent: getFullscreenUiHost });
 
   // ── State ──────────────────────────────────────────────────────────────────
   let roomState = null;
@@ -79,6 +114,8 @@ export function runPlayShareContent() {
   const sidebarPosition = 'right';
 
   let countdownInProgress = false;
+  /** When set, reparented with other extension UI on fullscreen changes. */
+  let countdownOverlayEl = null;
 
   let hostPositionInterval = null;
   let viewerSyncInterval = null;
@@ -98,6 +135,8 @@ export function runPlayShareContent() {
   /** We reported AD_BREAK_START and have not yet sent END. */
   let localAdBreakActive = false;
   let positionReportInterval = null;
+  /** Dev: periodic DIAG_PEER_RECORDING_SAMPLE while a remote peer is recording profiler. */
+  let peerRecordingSampleTimer = null;
   let clusterSyncBadge = null;
   let lastClusterSidebarKey = null;
   /** Host-only: wall-clock until which we skip synthetic SEEK from `timeupdate` jumps (see onVideoPlay). */
@@ -109,6 +148,20 @@ export function runPlayShareContent() {
   let lastTimeUpdatePos = -1;  // for detecting internal seeks (buffering/adaptive bitrate)
   let lastTimeUpdateCheckAt = 0;  // throttle jump detection
   let pendingSyncState = null;  // apply when video attaches (joiner's video not ready yet)
+  /** @type {ReturnType<typeof setTimeout>|null} */
+  let playbackOutboundCoalesceTimer = null;
+  let lastLocalPlaybackWireAt = 0;
+  /**
+   * Last playing state we successfully wired to the room from this tab (PLAY/PAUSE send), or after
+   * remote/sync apply. Used with Prime coalesce: polarity changes flush immediately; duplicate
+   * play/pause events (same state) are skipped so rapid toggles are not collapsed into one wire.
+   * @type {boolean|null}
+   */
+  let lastLocalWirePlayingSent = null;
+  /** @type {ReturnType<typeof setTimeout>|null} */
+  let remotePlaybackDebounceTimer = null;
+  /** @type {null | (() => void)} */
+  let queuedRemotePlaybackApply = null;
 
   function syncPendingSyncStateDiagFlag() {
     diag.pendingSyncStateQueued = !!pendingSyncState;
@@ -121,6 +174,23 @@ export function runPlayShareContent() {
 
   function isPlaybackEchoSuppressed() {
     return Date.now() < suppressPlaybackEchoUntil;
+  }
+
+  /**
+   * Skip wiring local play/pause to the room when the event is likely echo from our own apply.
+   * Still allow the opposite direction during the window (user toggles quickly after an echoed PLAY/PAUSE).
+   * @param {boolean} isPlayEvent
+   */
+  function shouldSuppressPlaybackOutboundEcho(isPlayEvent) {
+    if (!isPlaybackEchoSuppressed()) return false;
+    const v = findVideo() || video;
+    if (!v) return true;
+    if (isPlayEvent) {
+      if (!v.paused && !lastAppliedState.playing) return false;
+      return true;
+    }
+    if (v.paused && lastAppliedState.playing) return false;
+    return true;
   }
 
   // ── Diagnostic state ───────────────────────────────────────────────────────
@@ -243,8 +313,201 @@ export function runPlayShareContent() {
      * Room-wide playhead spread from POSITION_SNAPSHOT (null until first snapshot).
      * @type {null | { spreadSec: number|null, synced: boolean|null, playingMismatch: boolean, freshMemberCount: number, staleCount: number, roomMemberCount: number, label: string, wallMs: number }}
      */
-    clusterSync: null
+    clusterSync: null,
+    /** Dev: last “missed ad” capture from diagnostics CTA. */
+    lastPrimeMissedAdCapture: /** @type {null | { at: number, clipboardOk: boolean }} */ (null),
+    /**
+     * Dev: while another tab records profiler, their clientId — we send DIAG_PEER_RECORDING_SAMPLE there.
+     * @type {{ remoteCollectorClientId: string|null }}
+     */
+    profilerPeerCollection: { remoteCollectorClientId: null },
+    /**
+     * Dev: this tab recording profiler — samples from peers (by sender clientId).
+     * @type {{ byClient: Record<string, { receivedAt: number, fromUsername: string, payload: Record<string, unknown> }[]> }}
+     */
+    peerRecordingSamples: { byClient: {} },
+    /**
+     * Prime-only live telemetry (adapter, ad heuristics, findVideo selector, reconcile drift).
+     * @type {null | { adDetectorActive: boolean, adScore: number, adStrong: boolean, adReasons: string[], adChannels: { adCountdownUi: boolean, adTimerUi: boolean, playerAdControls: boolean, mediaSession: boolean }, inSdkShell: boolean, viewerDriftSec: number|null, selectorThatMatched: string|null, lastPollAt: number, extensionLocalAd: boolean, peersInAd: number }}
+     */
+    primeSync: siteSync.key === 'prime'
+      ? {
+          adDetectorActive: false,
+          adScore: 0,
+          adStrong: false,
+          adReasons: /** @type {string[]} */ ([]),
+          adChannels: { adCountdownUi: false, adTimerUi: false, playerAdControls: false, mediaSession: false },
+          inSdkShell: false,
+          viewerDriftSec: /** @type {number|null} */ (null),
+          selectorThatMatched: /** @type {string|null} */ (null),
+          lastPollAt: 0,
+          extensionLocalAd: false,
+          peersInAd: 0
+        }
+      : null,
+    /** Sync console layout: icon strip vs full dashboard. */
+    consoleView: /** @type {'compact' | 'detailed'} */ ('detailed'),
+    /** Which blocks appear in detailed dashboard (moderator layout). */
+    dashBlocks: {
+      overview: true,
+      alerts: true,
+      prime: true,
+      actions: true,
+      multiplayer: true,
+      server: true,
+      technical: true,
+      logs: true
+    }
   };
+
+  const DIAG_LS_CONSOLE_VIEW = 'playshare_diag_console_view';
+  const DIAG_LS_DASH_BLOCKS = 'playshare_diag_dash_blocks';
+
+  function hydrateDiagConsolePrefs() {
+    try {
+      const v = localStorage.getItem(DIAG_LS_CONSOLE_VIEW);
+      if (v === 'compact' || v === 'detailed') diag.consoleView = v;
+      const raw = localStorage.getItem(DIAG_LS_DASH_BLOCKS);
+      if (raw) {
+        const o = JSON.parse(raw);
+        for (const k of Object.keys(diag.dashBlocks)) {
+          if (typeof o[k] === 'boolean') diag.dashBlocks[k] = o[k];
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function persistDiagConsolePrefs() {
+    try {
+      localStorage.setItem(DIAG_LS_CONSOLE_VIEW, diag.consoleView);
+      localStorage.setItem(DIAG_LS_DASH_BLOCKS, JSON.stringify(diag.dashBlocks));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  hydrateDiagConsolePrefs();
+
+  /** Floating HUD on Prime pages when enabled in extension popup (`primeSyncDebugHud`). */
+  let primeSyncDebugHud = false;
+  /** @type {ReturnType<typeof setInterval>|null} */
+  let primeTelemetryTimer = null;
+  /** @type {HTMLDivElement|null} */
+  let primeHudEl = null;
+
+  /** Prefer attached `video` to avoid redundant findVideo() DOM work during telemetry ticks. */
+  function videoElForPrimeTelemetry() {
+    try {
+      if (video && video.isConnected && video.tagName === 'VIDEO' && !isVideoStale(video)) return video;
+    } catch {
+      /* ignore */
+    }
+    return findVideo() || video;
+  }
+
+  function refreshPrimeSyncTelemetry() {
+    if (!diag.primeSync) return;
+    const v = videoElForPrimeTelemetry();
+    try {
+      const snap = getPrimeAdDetectionSnapshot(v);
+      diag.primeSync.adDetectorActive = snap.likelyAd;
+      diag.primeSync.adScore = snap.score;
+      diag.primeSync.adStrong = snap.hasStrong;
+      diag.primeSync.adReasons = snap.reasons.slice(0, 8);
+      diag.primeSync.adChannels = { ...snap.channels };
+      diag.primeSync.inSdkShell = isPrimeMainPlayerShell(v);
+      diag.primeSync.extensionLocalAd = localAdBreakActive;
+      diag.primeSync.peersInAd = peersInAdBreak.size;
+      diag.primeSync.lastPollAt = Date.now();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function ensurePrimeHudElement() {
+    if (primeHudEl || siteSync.key !== 'prime' || !document.body) return;
+    primeHudEl = document.createElement('div');
+    primeHudEl.id = 'playshare-prime-sync-hud';
+    primeHudEl.setAttribute('aria-live', 'polite');
+    primeHudEl.style.cssText =
+      'position:fixed;bottom:12px;right:12px;z-index:2147483646;max-width:min(340px,calc(100vw - 24px));' +
+      'font:12px/1.4 system-ui,-apple-system,sans-serif;color:#e8f4fc;background:rgba(6,40,52,.92);' +
+      'border:1px solid rgba(0,168,225,.45);border-radius:10px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.4);pointer-events:none;';
+    try {
+      document.body.appendChild(primeHudEl);
+      reparentPlayShareUiForFullscreen();
+    } catch {
+      primeHudEl = null;
+    }
+  }
+
+  function updatePrimeHudContent() {
+    if (!primeHudEl || !diag.primeSync) return;
+    const p = diag.primeSync;
+    const drift = p.viewerDriftSec;
+    let driftLine = '—';
+    if (roomState?.isHost) driftLine = '— (you are host)';
+    else if (typeof drift === 'number' && !Number.isNaN(drift)) {
+      driftLine = `${drift >= 0 ? '+' : ''}${drift.toFixed(2)}s vs extrapolated host`;
+    } else if (roomState && !roomState.isHost) driftLine = '— (waiting for host position)';
+    const role = roomState?.isHost ? 'Host' : roomState ? 'Viewer' : 'No room';
+    const sel = p.selectorThatMatched ? String(p.selectorThatMatched).replace(/</g, '') : '—';
+    primeHudEl.innerHTML =
+      '<div style="font-weight:600;margin-bottom:6px;color:#00A8E1">PlayShare · Prime sync</div>' +
+      `<div>Role: ${role}</div>` +
+      `<div>Video in main SDK shell: <strong>${p.inSdkShell ? 'yes' : 'no'}</strong></div>` +
+      `<div>Ad (authoritative cues): <strong>${p.adDetectorActive ? 'yes' : 'no'}</strong> · channels×${p.adScore} · room pause: ${p.extensionLocalAd ? 'yes' : 'no'} · peers in ad: ${p.peersInAd}</div>` +
+      `<div style="opacity:.88;font-size:11px;word-break:break-word">${p.adReasons && p.adReasons.length ? p.adReasons.join(', ') : '—'}</div>` +
+      `<div>findVideo selector: <span style="word-break:break-all;opacity:.9">${sel}</span></div>` +
+      `<div>Reconcile: <strong>${driftLine}</strong></div>` +
+      '<div style="opacity:.85;margin-top:6px;font-size:11px">Popup: toggle “Prime sync HUD” off · <code>__playsharePrime.getStatus()</code></div>';
+  }
+
+  function updatePrimeHudVisibility() {
+    if (siteSync.key !== 'prime') return;
+    if (primeSyncDebugHud) {
+      ensurePrimeHudElement();
+      if (!primeHudEl) return;
+      refreshPrimeSyncTelemetry();
+      updatePrimeHudContent();
+      primeHudEl.style.display = 'block';
+    } else if (primeHudEl) {
+      primeHudEl.style.display = 'none';
+    }
+    syncPrimeTelemetryPolling();
+  }
+
+  const PRIME_TELEMETRY_MS = 800;
+
+  function stopPrimeTelemetryPolling() {
+    if (primeTelemetryTimer) {
+      clearInterval(primeTelemetryTimer);
+      primeTelemetryTimer = null;
+    }
+  }
+
+  /** Runs only while Prime HUD or dev diagnostics is open — avoids a perpetual background timer. */
+  function syncPrimeTelemetryPolling() {
+    if (siteSync.key !== 'prime') return;
+    if (!primeSyncDebugHud && !diagVisible) {
+      stopPrimeTelemetryPolling();
+      return;
+    }
+    if (primeTelemetryTimer) return;
+    primeTelemetryTimer = setInterval(() => {
+      if (siteSync.key !== 'prime' || (!primeSyncDebugHud && !diagVisible)) {
+        stopPrimeTelemetryPolling();
+        return;
+      }
+      refreshPrimeSyncTelemetry();
+      if (primeSyncDebugHud && primeHudEl && primeHudEl.style.display !== 'none') {
+        updatePrimeHudContent();
+      }
+      if (diagVisible) scheduleDiagUpdate();
+    }, PRIME_TELEMETRY_MS);
+  }
 
   let diagDebounceTimer = null;
   function scheduleDiagUpdate() {
@@ -314,7 +577,8 @@ export function runPlayShareContent() {
     if (!roomState) return;
     const s = diag.sync;
     s.lastReportSentAt = Date.now();
-    sendBg({
+    /** @type {Record<string, unknown>} */
+    const payload = {
       source: 'playshare',
       type: 'DIAG_SYNC_REPORT',
       clientId: roomState.clientId,
@@ -324,7 +588,89 @@ export function runPlayShareContent() {
       platformName: platform.name,
       metrics: { ...s.metrics },
       videoAttached: diag.videoAttached
+    };
+    if (diagnosticsUiEnabled) {
+      try {
+        payload.devDiag = buildPeerDevDiagSnapshot();
+      } catch {
+        payload.devDiag = { schema: 'playshare.peerDevDiag.v1', captureError: true };
+      }
+    }
+    sendBg(payload);
+  }
+
+  function broadcastProfilerCollectionState(active) {
+    if (!diagnosticsUiEnabled || !roomState?.clientId) return;
+    sendBg({
+      source: 'playshare',
+      type: 'DIAG_PROFILER_COLLECTION',
+      active: !!active,
+      collectorClientId: roomState.clientId
     });
+  }
+
+  function stopPeerRecordingSampleLoop() {
+    if (peerRecordingSampleTimer != null) {
+      clearInterval(peerRecordingSampleTimer);
+      peerRecordingSampleTimer = null;
+    }
+  }
+
+  function sendPeerRecordingSampleOnce() {
+    if (!diagnosticsUiEnabled || !roomState) return;
+    const target = diag.profilerPeerCollection.remoteCollectorClientId;
+    if (!target || target === roomState.clientId) return;
+    try {
+      sendBg({
+        source: 'playshare',
+        type: 'DIAG_PEER_RECORDING_SAMPLE',
+        collectorClientId: target,
+        payload: {
+          devDiag: buildPeerDevDiagSnapshot(),
+          syncMetrics: { ...diag.sync.metrics },
+          videoAttached: diag.videoAttached,
+          platform: platform.key,
+          platformName: platform.name
+        }
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function startPeerRecordingSampleLoop() {
+    stopPeerRecordingSampleLoop();
+    if (!diagnosticsUiEnabled || !roomState) return;
+    const target = diag.profilerPeerCollection.remoteCollectorClientId;
+    if (!target || target === roomState.clientId) return;
+    peerRecordingSampleTimer = setInterval(() => {
+      sendPeerRecordingSampleOnce();
+    }, DIAG_PEER_DEV_SHARE_MS);
+    sendPeerRecordingSampleOnce();
+  }
+
+  /**
+   * Collector tab: ingest compact diagnostics from dev peers during profiler recording.
+   * @param {Record<string, unknown>} msg
+   */
+  function ingestPeerRecordingSample(msg) {
+    if (!roomState || msg.collectorClientId !== roomState.clientId) return;
+    const from = /** @type {string|undefined} */ (msg.fromClientId);
+    if (!from || from === roomState.clientId) return;
+    const row = {
+      receivedAt: Date.now(),
+      fromUsername: typeof msg.fromUsername === 'string' ? msg.fromUsername : '',
+      payload:
+        msg.payload && typeof msg.payload === 'object'
+          ? /** @type {Record<string, unknown>} */ (msg.payload)
+          : {}
+    };
+    const by = diag.peerRecordingSamples.byClient;
+    if (!by[from]) by[from] = [];
+    by[from].push(row);
+    const cap = 36;
+    while (by[from].length > cap) by[from].shift();
+    scheduleDiagUpdate();
   }
 
   // ── Video element finder (with cache to reduce DOM queries) ───────────────────
@@ -344,13 +690,18 @@ export function runPlayShareContent() {
     if (cachedVideoEl && cachedVideoDoc === doc) {
       try {
         if (cachedVideoEl.isConnected && (cachedVideoEl.readyState >= 1 || (cachedVideoEl.duration > 0 && !isNaN(cachedVideoEl.duration)))) {
-          diag.findVideo.cacheReturns++;
-          return cachedVideoEl;
+          if (siteSync.shouldRefreshVideoCache?.(cachedVideoEl)) {
+            invalidateVideoCache();
+          } else {
+            diag.findVideo.cacheReturns++;
+            return cachedVideoEl;
+          }
         }
       } catch {}
       invalidateVideoCache();
     }
     diag.findVideo.fullScans++;
+    if (diag.primeSync) diag.primeSync.selectorThatMatched = null;
     function findInRoot(root, maxDepth = 3) {
       const v = root.querySelector?.('video');
       if (isReady(v)) return v;
@@ -365,7 +716,15 @@ export function runPlayShareContent() {
       return null;
     }
     const candidates = collectPageVideoElements(doc);
-    candidates.sort((a, b) => scoreVideoElement(b) - scoreVideoElement(a));
+    candidates.sort((a, b) => {
+      let sa = scoreVideoElement(a);
+      let sb = scoreVideoElement(b);
+      if (siteSync.adjustVideoCandidateScore) {
+        sa = siteSync.adjustVideoCandidateScore(a, sa);
+        sb = siteSync.adjustVideoCandidateScore(b, sb);
+      }
+      return sb - sa;
+    });
     for (const el of candidates) {
       if (isReady(el)) {
         cachedVideoEl = el;
@@ -382,11 +741,8 @@ export function runPlayShareContent() {
         }
       }
     }
-    const selectors = [
+    const genericVideoSelectors = [
       'video',
-      '.atvwebplayersdk-video-canvas video',
-      '.atvwebplayersdk-player-container video',
-      '.webPlayerInner video',
       '.dv-player-main video',
       '.nf-player-container video',
       '.VideoPlayer video',
@@ -395,11 +751,35 @@ export function runPlayShareContent() {
       '.btm-media-client-element video',
       '#movie_player video',
       '.html5-main-video',
-      'ytd-player video',
+      'ytd-player video'
     ];
+    const prioritySel = siteSync.getPriorityVideoSelectors?.() ?? [];
+    const selectors = [...new Set([...prioritySel, ...genericVideoSelectors])];
+    function pickBestVideoForSelector(sel, readyFn) {
+      try {
+        const list = document.querySelectorAll(sel);
+        /** @type {HTMLVideoElement|null} */
+        let best = null;
+        let bestScore = -Infinity;
+        for (const node of list) {
+          if (!(node instanceof HTMLVideoElement)) continue;
+          if (!readyFn(node)) continue;
+          let s = scoreVideoElement(node);
+          if (siteSync.adjustVideoCandidateScore) s = siteSync.adjustVideoCandidateScore(node, s);
+          if (s > bestScore) {
+            bestScore = s;
+            best = node;
+          }
+        }
+        return best;
+      } catch {
+        return null;
+      }
+    }
     for (const sel of selectors) {
-      const el = document.querySelector(sel);
-      if (isReady(el)) {
+      const el = pickBestVideoForSelector(sel, isReady);
+      if (el) {
+        if (diag.primeSync) diag.primeSync.selectorThatMatched = sel;
         cachedVideoEl = el;
         cachedVideoDoc = doc;
         return el;
@@ -407,8 +787,9 @@ export function runPlayShareContent() {
     }
     if (playbackProfile.useRelaxedVideoReady) {
       for (const sel of selectors) {
-        const el = document.querySelector(sel);
-        if (isReadyRelaxed(el)) {
+        const el = pickBestVideoForSelector(sel, isReadyRelaxed);
+        if (el) {
+          if (diag.primeSync) diag.primeSync.selectorThatMatched = sel;
           cachedVideoEl = el;
           cachedVideoDoc = doc;
           return el;
@@ -475,6 +856,288 @@ export function runPlayShareContent() {
     if (roomState) startPositionReportInterval();
     if (roomState && !roomState.isHost) startViewerReconcileLoop();
     if (roomState) startAdBreakMonitorIfNeeded();
+    try {
+      getVideoProfiler().notifyVideoMayHaveChanged();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /**
+   * Per-snapshot sync + site context for video profiler exports (v3).
+   * @param {Record<string, unknown>} snap
+   * @param {HTMLVideoElement|null} v
+   */
+  function enrichVideoProfilerSnapshot(snap, v) {
+    try {
+      snap.playShare = {
+        siteAdapterKey: siteSync.key,
+        videoIsExtensionTarget: !!(v && video && v === video),
+        driftEwmSec: diag.timing?.driftEwmSec ?? null,
+        lastRttMs: diag.timing?.lastRttMs ?? null,
+        lastRttSource: diag.timing?.lastRttSource ?? null,
+        syncLock: !!syncLock,
+        suppressPlaybackEchoUntil: suppressPlaybackEchoUntil > Date.now() ? suppressPlaybackEchoUntil : null,
+        lastAppliedPlaying: !!lastAppliedState?.playing,
+        lastAppliedTime:
+          typeof lastAppliedState?.currentTime === 'number'
+            ? +lastAppliedState.currentTime.toFixed(3)
+            : null,
+        lastSentTime: typeof lastSentTime === 'number' && lastSentTime >= 0 ? +lastSentTime.toFixed(3) : null,
+        lastPlaybackOutboundKind: lastPlaybackOutboundKind,
+        lastLocalWirePlayingSent,
+        lastSyncAt: lastSyncAt || null,
+        connectionStatus: diag.connectionStatus,
+        transportPhase: diag.transportPhase ? String(diag.transportPhase) : '',
+        inRoom: !!roomState,
+        isHost: roomState ? !!roomState.isHost : null,
+        roomMemberCount: roomState?.members?.length ?? null,
+        hostOnlyControl: !!roomState?.hostOnlyControl,
+        countdownOnPlay: !!roomState?.countdownOnPlay,
+        localAdBreakActive: !!localAdBreakActive,
+        peersInAdCount: peersInAdBreak.size,
+        pendingSyncStateQueued: !!diag.pendingSyncStateQueued,
+        tabHidden: !!diag.tabHidden,
+        videoBuffering: { ...diag.videoBuffering },
+        findVideo: { ...diag.findVideo },
+        playApplyMismatch:
+          v && typeof v.paused === 'boolean' ? lastAppliedState.playing === v.paused : null,
+        timeVsLastAppliedDeltaSec:
+          v && typeof v.currentTime === 'number' && typeof lastAppliedState.currentTime === 'number'
+            ? +(v.currentTime - lastAppliedState.currentTime).toFixed(3)
+            : null,
+        extensionOps: {
+          syncStateDeferredNoVideo: diag.extensionOps.syncStateDeferredNoVideo,
+          syncStateDeferredStaleOrMissing: diag.extensionOps.syncStateDeferredStaleOrMissing,
+          syncStateDeniedSyncLock: diag.extensionOps.syncStateDeniedSyncLock,
+          syncStateDeniedPlaybackDebounce: diag.extensionOps.syncStateDeniedPlaybackDebounce,
+          remoteApplyDeniedSyncLock: diag.extensionOps.remoteApplyDeniedSyncLock,
+          remoteApplyDeniedPlaybackDebounce: diag.extensionOps.remoteApplyDeniedPlaybackDebounce,
+          remoteApplyDeferredTabHidden: diag.extensionOps.remoteApplyDeferredTabHidden,
+          localControlBlockedHostOnly: diag.extensionOps.localControlBlockedHostOnly,
+          syncStateFlushedOnVideoAttach: diag.extensionOps.syncStateFlushedOnVideoAttach,
+          remoteApplyIgnoredLocalAd: diag.extensionOps.remoteApplyIgnoredLocalAd,
+          syncStateIgnoredLocalAd: diag.extensionOps.syncStateIgnoredLocalAd,
+          playbackOutboundSuppressedLocalAd: diag.extensionOps.playbackOutboundSuppressedLocalAd,
+          hostPlaybackPositionSent: diag.extensionOps.hostPlaybackPositionSent,
+          viewerSyncRequestSent: diag.extensionOps.viewerSyncRequestSent,
+          positionReportSent: diag.extensionOps.positionReportSent,
+          positionSnapshotInbound: diag.extensionOps.positionSnapshotInbound,
+          syncStateHeldForAd: diag.extensionOps.syncStateHeldForAd,
+          remotePlayHeldForAd: diag.extensionOps.remotePlayHeldForAd,
+          remoteSeekHeldForAd: diag.extensionOps.remoteSeekHeldForAd
+        },
+        clusterSync: diag.clusterSync
+          ? {
+              spreadSec: diag.clusterSync.spreadSec,
+              synced: diag.clusterSync.synced,
+              playingMismatch: diag.clusterSync.playingMismatch,
+              freshMemberCount: diag.clusterSync.freshMemberCount,
+              staleCount: diag.clusterSync.staleCount,
+              roomMemberCount: diag.clusterSync.roomMemberCount
+            }
+          : null
+      };
+    } catch {
+      snap.playShare = { readError: true };
+    }
+
+    if (siteSync.key === 'prime' && diag.primeSync) {
+      refreshPrimeSyncTelemetry();
+      try {
+        const p = diag.primeSync;
+        snap.primeTelemetry = {
+          adDetectorActive: p.adDetectorActive,
+          adScore: p.adScore,
+          adStrong: p.adStrong,
+          adReasons: (p.adReasons || []).slice(0, 8),
+          adChannels: p.adChannels ? { ...p.adChannels } : null,
+          inSdkShell: p.inSdkShell,
+          viewerDriftSec: p.viewerDriftSec,
+          selectorThatMatched: p.selectorThatMatched,
+          extensionLocalAd: p.extensionLocalAd,
+          peersInAd: p.peersInAd,
+          lastPollAt: p.lastPollAt
+        };
+      } catch {
+        snap.primeTelemetry = { readError: true };
+      }
+    }
+
+    if (siteSync.key === 'prime' && v) {
+      try {
+        const adSnap = getPrimeAdDetectionSnapshot(v);
+        snap.primePlayer = {
+          inMainSdkShell: isPrimeMainPlayerShell(v),
+          adLikely: adSnap.likelyAd,
+          adScore: adSnap.score,
+          adStrong: adSnap.hasStrong,
+          adReasons: (adSnap.reasons || []).slice(0, 8),
+          adChannels: adSnap.channels ? { ...adSnap.channels } : null
+        };
+      } catch {
+        snap.primePlayer = { readError: true };
+      }
+    }
+  }
+
+  function buildVideoProfilerExportExtras() {
+    const sw = diag.serviceWorkerTransport;
+    const iv = playbackProfile;
+    return {
+      playShareSession: {
+        room: roomState
+          ? {
+              code: roomState.roomCode,
+              isHost: !!roomState.isHost,
+              memberCount: roomState.members?.length ?? 0,
+              hostOnlyControl: !!roomState.hostOnlyControl
+            }
+          : null,
+        playbackOutboundNote:
+          'PLAY/PAUSE: polarity-aware flush + immediate wire when lastLocalWirePlayingSent is null; duplicate same-state <video> events skipped. Echo-suppress window still allows opposite-direction toggles vs lastAppliedState.playing so rapid UI after an apply is not dropped.',
+        playbackProfile: {
+          handlerKey: iv.handlerKey,
+          label: iv.label,
+          hostPositionIntervalMs: iv.hostPositionIntervalMs,
+          viewerReconcileIntervalMs: iv.viewerReconcileIntervalMs,
+          applyDebounceMs: iv.applyDebounceMs,
+          playbackOutboundCoalesceMs: iv.playbackOutboundCoalesceMs,
+          syncStateApplyDelayMs: iv.syncStateApplyDelayMs,
+          playbackSlackSec: iv.playbackSlackSec,
+          timeJumpThresholdSec: iv.timeJumpThresholdSec,
+          hostSeekSuppressAfterPlayMs: iv.hostSeekSuppressAfterPlayMs,
+          syncRequestDelayMs: iv.syncRequestDelayMs,
+          aggressiveRemoteSync: iv.aggressiveRemoteSync,
+          drmPassive: iv.drmPassive,
+          useRelaxedVideoReady: iv.useRelaxedVideoReady
+        },
+        syncMetricsTotals: { ...(diag.sync?.metrics || {}) },
+        timeupdateJumpsRecent: (diag.timeupdateJumps || []).slice(-24),
+        recentSyncEventKinds: (diag.sync?.events || []).slice(-20).map((e) => e.type),
+        peerReportCount: Object.keys(diag.sync?.peerReports || {}).length,
+        serviceWorkerTransport: sw
+          ? {
+              wsOpenCount: sw.wsOpenCount,
+              wsCloseCount: sw.wsCloseCount,
+              wsSendFailures: sw.wsSendFailures
+            }
+          : null,
+        messaging: {
+          runtimeSendFailures: diag.messaging.runtimeSendFailures,
+          runtimeLastErrorAt: diag.messaging.runtimeLastErrorAt,
+          sendThrowCount: diag.messaging.sendThrowCount
+        }
+      }
+    };
+  }
+
+  /** @type {ReturnType<typeof createVideoPlayerProfiler>|null} */
+  let videoProfilerController = null;
+  function getVideoProfiler() {
+    if (!videoProfilerController) {
+      videoProfilerController = createVideoPlayerProfiler({
+        getVideo: () => {
+          try {
+            if (video && video.isConnected && document.contains(video)) return video;
+          } catch {
+            /* ignore */
+          }
+          return findVideo();
+        },
+        enrichSnapshot: enrichVideoProfilerSnapshot,
+        getExportExtras: buildVideoProfilerExportExtras,
+        /** ~3.3 h of 3 s snapshots if the buffer fills; ring drops oldest while PlayShare keeps running. */
+        snapshotIntervalMs: 3000,
+        maxSnapshots: 4000,
+        maxEvents: 20000
+      });
+    }
+    return videoProfilerController;
+  }
+
+  /** Compact, JSON-safe blob for `DIAG_SYNC_REPORT.devDiag` (dev builds only). */
+  function buildPeerDevDiagSnapshot() {
+    let ver = '1.0.0';
+    try {
+      ver = chrome.runtime.getManifest()?.version || ver;
+    } catch {
+      /* ignore */
+    }
+    /** @type {{ ct: number|null, playing: boolean|null, rs: number|null }} */
+    const playback = { ct: null, playing: null, rs: null };
+    try {
+      const v = findVideo() || video;
+      if (v && v.tagName === 'VIDEO') {
+        playback.ct =
+          typeof v.currentTime === 'number' && Number.isFinite(v.currentTime) ? +v.currentTime.toFixed(2) : null;
+        playback.playing = !v.paused;
+        playback.rs = v.readyState;
+      }
+    } catch {
+      /* ignore */
+    }
+    let videoProfiler = null;
+    try {
+      const st = getVideoProfiler().getStatus();
+      videoProfiler = {
+        recording: st.recording,
+        snapshotCount: st.snapshotCount,
+        eventCount: st.eventCount,
+        playheadStallMarkers: st.playheadStallMarkers
+      };
+    } catch {
+      videoProfiler = null;
+    }
+    const cs = diag.clusterSync;
+    return {
+      schema: 'playshare.peerDevDiag.v1',
+      capturedAt: Date.now(),
+      extensionVersion: ver,
+      timing: {
+        lastRttMs: diag.timing?.lastRttMs ?? null,
+        lastRttSource: diag.timing?.lastRttSource ?? null,
+        driftEwmSec: diag.timing?.driftEwmSec ?? null
+      },
+      transport: {
+        connectionStatus: diag.connectionStatus,
+        transportPhase: diag.transportPhase || ''
+      },
+      tabHidden: !!diag.tabHidden,
+      clusterSync: cs
+        ? {
+            spreadSec: cs.spreadSec,
+            synced: cs.synced,
+            playingMismatch: cs.playingMismatch,
+            freshMemberCount: cs.freshMemberCount,
+            staleCount: cs.staleCount,
+            label: cs.label ? String(cs.label).slice(0, 80) : null
+          }
+        : null,
+      videoBuffering: {
+        waiting: diag.videoBuffering?.waiting ?? 0,
+        stalled: diag.videoBuffering?.stalled ?? 0
+      },
+      findVideo: {
+        cacheReturns: diag.findVideo?.cacheReturns ?? 0,
+        fullScans: diag.findVideo?.fullScans ?? 0,
+        invalidations: diag.findVideo?.invalidations ?? 0,
+        videoAttachCount: diag.findVideo?.videoAttachCount ?? 0
+      },
+      extensionOps: {
+        hostPlaybackPositionSent: diag.extensionOps.hostPlaybackPositionSent,
+        viewerSyncRequestSent: diag.extensionOps.viewerSyncRequestSent,
+        positionReportSent: diag.extensionOps.positionReportSent,
+        positionSnapshotInbound: diag.extensionOps.positionSnapshotInbound,
+        wsDisconnectEvents: diag.extensionOps.wsDisconnectEvents,
+        syncStateInbound: diag.extensionOps.syncStateInbound,
+        remoteApplyDeniedSyncLock: diag.extensionOps.remoteApplyDeniedSyncLock,
+        remoteApplyDeniedPlaybackDebounce: diag.extensionOps.remoteApplyDeniedPlaybackDebounce
+      },
+      playback,
+      videoProfiler,
+      pendingSyncStateQueued: !!diag.pendingSyncStateQueued
+    };
   }
 
   function detachVideo() {
@@ -496,6 +1159,11 @@ export function runPlayShareContent() {
       roomState.videoUrl = null;
       sendBg({ source: 'playshare', type: 'SET_ROOM_VIDEO_URL', videoUrl: null });
       postSidebarRoomState();
+    }
+    try {
+      getVideoProfiler().notifyVideoMayHaveChanged();
+    } catch {
+      /* ignore */
     }
   }
 
@@ -602,20 +1270,31 @@ export function runPlayShareContent() {
   function startAdBreakMonitorIfNeeded() {
     stopAdBreakMonitor();
     if (!roomState) return;
-    adBreakMonitor = createAdBreakMonitor(hostname, () => findVideo() || video, {
-      onEnter: () => {
-        if (localAdBreakActive) return;
-        localAdBreakActive = true;
-        sendBg({ source: 'playshare', type: 'AD_BREAK_START' });
-        syncAdBreakSidebar();
+    const adMonitorOpts = isPrimeVideoHostname(hostname)
+      ? {
+          ...PRIME_AD_BREAK_MONITOR_OPTIONS,
+          detectOverride: (_h, v) => getPrimeAdDetectionSnapshot(v).likelyAd
+        }
+      : {};
+    adBreakMonitor = createAdBreakMonitor(
+      hostname,
+      () => findVideo() || video,
+      {
+        onEnter: () => {
+          if (localAdBreakActive) return;
+          localAdBreakActive = true;
+          sendBg({ source: 'playshare', type: 'AD_BREAK_START' });
+          syncAdBreakSidebar();
+        },
+        onExit: () => {
+          if (!localAdBreakActive) return;
+          localAdBreakActive = false;
+          sendBg({ source: 'playshare', type: 'AD_BREAK_END' });
+          syncAdBreakSidebar();
+        }
       },
-      onExit: () => {
-        if (!localAdBreakActive) return;
-        localAdBreakActive = false;
-        sendBg({ source: 'playshare', type: 'AD_BREAK_END' });
-        syncAdBreakSidebar();
-      }
-    });
+      adMonitorOpts
+    );
     adBreakMonitor.start();
   }
 
@@ -658,6 +1337,7 @@ export function runPlayShareContent() {
       : ref.currentTime;
     const drift = v.currentTime - target;
     const adrift = Math.abs(drift);
+    if (diag.primeSync) diag.primeSync.viewerDriftSec = drift;
     const driftHard = playbackProfile.playbackSlackSec ?? SYNC_DRIFT_HARD_SEC;
 
     if (playbackProfile.drmPassive) {
@@ -829,6 +1509,7 @@ export function runPlayShareContent() {
       box-shadow:0 4px 16px rgba(0,0,0,0.35);transition:opacity 0.2s;
     `;
     document.body.appendChild(clusterSyncBadge);
+    reparentPlayShareUiForFullscreen();
   }
 
   function updateClusterSyncBadge() {
@@ -898,6 +1579,81 @@ export function runPlayShareContent() {
     return !roomState?.hostOnlyControl || roomState?.isHost;
   }
 
+  function clearPlaybackOutboundCoalesce() {
+    if (playbackOutboundCoalesceTimer) {
+      clearTimeout(playbackOutboundCoalesceTimer);
+      playbackOutboundCoalesceTimer = null;
+    }
+  }
+
+  function clearRemotePlaybackDebouncedQueue() {
+    queuedRemotePlaybackApply = null;
+    if (remotePlaybackDebounceTimer) {
+      clearTimeout(remotePlaybackDebounceTimer);
+      remotePlaybackDebounceTimer = null;
+    }
+  }
+
+  /**
+   * When remote PLAY/PAUSE/SEEK hits apply debounce, queue one retry with bypass so the latest
+   * message is not dropped during rapid host toggles.
+   */
+  function scheduleDebouncedRemotePlaybackRetry(run) {
+    queuedRemotePlaybackApply = run;
+    if (remotePlaybackDebounceTimer) return;
+    const debounceMs = playbackProfile.applyDebounceMs || 0;
+    const delay = Math.max(debounceMs, 40) + 30;
+    remotePlaybackDebounceTimer = setTimeout(() => {
+      remotePlaybackDebounceTimer = null;
+      const fn = queuedRemotePlaybackApply;
+      queuedRemotePlaybackApply = null;
+      if (typeof fn === 'function') fn();
+    }, delay);
+  }
+
+  /** Send current local play/pause state to the room (trailing-edge coalesced on Prime). */
+  function flushLocalPlaybackWireToRoom() {
+    playbackOutboundCoalesceTimer = null;
+    if (!roomState || syncLock || countdownInProgress) return;
+    const v = findVideo() || video;
+    if (!v) return;
+    lastLocalPlaybackWireAt = Date.now();
+    const t = v.currentTime;
+    if (v.paused) {
+      lastPlaybackOutboundKind = 'PAUSE';
+      updateVideoUrl();
+      syncDiagRecord({ type: 'pause_sent', currentTime: t });
+      sendBg({ source: 'playshare', type: 'PAUSE', currentTime: t, sentAt: Date.now() });
+      if (roomState.isHost) stopHostPositionHeartbeat();
+      stopViewerSyncInterval();
+      diagLog('PAUSE', { currentTime: t, source: 'local' });
+      showToast('⏸ You paused');
+    } else {
+      lastSentTime = t;
+      lastPlaybackOutboundKind = 'PLAY';
+      updateVideoUrl();
+      syncDiagRecord({ type: 'play_sent', currentTime: t });
+      sendBg({ source: 'playshare', type: 'PLAY', currentTime: t, sentAt: Date.now() });
+      diagLog('PLAY', { currentTime: t, source: 'local' });
+      showToast('▶ You pressed play');
+    }
+    lastLocalWirePlayingSent = !v.paused;
+  }
+
+  function scheduleLocalPlaybackWireToRoom() {
+    const ms = playbackProfile.playbackOutboundCoalesceMs ?? 0;
+    if (ms <= 0) {
+      flushLocalPlaybackWireToRoom();
+      return;
+    }
+    if (Date.now() - lastLocalPlaybackWireAt >= ms) {
+      flushLocalPlaybackWireToRoom();
+      return;
+    }
+    if (playbackOutboundCoalesceTimer) clearTimeout(playbackOutboundCoalesceTimer);
+    playbackOutboundCoalesceTimer = setTimeout(flushLocalPlaybackWireToRoom, ms);
+  }
+
   function showCountdownOverlay(thenPlay) {
     if (countdownInProgress) return;
     countdownInProgress = true;
@@ -926,6 +1682,8 @@ export function runPlayShareContent() {
     style.textContent = `@keyframes wsCountPulse{0%{opacity:0;transform:scale(0.5)}50%{opacity:1;transform:scale(1.2)}100%{opacity:1;transform:scale(1)}}`;
     document.head.appendChild(style);
     document.body.appendChild(overlay);
+    countdownOverlayEl = overlay;
+    reparentPlayShareUiForFullscreen();
     let n = COUNTDOWN_SECONDS;
     num.textContent = n;
     const tick = () => {
@@ -938,6 +1696,7 @@ export function runPlayShareContent() {
         setTimeout(tick, 1000);
       } else {
         overlay.remove();
+        countdownOverlayEl = null;
         clearGuard();
         countdownInProgress = false;
         if (thenPlay && video) {
@@ -948,6 +1707,7 @@ export function runPlayShareContent() {
           syncDiagRecord({ type: 'play_sent', currentTime: t });
           sendBg({ source: 'playshare', type: 'PLAY', currentTime: t, sentAt: Date.now() });
           lastPlaybackOutboundKind = 'PLAY';
+          lastLocalWirePlayingSent = true;
           if (roomState.isHost) startHostPositionHeartbeat();
           safeVideoOp(() => { video.play().catch(() => {}); });
           showToast('▶ You pressed play');
@@ -962,7 +1722,7 @@ export function runPlayShareContent() {
       hostTimeupdateSeekSuppressUntil = Date.now() + playbackProfile.hostSeekSuppressAfterPlayMs;
     }
     if (syncLock || !roomState) return;
-    if (isPlaybackEchoSuppressed()) return;
+    if (shouldSuppressPlaybackOutboundEcho(true)) return;
     if (localAdBreakActive) {
       diag.extensionOps.playbackOutboundSuppressedLocalAd++;
       return;
@@ -1007,9 +1767,12 @@ export function runPlayShareContent() {
       return;
     }
     const t = video.currentTime;
-    const allowPlayDespiteSameTime =
-      lastPlaybackOutboundKind === 'PAUSE' || lastPlaybackOutboundKind === 'SEEK';
-    if (!allowPlayDespiteSameTime && Math.abs(t - lastSentTime) < 0.3) return;
+    const coalesceMs = playbackProfile.playbackOutboundCoalesceMs ?? 0;
+    if (coalesceMs <= 0) {
+      const allowPlayDespiteSameTime =
+        lastPlaybackOutboundKind === 'PAUSE' || lastPlaybackOutboundKind === 'SEEK';
+      if (!allowPlayDespiteSameTime && Math.abs(t - lastSentTime) < 0.3) return;
+    }
     if (roomState.isHost && roomState.countdownOnPlay && !playbackProfile.drmPassive) {
       syncLock = true;
       safeVideoOp(() => { video.pause(); });
@@ -1021,18 +1784,19 @@ export function runPlayShareContent() {
       diagLog('PLAY', { currentTime: t, source: 'local', countdown: true });
       return;
     }
-    lastSentTime = t;
-    lastPlaybackOutboundKind = 'PLAY';
-    updateVideoUrl();
-    syncDiagRecord({ type: 'play_sent', currentTime: t });
-    sendBg({ source: 'playshare', type: 'PLAY', currentTime: t, sentAt: Date.now() });
-    diagLog('PLAY', { currentTime: t, source: 'local' });
-    showToast('▶ You pressed play');
+    if (lastLocalWirePlayingSent === true) return;
+    if (lastLocalWirePlayingSent === false) {
+      clearPlaybackOutboundCoalesce();
+      flushLocalPlaybackWireToRoom();
+      return;
+    }
+    clearPlaybackOutboundCoalesce();
+    flushLocalPlaybackWireToRoom();
   }
 
   function onVideoPause() {
     if (syncLock || !roomState || countdownInProgress) return;
-    if (isPlaybackEchoSuppressed()) return;
+    if (shouldSuppressPlaybackOutboundEcho(false)) return;
     if (localAdBreakActive) {
       diag.extensionOps.playbackOutboundSuppressedLocalAd++;
       return;
@@ -1068,15 +1832,14 @@ export function runPlayShareContent() {
       }
       return;
     }
-    const t = video.currentTime;
-    lastPlaybackOutboundKind = 'PAUSE';
-    updateVideoUrl();
-    syncDiagRecord({ type: 'pause_sent', currentTime: t });
-    sendBg({ source: 'playshare', type: 'PAUSE', currentTime: t, sentAt: Date.now() });
-    if (roomState.isHost) stopHostPositionHeartbeat();
-    stopViewerSyncInterval();
-    diagLog('PAUSE', { currentTime: t, source: 'local' });
-    showToast('⏸ You paused');
+    if (lastLocalWirePlayingSent === false) return;
+    if (lastLocalWirePlayingSent === true) {
+      clearPlaybackOutboundCoalesce();
+      flushLocalPlaybackWireToRoom();
+      return;
+    }
+    clearPlaybackOutboundCoalesce();
+    flushLocalPlaybackWireToRoom();
   }
 
   function onVideoWaiting() {
@@ -1236,9 +1999,8 @@ export function runPlayShareContent() {
           const btn = document.querySelector(sel);
           if (btn && btn.offsetParent !== null) { safeVideoOp(() => { btn.click(); }); break; }
         }
-        if (v2.paused && playbackProfile.handlerKey === 'prime') {
-          dispatchSpaceKey(v2);
-          dispatchSpaceKey(v2.closest('.atvwebplayersdk-player-container') || document.body);
+        if (v2.paused && siteSync.onStillPausedAfterAggressivePlay) {
+          siteSync.onStillPausedAfterAggressivePlay(v2, { dispatchSpaceKey });
         }
       }, ms);
     });
@@ -1272,9 +2034,8 @@ export function runPlayShareContent() {
           const btn = document.querySelector(sel);
           if (btn && btn.offsetParent !== null) { safeVideoOp(() => { btn.click(); }); break; }
         }
-        if (!v2.paused && playbackProfile.handlerKey === 'prime') {
-          dispatchSpaceKey(v2);
-          dispatchSpaceKey(v2.closest('.atvwebplayersdk-player-container') || document.body);
+        if (!v2.paused && siteSync.onStillPlayingAfterAggressivePause) {
+          siteSync.onStillPlayingAfterAggressivePause(v2, { dispatchSpaceKey });
         }
       }, ms);
     });
@@ -1289,9 +2050,16 @@ export function runPlayShareContent() {
   /**
    * Gate for applying remote PLAY/PAUSE/SEEK/SYNC_STATE. Count denials in extensionOps.
    */
-  function getRemoteApplySyncGate() {
+  /**
+   * @param {{ bypassPlaybackDebounce?: boolean } | undefined} remoteOpts
+   */
+  function getRemoteApplySyncGate(remoteOpts) {
     if (syncLock) return { ok: false, reason: 'sync_lock' };
-    if (playbackProfile.applyDebounceMs > 0 && Date.now() - lastSyncAt < playbackProfile.applyDebounceMs) {
+    if (
+      !remoteOpts?.bypassPlaybackDebounce &&
+      playbackProfile.applyDebounceMs > 0 &&
+      Date.now() - lastSyncAt < playbackProfile.applyDebounceMs
+    ) {
       return { ok: false, reason: 'playback_debounce' };
     }
     return { ok: true, reason: null };
@@ -1318,12 +2086,21 @@ export function runPlayShareContent() {
     }
   }
 
-  function applyPlay(currentTime, fromUsername, fromClientId, sentAt, lastRtt, correlationId, serverTime) {
+  function applyPlay(currentTime, fromUsername, fromClientId, sentAt, lastRtt, correlationId, serverTime, remoteOpts) {
     if (!video || isVideoStale(video)) return;
-    const gate = getRemoteApplySyncGate();
+    const gate = getRemoteApplySyncGate(remoteOpts);
     if (!gate.ok) {
       if (gate.reason === 'sync_lock') diag.extensionOps.remoteApplyDeniedSyncLock++;
-      else if (gate.reason === 'playback_debounce') diag.extensionOps.remoteApplyDeniedPlaybackDebounce++;
+      else if (gate.reason === 'playback_debounce') {
+        diag.extensionOps.remoteApplyDeniedPlaybackDebounce++;
+        if (!remoteOpts?.bypassPlaybackDebounce) {
+          scheduleDebouncedRemotePlaybackRetry(() => {
+            applyPlay(currentTime, fromUsername, fromClientId, sentAt, lastRtt, correlationId, serverTime, {
+              bypassPlaybackDebounce: true
+            });
+          });
+        }
+      }
       return;
     }
     if (localAdBreakActive) {
@@ -1351,6 +2128,7 @@ export function runPlayShareContent() {
       diagLog('PLAY', { currentTime: targetTime, fromUsername, source: 'remote', adHold: true });
       return;
     }
+    clearRemotePlaybackDebouncedQueue();
     pushDiagTimeline(diag.timing.timeline, {
       kind: 'play_recv',
       correlationId: correlationId || null,
@@ -1363,6 +2141,7 @@ export function runPlayShareContent() {
     lastAppliedState = { currentTime: targetTime, playing: true };
     lastSentTime = targetTime;  // prevent echo when our play event fires after apply
     lastPlaybackOutboundKind = 'PLAY';
+    lastLocalWirePlayingSent = true;
     lastSyncAt = Date.now();
 
     if (playbackProfile.drmPassive && !roomState?.isHost) {
@@ -1437,12 +2216,21 @@ export function runPlayShareContent() {
     // Toast comes from server SYSTEM_MSG so it still shows if apply bails early (no video, debounce)
   }
 
-  function applyPause(currentTime, fromUsername, fromClientId, lastRtt, correlationId, serverTime, sentAt) {
+  function applyPause(currentTime, fromUsername, fromClientId, lastRtt, correlationId, serverTime, sentAt, remoteOpts) {
     if (!video || isVideoStale(video)) return;
-    const gate = getRemoteApplySyncGate();
+    const gate = getRemoteApplySyncGate(remoteOpts);
     if (!gate.ok) {
       if (gate.reason === 'sync_lock') diag.extensionOps.remoteApplyDeniedSyncLock++;
-      else if (gate.reason === 'playback_debounce') diag.extensionOps.remoteApplyDeniedPlaybackDebounce++;
+      else if (gate.reason === 'playback_debounce') {
+        diag.extensionOps.remoteApplyDeniedPlaybackDebounce++;
+        if (!remoteOpts?.bypassPlaybackDebounce) {
+          scheduleDebouncedRemotePlaybackRetry(() => {
+            applyPause(currentTime, fromUsername, fromClientId, lastRtt, correlationId, serverTime, sentAt, {
+              bypassPlaybackDebounce: true
+            });
+          });
+        }
+      }
       return;
     }
     if (localAdBreakActive) {
@@ -1458,11 +2246,13 @@ export function runPlayShareContent() {
       diag.timing.lastRttMs = lastRtt;
       diag.timing.lastRttSource = 'playback';
     }
+    clearRemotePlaybackDebouncedQueue();
     pushDiagTimeline(diag.timing.timeline, { kind: 'pause_recv', correlationId: correlationId || null, currentTime, serverTime, recvAt, rttMs: lastRtt });
     syncDiagRecord({ type: 'pause_recv', currentTime, fromUsername, drift: Math.abs(video.currentTime - currentTime), correlationId });
     lastAppliedState = { currentTime, playing: false };
     lastSentTime = currentTime;  // prevent echo when our pause event fires after apply
     lastPlaybackOutboundKind = 'PAUSE';
+    lastLocalWirePlayingSent = false;
     lastSyncAt = Date.now();
 
     if (playbackProfile.drmPassive && !roomState?.isHost) {
@@ -1536,12 +2326,21 @@ export function runPlayShareContent() {
     diagLog('PAUSE', { currentTime, fromUsername, source: 'remote' });
   }
 
-  function applySeek(currentTime, fromUsername, fromClientId, lastRtt, correlationId, serverTime) {
+  function applySeek(currentTime, fromUsername, fromClientId, lastRtt, correlationId, serverTime, remoteOpts) {
     if (!video || isVideoStale(video)) return;
-    const gate = getRemoteApplySyncGate();
+    const gate = getRemoteApplySyncGate(remoteOpts);
     if (!gate.ok) {
       if (gate.reason === 'sync_lock') diag.extensionOps.remoteApplyDeniedSyncLock++;
-      else if (gate.reason === 'playback_debounce') diag.extensionOps.remoteApplyDeniedPlaybackDebounce++;
+      else if (gate.reason === 'playback_debounce') {
+        diag.extensionOps.remoteApplyDeniedPlaybackDebounce++;
+        if (!remoteOpts?.bypassPlaybackDebounce) {
+          scheduleDebouncedRemotePlaybackRetry(() => {
+            applySeek(currentTime, fromUsername, fromClientId, lastRtt, correlationId, serverTime, {
+              bypassPlaybackDebounce: true
+            });
+          });
+        }
+      }
       return;
     }
     if (localAdBreakActive) {
@@ -1564,6 +2363,7 @@ export function runPlayShareContent() {
       diagLog('SEEK', { currentTime, fromUsername, source: 'remote', adHold: true });
       return;
     }
+    clearRemotePlaybackDebouncedQueue();
     lastAppliedState = { ...lastAppliedState, currentTime };
     lastSyncAt = Date.now();
     lastSentTime = currentTime;
@@ -1698,6 +2498,7 @@ export function runPlayShareContent() {
     lastAppliedState = { currentTime: targetTime, playing: !!state.playing };
     lastSentTime = targetTime;  // prevent echo when seek/play fires after apply
     lastPlaybackOutboundKind = state.playing ? 'PLAY' : 'PAUSE';
+    lastLocalWirePlayingSent = !!state.playing;
     if (roomState?.isHost && state.playing) {
       hostTimeupdateSeekSuppressUntil = Date.now() + playbackProfile.hostSeekSuppressAfterPlayMs;
     }
@@ -1744,6 +2545,7 @@ export function runPlayShareContent() {
           syncLock = true;
           applyDrmViewerOneShot(v, applyTarget, !!state.playing);
           lastAppliedState = { currentTime: applyTarget, playing: !!state.playing };
+          lastLocalWirePlayingSent = !!state.playing;
           if (state.playing) startViewerSyncInterval();
           else stopViewerSyncInterval();
           const postDrift = Math.abs(v.currentTime - applyTarget);
@@ -1783,6 +2585,7 @@ export function runPlayShareContent() {
         const diff = Math.abs(v.currentTime - applyTarget);
         if (diff > threshold) { v.currentTime = applyTarget; lastTimeUpdatePos = applyTarget; }
         lastAppliedState = { currentTime: applyTarget, playing: !!state.playing };
+        lastLocalWirePlayingSent = !!state.playing;
         if (state.playing && v.paused) {
           forcePlay(v, playbackProfile.aggressiveRemoteSync);
           if (roomState?.isHost) startHostPositionHeartbeat();
@@ -1858,6 +2661,10 @@ export function runPlayShareContent() {
         }
 
         const finalizeRoomJoined = () => {
+          lastLocalPlaybackWireAt = 0;
+          lastLocalWirePlayingSent = null;
+          clearPlaybackOutboundCoalesce();
+          clearRemotePlaybackDebouncedQueue();
           showSidebarToggle();
           openSidebar();
           // Sync joiner to host's playback position (apply now if video ready, else when it attaches)
@@ -1912,9 +2719,28 @@ export function runPlayShareContent() {
         break;
       }
 
-      case 'ROOM_LEFT':
+      case 'ROOM_LEFT': {
+        stopPeerRecordingSampleLoop();
+        const leavingCollectorId = roomState?.clientId;
+        if (diagnosticsUiEnabled && leavingCollectorId && getVideoProfiler().isRecording()) {
+          try {
+            sendBg({
+              source: 'playshare',
+              type: 'DIAG_PROFILER_COLLECTION',
+              active: false,
+              collectorClientId: leavingCollectorId
+            });
+          } catch {
+            /* ignore */
+          }
+        }
+        diag.profilerPeerCollection.remoteCollectorClientId = null;
         roomState = null;
         suppressPlaybackEchoUntil = 0;
+        clearPlaybackOutboundCoalesce();
+        clearRemotePlaybackDebouncedQueue();
+        lastLocalPlaybackWireAt = 0;
+        lastLocalWirePlayingSent = null;
         peersInAdBreak.clear();
         localAdBreakActive = false;
         stopAdBreakMonitor();
@@ -1933,12 +2759,17 @@ export function runPlayShareContent() {
         hideSidebarToggle();
         closeSidebar();
         break;
+      }
 
       case 'MEMBER_JOINED':
         recordMemberChronology('member_joined', { username: msg.username, clientIdShort: msg.clientId ? String(msg.clientId).slice(0, 8) + '…' : null });
         diagLog('MEMBER_JOINED', { username: msg.username });
+        if (roomState && Array.isArray(msg.members)) roomState.members = msg.members;
         postSidebar({ type: 'MEMBER_JOINED', data: msg });
         showToast(`👋 ${msg.username} joined`);
+        if (diagnosticsUiEnabled && getVideoProfiler().isRecording()) {
+          broadcastProfilerCollectionState(true);
+        }
         break;
 
       case 'MEMBER_LEFT':
@@ -1958,6 +2789,10 @@ export function runPlayShareContent() {
         }
         postSidebar({ type: 'MEMBER_LEFT', data: msg });
         showToast(`👋 ${msg.username} left`);
+        if (msg.clientId && diag.profilerPeerCollection.remoteCollectorClientId === msg.clientId) {
+          diag.profilerPeerCollection.remoteCollectorClientId = null;
+          stopPeerRecordingSampleLoop();
+        }
         break;
 
       case 'PLAY':
@@ -2079,11 +2914,39 @@ export function runPlayShareContent() {
             platform: msg.platformName || msg.platform,
             metrics: msg.metrics || {},
             videoAttached: msg.videoAttached,
-            lastReceived: Date.now()
+            lastReceived: Date.now(),
+            devDiag:
+              msg.devDiag && typeof msg.devDiag === 'object'
+                ? /** @type {Record<string, unknown>} */ (msg.devDiag)
+                : null
           };
         }
         break;
       }
+
+      case 'DIAG_PROFILER_COLLECTION': {
+        if (!diagnosticsUiEnabled || !roomState) break;
+        const coll = msg.collectorClientId;
+        if (!coll) break;
+        if (coll === roomState.clientId) {
+          stopPeerRecordingSampleLoop();
+          diag.profilerPeerCollection.remoteCollectorClientId = null;
+          break;
+        }
+        if (msg.active) {
+          diag.profilerPeerCollection.remoteCollectorClientId = coll;
+          startPeerRecordingSampleLoop();
+        } else if (diag.profilerPeerCollection.remoteCollectorClientId === coll) {
+          diag.profilerPeerCollection.remoteCollectorClientId = null;
+          stopPeerRecordingSampleLoop();
+        }
+        scheduleDiagUpdate();
+        break;
+      }
+
+      case 'DIAG_PEER_RECORDING_SAMPLE':
+        ingestPeerRecordingSample(/** @type {Record<string, unknown>} */ (msg));
+        break;
 
       case 'TYPING_START':
       case 'TYPING_STOP':
@@ -2201,6 +3064,7 @@ export function runPlayShareContent() {
       background:#0a0a0a;contain:layout style paint;
     `;
     document.body.appendChild(sidebarFrame);
+    reparentPlayShareUiForFullscreen();
     diag.sidebar.frameExists = true;
     diag.sidebar.toggleBtnExists = true;
     diagLog('SIDEBAR_INJECT', {});
@@ -2404,6 +3268,7 @@ export function runPlayShareContent() {
         pointer-events:none;contain:layout style paint;
       `;
       document.body.appendChild(toastContainer);
+      reparentPlayShareUiForFullscreen();
     }
 
     const toast = document.createElement('div');
@@ -2437,7 +3302,7 @@ export function runPlayShareContent() {
       animation:wsFloatUp ${duration}s cubic-bezier(0.25,0.5,0.5,1) forwards;
     `;
     el.textContent = emoji;
-    document.body.appendChild(el);
+    getFullscreenUiHost().appendChild(el);
     setTimeout(() => el.remove(), duration * 1000);
   }
 
@@ -2448,6 +3313,42 @@ export function runPlayShareContent() {
   let diagDrag = { active: false, dx: 0, dy: 0 };
   /** Filled by prepareDiagnosticSnapshotForExport() so JSON/text exports are comparable. */
   let diagExportCaptureContext = null;
+  /** Dev diagnostics floater; hoisted for fullscreen reparenting. */
+  let diagToggleBtn = null;
+
+  /** Reparent extension UI into the fullscreen subtree (chat, toggles, toasts, dev HUD, DRM prompt). */
+  function reparentPlayShareUiForFullscreen() {
+    const host = getFullscreenUiHost();
+    /** @type {[HTMLElement, string][]} */
+    const layers = [
+      [sidebarFrame, '2147483645'],
+      [sidebarToggleBtn, '2147483646'],
+      [clusterSyncBadge, '2147483630'],
+      [primeHudEl, '2147483642'],
+      [diagToggleBtn, '2147483643'],
+      [toastContainer, '2147483644'],
+      [countdownOverlayEl, '2147483641'],
+      [diagOverlay, '2147483647']
+    ];
+    for (const [el, z] of layers) {
+      if (!el) continue;
+      try {
+        if (el.parentElement !== host) host.appendChild(el);
+        el.style.zIndex = z;
+      } catch {
+        try {
+          document.body.appendChild(el);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    try {
+      drmSyncPrompt.reparentIfVisible();
+    } catch {
+      /* ignore */
+    }
+  }
 
   function recordMemberChronology(kind, detail) {
     const s = diag.sync;
@@ -2580,6 +3481,7 @@ export function runPlayShareContent() {
     hideClusterSyncBadge();
     syncPendingSyncStateDiagFlag();
     diagExportCaptureContext = null;
+    diag.peerRecordingSamples.byClient = {};
     updateDiagnosticOverlay();
   }
 
@@ -2713,8 +3615,8 @@ export function runPlayShareContent() {
     if ((ge.remoteApplyDeniedSyncLock || 0) + (ge.remoteApplyDeniedPlaybackDebounce || 0) >= 3) {
       tips.push({ level: 'info', text: 'Remote play/pause/seek sometimes gated (sync lock / playback debounce). See Extension bridge counters.' });
     }
-    if (playbackProfile.handlerKey === 'prime' && tips.length > 0) {
-      tips.push({ level: 'info', text: 'Prime Video: Use Space key + button clicks. Video element may be replaced on seek.' });
+    if (tips.length > 0 && siteSync.extraDiagTips) {
+      for (const t of siteSync.extraDiagTips()) tips.push(t);
     }
     if ((playbackProfile.handlerKey === 'netflix' || playbackProfile.handlerKey === 'disney') && tips.length > 0) {
       tips.push({
@@ -2723,7 +3625,14 @@ export function runPlayShareContent() {
       });
     }
     if (Object.keys(diag.sync.peerReports).length > 0) {
-      tips.push({ level: 'ok', text: `Receiving data from ${Object.keys(diag.sync.peerReports).length} peer(s).` });
+      tips.push({
+        level: 'ok',
+        text: `Receiving peer report(s) from ${Object.keys(diag.sync.peerReports).length} peer(s)${
+          diagnosticsUiEnabled
+            ? ' (sent when they open diagnostics or use Request peer report). While you record the video profiler, dev peers also push timed samples—those land in the unified export.'
+            : ''
+        }.`
+      });
     }
     const cs = diag.clusterSync;
     if (cs && cs.playingMismatch) {
@@ -2774,6 +3683,64 @@ export function runPlayShareContent() {
     };
   }
 
+  /** Machine-filled context for Prime JSON exports (pairing, environment, quick sync glance). */
+  function buildPrimeSnapshotAutoContext() {
+    let extVersion = '1.0.0';
+    try {
+      extVersion = chrome.runtime.getManifest()?.version || extVersion;
+    } catch {
+      /* ignore */
+    }
+    const path = typeof location !== 'undefined' ? location.pathname || '' : '';
+    const host = (typeof location !== 'undefined' ? location.hostname : '').toLowerCase();
+    let primePathKind = 'other';
+    if (/primevideo\.com/.test(host)) {
+      if (/\/detail\//i.test(path)) primePathKind = 'prime_detail';
+      else if (/\/watch\//i.test(path)) primePathKind = 'prime_watch';
+      else if (/\/region\//i.test(path)) primePathKind = 'prime_region';
+    } else if (/amazon\.(com|ca)/.test(host)) {
+      if (/\/gp\/video\/detail\//i.test(path)) primePathKind = 'amazon_gp_video_detail';
+      else if (/\/gp\/video\/watch\//i.test(path)) primePathKind = 'amazon_gp_video_watch';
+    }
+    const ts = Date.now();
+    const captureNonce = `${ts}-${Math.random().toString(36).slice(2, 9)}`;
+    let pipActive = null;
+    let fullscreenActive = null;
+    let pageFocused = null;
+    try {
+      pipActive = !!document.pictureInPictureElement;
+    } catch {
+      /* ignore */
+    }
+    try {
+      fullscreenActive = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    } catch {
+      /* ignore */
+    }
+    try {
+      pageFocused = typeof document.hasFocus === 'function' ? document.hasFocus() : null;
+    } catch {
+      /* ignore */
+    }
+    const inRoom = !!roomState;
+    return {
+      captureNonce,
+      capturedAtMs: ts,
+      extensionVersion: extVersion,
+      pathname: path,
+      primePathKind,
+      pageFocused,
+      pipActive,
+      fullscreenActive,
+      videoElementAttached: !!video,
+      syncLockActive: !!syncLock,
+      connectionStatus: diag.connectionStatus,
+      driftEwmSec: diag.timing.driftEwmSec,
+      roomRole: inRoom ? (roomState.isHost ? 'host' : 'viewer') : 'solo',
+      roomCodeShort: inRoom && roomState.roomCode ? String(roomState.roomCode).replace(/[^a-zA-Z0-9]/g, '').slice(0, 8) : null
+    };
+  }
+
   function getDiagExportPayload() {
     let ver = '1.0.0';
     try {
@@ -2792,34 +3759,367 @@ export function runPlayShareContent() {
     });
   }
 
-  async function copyDiagExport() {
+  /**
+   * Prime player/site digest (not the missed-ad export). Embedded in unified export under `primeSiteDebug`.
+   * @returns {Promise<{ payload: object, frameBlob: Blob|null, autoCaptureContext: object }|null>}
+   */
+  async function buildPrimePlayerSyncExportBundle() {
+    if (siteSync.key !== 'prime') return null;
+    captureVideoHealthSnapshot();
+    const v = findVideo() || video;
+    const { blob: frameBlob, meta: frameMeta } = await tryCapturePrimeVideoFramePng(v);
+    const iv = playbackProfile;
+    let traceDeliveryEstimate = null;
+    try {
+      traceDeliveryEstimate = computeCorrelationTraceDelivery(diag);
+    } catch (err) {
+      traceDeliveryEstimate = { error: err && err.message ? err.message : String(err) };
+    }
+    const sw = diag.serviceWorkerTransport;
+    const peerReportSummary = Object.entries(diag.sync.peerReports || {})
+      .slice(0, 12)
+      .map(([cid, r]) => ({
+        clientShort: cid ? `${String(cid).slice(0, 10)}…` : null,
+        username: r.username ?? null,
+        platform: r.platform ?? null,
+        isHost: !!r.isHost,
+        lastReceived: r.lastReceived ?? null,
+        metrics: r.metrics ? { ...r.metrics } : null
+      }));
+    const autoCaptureContext = buildPrimeSnapshotAutoContext();
+    const multiUserSync = roomState
+      ? {
+          roomCode: roomState.roomCode,
+          memberCount: (roomState.members || []).length,
+          capturingUsername: roomState.username ?? null,
+          clientIdSuffix: roomState.clientId ? String(roomState.clientId).slice(-10) : null,
+          platform: { key: platform.key, name: platform.name },
+          tab: {
+            diagTabHidden: diag.tabHidden,
+            documentHidden: typeof document !== 'undefined' ? document.hidden : null
+          },
+          transport: {
+            connectionStatus: diag.connectionStatus,
+            transportPhase: diag.transportPhase,
+            serviceWorkerTransport: sw
+              ? {
+                  wsOpenCount: sw.wsOpenCount,
+                  wsCloseCount: sw.wsCloseCount,
+                  wsSendFailures: sw.wsSendFailures ?? 0,
+                  serverHost: sw.serverHost || null
+                }
+              : null
+          },
+          clusterPlayback: diag.clusterSync,
+          timing: {
+            lastRttMs: diag.timing.lastRttMs,
+            lastRttSource: diag.timing.lastRttSource,
+            driftEwmSec: diag.timing.driftEwmSec
+          },
+          traceDeliveryEstimate,
+          syncMetrics: { ...diag.sync.metrics },
+          syncLastRecvAt: diag.sync.lastRecvAt || null,
+          messaging: {
+            runtimeSendFailures: diag.messaging.runtimeSendFailures,
+            runtimeLastErrorMessage: diag.messaging.runtimeLastErrorMessage
+              ? String(diag.messaging.runtimeLastErrorMessage).slice(0, 220)
+              : null
+          },
+          telemetryOps: {
+            hostPlaybackPositionSent: diag.extensionOps.hostPlaybackPositionSent,
+            viewerSyncRequestSent: diag.extensionOps.viewerSyncRequestSent,
+            positionReportSent: diag.extensionOps.positionReportSent,
+            positionSnapshotInbound: diag.extensionOps.positionSnapshotInbound,
+            wsDisconnectEvents: diag.extensionOps.wsDisconnectEvents,
+            serverErrors: diag.extensionOps.serverErrors,
+            syncStateInbound: diag.extensionOps.syncStateInbound,
+            syncStateApplied: diag.extensionOps.syncStateApplied,
+            remoteApplyDeferredTabHidden: diag.extensionOps.remoteApplyDeferredTabHidden
+          },
+          applyTimelineRecent: (diag.timing.timeline || []).slice(0, 28),
+          serverRoomTraceRecent: (diag.serverRoomTrace || []).slice(-28),
+          timeupdateJumpsRecent: (diag.timeupdateJumps || []).slice(-10),
+          remoteApplyResultsRecent: (diag.sync.remoteApplyResults || []).slice(0, 14),
+          peerReportSummary,
+          reportSession: diag.reportSession
+            ? { startedAt: diag.reportSession.startedAt, roomCode: diag.reportSession.roomCode }
+            : null
+        }
+      : {
+          note: 'not_in_room',
+          transport: {
+            connectionStatus: diag.connectionStatus,
+            transportPhase: diag.transportPhase
+          },
+          traceDeliveryEstimate
+        };
+    const payload = capturePrimePlayerSyncDebugPayload({
+      getVideo: () => findVideo() || video,
+      frameCaptureMeta: frameMeta,
+      localAdBreakActive,
+      inRoom: !!roomState,
+      isHost: !!roomState?.isHost,
+      hostOnlyControl: !!roomState?.hostOnlyControl,
+      countdownOnPlay: !!roomState?.countdownOnPlay,
+      lastAppliedState: lastAppliedState ? { ...lastAppliedState } : null,
+      lastSentTime,
+      lastPlaybackOutboundKind,
+      lastSyncAt,
+      findVideoStats: { ...diag.findVideo },
+      videoHealth: diag.videoHealthLast,
+      viewerDriftSec: diag.primeSync?.viewerDriftSec ?? null,
+      playbackTuning: {
+        handlerKey: iv.handlerKey,
+        label: iv.label,
+        hostPositionIntervalMs: iv.hostPositionIntervalMs,
+        viewerReconcileIntervalMs: iv.viewerReconcileIntervalMs,
+        applyDebounceMs: iv.applyDebounceMs,
+        playbackOutboundCoalesceMs: iv.playbackOutboundCoalesceMs,
+        syncStateApplyDelayMs: iv.syncStateApplyDelayMs,
+        playbackSlackSec: iv.playbackSlackSec,
+        timeJumpThresholdSec: iv.timeJumpThresholdSec,
+        hostSeekSuppressAfterPlayMs: iv.hostSeekSuppressAfterPlayMs,
+        syncRequestDelayMs: iv.syncRequestDelayMs,
+        aggressiveRemoteSync: iv.aggressiveRemoteSync,
+        drmPassive: iv.drmPassive,
+        useRelaxedVideoReady: iv.useRelaxedVideoReady
+      },
+      extensionOpsSubset: {
+        remoteApplyDeniedPlaybackDebounce: diag.extensionOps.remoteApplyDeniedPlaybackDebounce,
+        remoteApplyDeniedSyncLock: diag.extensionOps.remoteApplyDeniedSyncLock,
+        syncStateDeniedPlaybackDebounce: diag.extensionOps.syncStateDeniedPlaybackDebounce,
+        playbackOutboundSuppressedLocalAd: diag.extensionOps.playbackOutboundSuppressedLocalAd,
+        remoteApplyIgnoredLocalAd: diag.extensionOps.remoteApplyIgnoredLocalAd
+      },
+      multiUserSync,
+      autoCaptureContext
+    });
+    return { payload, frameBlob, autoCaptureContext };
+  }
+
+  /**
+   * Dev: compact history of peer diagnostics pushed during this tab’s profiler recording (unified export).
+   * @returns {Record<string, unknown>|null}
+   */
+  function buildPeerRecordingDiagnosticsForExport() {
+    const by = diag.peerRecordingSamples.byClient;
+    const clientIds = Object.keys(by);
+    if (clientIds.length === 0) return null;
+    /** @type {Array<Record<string, unknown>>} */
+    const peers = [];
+    for (const cid of clientIds) {
+      const rows = by[cid];
+      if (!Array.isArray(rows) || rows.length === 0) continue;
+      const first = rows[0];
+      const last = rows[rows.length - 1];
+      peers.push({
+        fromClientId: cid,
+        fromUsername: typeof first.fromUsername === 'string' ? first.fromUsername : '',
+        sampleCount: rows.length,
+        firstReceivedAt: first.receivedAt,
+        lastReceivedAt: last.receivedAt,
+        samples: rows.map((r) => {
+          const p = r.payload && typeof r.payload === 'object' ? r.payload : {};
+          return {
+            receivedAt: r.receivedAt,
+            syncMetrics: p.syncMetrics && typeof p.syncMetrics === 'object' ? p.syncMetrics : null,
+            videoAttached: p.videoAttached,
+            platform: p.platform,
+            platformName: p.platformName,
+            devDiag: p.devDiag && typeof p.devDiag === 'object' ? p.devDiag : null
+          };
+        })
+      });
+    }
+    if (peers.length === 0) return null;
+    return {
+      schema: 'playshare.peerRecordingDiagnostics.v1',
+      exportedAtMs: Date.now(),
+      collectorRecording: getVideoProfiler().isRecording(),
+      peers
+    };
+  }
+
+  /**
+   * Single JSON: extension sync report + video profiler session + Prime player/site digest (on Prime).
+   * Does not include the separate Prime missed-ad-only export.
+   * @param {{ compactProfiler?: boolean, includeProfilerVideoFrame?: boolean }} [opts]
+   */
+  async function getUnifiedPlayShareExportPayload(opts = {}) {
     await prepareDiagnosticSnapshotForExport();
-    const json = JSON.stringify(getDiagExportPayload(), null, 2);
+    const extension = getDiagExportPayload();
+    const videoPlayerProfiler = getVideoProfiler().buildExportPayload(buildVideoProfilerPageMeta(), {
+      compact: !!opts.compactProfiler,
+      includeVideoFrame: !!opts.includeProfilerVideoFrame
+    });
+    let primeSiteDebug = null;
+    if (siteSync.key === 'prime') {
+      try {
+        const bundle = await buildPrimePlayerSyncExportBundle();
+        if (bundle) primeSiteDebug = bundle.payload;
+      } catch (e) {
+        primeSiteDebug = {
+          kind: 'playshare_prime_player_sync_debug_v1',
+          captureError: e && e.message ? String(e.message) : String(e)
+        };
+      }
+    }
+    const peerRecordingDiagnostics = buildPeerRecordingDiagnosticsForExport();
+    const pSnap = Array.isArray(videoPlayerProfiler.snapshots) ? videoPlayerProfiler.snapshots.length : 0;
+    const peerDiagLine = peerRecordingDiagnostics
+      ? ` Peer profiler samples: ${peerRecordingDiagnostics.peers.length} peer(s), ${(peerRecordingDiagnostics.peers).reduce((a, p) => a + (typeof p.sampleCount === 'number' ? p.sampleCount : 0), 0)} row(s).`
+      : '';
+    const appendix = `\n\n--- Unified JSON (Export report / Copy JSON) ---\nBundled: extension report (${extension.reportSchemaVersion || '?'} — sync metrics, extensionOps, service worker WS + connectionDetail, narrativeSummary), video profiler (${pSnap} snapshots in this file), ${
+      siteSync.key === 'prime'
+        ? primeSiteDebug && !primeSiteDebug.captureError
+          ? 'Prime player/site digest.'
+          : 'Prime digest capture failed (see primeSiteDebug.captureError).'
+        : 'no Prime site block (not Prime).'
+    }${peerDiagLine} Does not include the separate Prime missed-ad-only JSON.\n`;
+    return {
+      playshareUnifiedExport: '1.0',
+      exportedAtMs: Date.now(),
+      exportedAtIso: new Date().toISOString(),
+      contains: {
+        extensionSyncReport: true,
+        videoPlayerProfiler: true,
+        primeSiteDebug: !!(primeSiteDebug && !primeSiteDebug.captureError),
+        primeSiteDebugCaptureFailed: !!(primeSiteDebug && primeSiteDebug.captureError),
+        peerRecordingDiagnostics: !!peerRecordingDiagnostics,
+        excludedPrimeMissedAdOnlyExport: true
+      },
+      narrativeSummary: (extension.narrativeSummary || '') + appendix,
+      extension,
+      videoPlayerProfiler,
+      primeSiteDebug,
+      peerRecordingDiagnostics
+    };
+  }
+
+  async function copyDiagExport() {
+    const payload = await getUnifiedPlayShareExportPayload();
+    const json = JSON.stringify(payload, null, 2);
     if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(json).then(() => diagLog('DIAG_EXPORT', { copied: true })).catch(() => diagLog('ERROR', { message: 'Copy failed' }));
+      navigator.clipboard
+        .writeText(json)
+        .then(() => diagLog('DIAG_EXPORT', { copied: true, unified: true }))
+        .catch(() => diagLog('ERROR', { message: 'Copy failed' }));
     } else {
       diagLog('ERROR', { message: 'Clipboard API unavailable' });
     }
   }
 
   async function downloadDiagExport() {
-    await prepareDiagnosticSnapshotForExport();
-    const payload = getDiagExportPayload();
+    const payload = await getUnifiedPlayShareExportPayload();
     const json = JSON.stringify(payload, null, 2);
     const blob = new Blob([json], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `playshare-sync-report-v${payload.reportSchemaVersion || '2'}-${Date.now()}.json`;
+    const host =
+      (payload.extension && payload.extension.pageHost
+        ? String(payload.extension.pageHost)
+        : typeof location !== 'undefined'
+          ? location.hostname
+          : 'page'
+      ).replace(/[^a-z0-9.-]/gi, '_') || 'page';
+    a.download = `playshare-unified-report-${host}-${Date.now()}.json`;
     a.click();
     URL.revokeObjectURL(a.href);
-    diagLog('DIAG_EXPORT', { downloaded: true });
+    diagLog('DIAG_EXPORT', { downloaded: true, unified: true });
+  }
+
+  function buildVideoProfilerPageMeta() {
+    let ver = '1.0.0';
+    try {
+      ver = chrome.runtime.getManifest()?.version || ver;
+    } catch {
+      /* ignore */
+    }
+    return {
+      hostname: typeof location !== 'undefined' ? location.hostname : '',
+      pathname: typeof location !== 'undefined' ? location.pathname : '',
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+      platformHandlerKey: playbackProfile.handlerKey,
+      extensionVersion: ver
+    };
+  }
+
+  function startVideoProfilerSession() {
+    const v = findVideo() || video;
+    if (!v) {
+      diagLog('ERROR', { message: 'Video profiler: no <video> — start playback first' });
+      return;
+    }
+    diag.peerRecordingSamples.byClient = {};
+    getVideoProfiler().start();
+    broadcastProfilerCollectionState(true);
+    diagLog('DIAG', { videoProfiler: 'started', peerCollection: true });
+    updateDiagnosticOverlay();
+  }
+
+  function stopVideoProfilerSession() {
+    const wasRec = getVideoProfiler().isRecording();
+    getVideoProfiler().stop();
+    if (wasRec) broadcastProfilerCollectionState(false);
+    diagLog('DIAG', { videoProfiler: 'stopped' });
+    updateDiagnosticOverlay();
+  }
+
+  async function copyUnifiedExportCompactProfiler() {
+    const payload = await getUnifiedPlayShareExportPayload({ compactProfiler: true });
+    const json = JSON.stringify(payload, null, 2);
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(json);
+        diagLog('DIAG_EXPORT', { unified: true, copied: true, compactProfiler: true });
+      } catch {
+        diagLog('ERROR', { message: 'Unified compact copy failed' });
+      }
+    } else {
+      diagLog('ERROR', { message: 'Clipboard API unavailable' });
+    }
+  }
+
+  async function downloadUnifiedExportWithProfilerFrame() {
+    const payload = await getUnifiedPlayShareExportPayload({ includeProfilerVideoFrame: true });
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const host =
+      (payload.extension && payload.extension.pageHost
+        ? String(payload.extension.pageHost)
+        : 'page'
+      ).replace(/[^a-z0-9.-]/gi, '_') || 'page';
+    a.download = `playshare-unified-report-${host}-videoframe-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    diagLog('DIAG_EXPORT', { downloaded: true, unified: true, withProfilerVideoFrame: true });
+  }
+
+  function clearVideoProfilerSession() {
+    const wasRec = getVideoProfiler().isRecording();
+    getVideoProfiler().clearSession();
+    if (wasRec) broadcastProfilerCollectionState(false);
+    stopPeerRecordingSampleLoop();
+    diag.profilerPeerCollection.remoteCollectorClientId = null;
+    diagLog('DIAG', { videoProfiler: 'cleared' });
+    updateDiagnosticOverlay();
   }
 
   async function copyDiagNarrative() {
     await prepareDiagnosticSnapshotForExport();
-    const narrative = getDiagExportPayload().narrativeSummary || '';
+    const extension = getDiagExportPayload();
+    const st = getVideoProfiler().getStatus();
+    const appendix = `\n\n--- Unified JSON ---\nUse **Export report** or **Copy JSON** for one file: extension report (${extension.reportSchemaVersion || '?'}), video profiler (${st.snapshotCount} snapshots), ${
+      siteSync.key === 'prime' ? 'Prime player/site digest (captured at export).' : 'no Prime site block.'
+    } Does not include the separate Prime missed-ad-only JSON.\n`;
+    const narrative = (extension.narrativeSummary || '') + appendix;
     if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(narrative).then(() => diagLog('DIAG_EXPORT', { narrativeCopied: true })).catch(() => diagLog('ERROR', { message: 'Copy failed' }));
+      navigator.clipboard
+        .writeText(narrative)
+        .then(() => diagLog('DIAG_EXPORT', { narrativeCopied: true, unified: true }))
+        .catch(() => diagLog('ERROR', { message: 'Copy failed' }));
     } else {
       diagLog('ERROR', { message: 'Clipboard API unavailable' });
     }
@@ -2827,18 +4127,217 @@ export function runPlayShareContent() {
 
   async function downloadDiagNarrativeTxt() {
     await prepareDiagnosticSnapshotForExport();
-    const narrative = getDiagExportPayload().narrativeSummary || '';
+    const extension = getDiagExportPayload();
+    const st = getVideoProfiler().getStatus();
+    const appendix = `\n\n--- Unified JSON ---\nUse **Export report** or **Copy JSON** for one file: extension report (${extension.reportSchemaVersion || '?'}), video profiler (${st.snapshotCount} snapshots), ${
+      siteSync.key === 'prime' ? 'Prime player/site digest (captured at export).' : 'no Prime site block.'
+    } Does not include the separate Prime missed-ad-only JSON.\n`;
+    const narrative = (extension.narrativeSummary || '') + appendix;
     const blob = new Blob([narrative], { type: 'text/plain;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `playshare-sync-summary-${Date.now()}.txt`;
     a.click();
     URL.revokeObjectURL(a.href);
-    diagLog('DIAG_EXPORT', { narrativeDownloaded: true });
+    diagLog('DIAG_EXPORT', { narrativeDownloaded: true, unified: true });
+  }
+
+  /**
+   * Which diagnostic sections need attention (verbose blocks shown). Uses same signals as suggestions.
+   * @param {{ level: string, text: string }[]} syncTips
+   */
+  function computeDiagCategoryIssues(syncTips) {
+    const s = diag.sync;
+    const m = s.metrics;
+    const eo = diag.extensionOps;
+    const vb = diag.videoBuffering;
+    const cs = diag.clusterSync;
+    const warnTips = syncTips.filter((t) => t.level === 'warn');
+
+    const playT = m.playOk + m.playFail;
+    const pauseT = m.pauseOk + m.pauseFail;
+    const seekT = m.seekOk + m.seekFail;
+    const playBad = playT > 0 && m.playFail / playT > 0.25;
+    const pauseBad = pauseT > 0 && m.pauseFail / pauseT > 0.25;
+    const seekBad = seekT > 0 && m.seekFail / seekT > 0.25;
+    const remoteFail = (s.remoteApplyResults || []).some((r) => !r.success);
+
+    const multiplayer =
+      warnTips.length > 0 ||
+      !!s.testRunning ||
+      playBad ||
+      pauseBad ||
+      seekBad ||
+      remoteFail ||
+      !!cs?.playingMismatch ||
+      (cs && cs.synced === false && cs.spreadSec != null && cs.spreadSec > CLUSTER_SYNC_SPREAD_SEC * 1.15);
+
+    const server =
+      diag.connectionStatus === 'disconnected' ||
+      (diag.messaging?.runtimeSendFailures ?? 0) > 0 ||
+      (eo.serverErrors ?? 0) > 0 ||
+      (diag.serviceWorkerTransport && (diag.serviceWorkerTransport.wsSendFailures ?? 0) > 0);
+
+    const drift = diag.timing.driftEwmSec;
+    const technical =
+      !diag.videoAttached ||
+      (drift != null && drift > SYNC_DRIFT_SOFT_MIN_SEC) ||
+      vb.waiting + vb.stalled > 5 ||
+      diag.timeupdateJumps.length > 0 ||
+      (eo.syncStateDeferredNoVideo ?? 0) > 18 ||
+      (eo.syncStateDeferredStaleOrMissing ?? 0) > 18;
+
+    const logs = diag.errors.length > 0 || (!!roomState && !sidebarFrame);
+
+    let prime = false;
+    if (siteSync.key === 'prime' && diag.primeSync) {
+      const p = diag.primeSync;
+      prime =
+        !p.inSdkShell ||
+        (typeof p.viewerDriftSec === 'number' && !Number.isNaN(p.viewerDriftSec) && Math.abs(p.viewerDriftSec) > 4);
+    }
+
+    return { multiplayer, server, technical, logs, prime };
+  }
+
+  function applyDiagSectionVisibility(issues) {
+    if (!diagPanel) return;
+    /** Full dashboard always shows metrics; compact strip uses category icons only. */
+    const showAllMetrics = diag.consoleView === 'detailed';
+    const map = [
+      ['multiplayer', issues.multiplayer],
+      ['server', issues.server],
+      ['technical', issues.technical],
+      ['logs', issues.logs],
+      ['prime', issues.prime]
+    ];
+    for (const [key, hasIssue] of map) {
+      const det = diagPanel.querySelector(`details[data-diag-sec="${key}"]`);
+      const wrap = diagPanel.querySelector(`[data-diag-sec-wrap="${key}"]`);
+      const quiet = diagPanel.querySelector(`[data-diag-quiet="${key}"]`);
+      const body = diagPanel.querySelector(`[data-diag-body="${key}"]`);
+      const badge = det?.querySelector('[data-diag-sec-badge]') || wrap?.querySelector('[data-diag-sec-badge]');
+      if (quiet) quiet.style.display = showAllMetrics ? 'none' : hasIssue ? 'none' : 'block';
+      if (body) body.style.display = showAllMetrics ? 'block' : hasIssue ? 'block' : 'none';
+      if (badge) {
+        badge.textContent = hasIssue ? 'Attention' : 'OK';
+        badge.classList.toggle('ws-diag-badge-ok', !hasIssue);
+        badge.classList.toggle('ws-diag-badge-warn', !!hasIssue);
+      }
+    }
+  }
+
+  function applyDashboardBlockVisibility() {
+    if (!diagPanel) return;
+    for (const el of diagPanel.querySelectorAll('[data-diag-dash-block]')) {
+      const key = el.getAttribute('data-diag-dash-block');
+      if (!key || !(key in diag.dashBlocks)) continue;
+      el.style.display = diag.dashBlocks[key] ? '' : 'none';
+    }
+  }
+
+  function syncDashLayoutCheckboxesFromDiag() {
+    if (!diagPanel) return;
+    const wrap = diagPanel.querySelector('[data-diag-dash-customize]');
+    if (!wrap) return;
+    for (const inp of wrap.querySelectorAll('input[data-dash-toggle]')) {
+      const key = inp.getAttribute('data-dash-toggle');
+      if (key && key in diag.dashBlocks) inp.checked = diag.dashBlocks[key];
+    }
+  }
+
+  function closeDiagDashModal() {
+    if (!diagPanel) return;
+    const root = diagPanel.querySelector('#diagDashModalRoot');
+    if (!root || root.hasAttribute('hidden')) return;
+    root.setAttribute('hidden', '');
+    root.setAttribute('aria-hidden', 'true');
+    diagPanel.querySelector('#diagDashCustomizeOpen')?.focus();
+  }
+
+  function openDiagDashModal() {
+    if (!diagPanel) return;
+    const root = diagPanel.querySelector('#diagDashModalRoot');
+    if (!root) return;
+    syncDashLayoutCheckboxesFromDiag();
+    root.removeAttribute('hidden');
+    root.setAttribute('aria-hidden', 'false');
+    const firstCb = diagPanel.querySelector('[data-diag-dash-customize] input[type="checkbox"]');
+    (firstCb || diagPanel.querySelector('#diagDashCustomizeDone'))?.focus({ preventScroll: true });
+  }
+
+  function updateCompactConsoleStrip(catIssues) {
+    if (!diagPanel) return;
+    const setTile = (comp, hasIssue, line, ariaDetail) => {
+      const tile = diagPanel.querySelector(`[data-diag-comp="${comp}"]`);
+      if (!tile) return;
+      tile.classList.toggle('ws-diag-comp-ok', !hasIssue);
+      tile.classList.toggle('ws-diag-comp-warn', !!hasIssue);
+      const lineEl = tile.querySelector(`[data-diag-comp-line="${comp}"]`);
+      if (lineEl) lineEl.textContent = line;
+      tile.setAttribute('aria-label', `${comp}: ${ariaDetail}`);
+    };
+
+    const cs = String(diag.connectionStatus || 'unknown');
+    const syncIssue =
+      diag.connectionStatus === 'disconnected' ||
+      !!catIssues.multiplayer ||
+      !!catIssues.server;
+    const syncLine = `${diag.tabHidden ? 'tab hidden · ' : ''}${cs}`;
+    setTile('sync', syncIssue, syncLine, `${syncIssue ? 'needs attention' : 'healthy'} · ${syncLine}`);
+
+    let adIssue;
+    let adLine;
+    if (siteSync.key === 'prime' && diag.primeSync) {
+      const p = diag.primeSync;
+      adIssue = !!catIssues.prime || !p.inSdkShell;
+      adLine = !p.inSdkShell ? 'Shell?' : p.adDetectorActive ? 'Ad UI' : 'Content';
+    } else {
+      adIssue = !!localAdBreakActive;
+      adLine = localAdBreakActive ? 'Ad break' : 'Idle';
+    }
+    setTile('ad', adIssue, adLine, `${adIssue ? 'check' : 'ok'} · ${adLine}`);
+
+    const vh = diag.videoHealthLast;
+    const vidIssue = !!catIssues.technical || !diag.videoAttached;
+    let vidLine = '—';
+    if (!diag.videoAttached) vidLine = 'No video';
+    else if (vh) vidLine = `RS${vh.readyState}${vh.paused ? ' · paused' : ''}`;
+    else vidLine = 'Attached';
+    setTile('video', vidIssue, vidLine, `${vidIssue ? 'needs attention' : 'healthy'} · ${vidLine}`);
+  }
+
+  function setDiagConsoleView(view) {
+    if (view !== 'compact' && view !== 'detailed') return;
+    diag.consoleView = view;
+    if (diagPanel) {
+      diagPanel.classList.toggle('ws-diag-view-compact', view === 'compact');
+      diagPanel.classList.toggle('ws-diag-view-detailed', view === 'detailed');
+      const tgl = diagPanel.querySelector('#diagConsoleViewToggle');
+      if (tgl) {
+        tgl.setAttribute('aria-pressed', view === 'detailed' ? 'true' : 'false');
+        tgl.title =
+          view === 'compact'
+            ? 'Open full dashboard (session metrics & logs)'
+            : 'Compact telemetry strip (icons only)';
+      }
+    }
+    persistDiagConsolePrefs();
+    if (diagVisible) {
+      try {
+        const st = getSyncSuggestions();
+        applyDiagSectionVisibility(computeDiagCategoryIssues(st));
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   function updateDiagnosticOverlay() {
     if (!diagPanel || !diagVisible) return;
+
+    const syncTips = getSyncSuggestions();
+    const catIssues = computeDiagCategoryIssues(syncTips);
 
     diag.tabHidden = document.hidden;
     diag.diagOverlayStale = document.hidden;
@@ -2849,32 +4348,136 @@ export function runPlayShareContent() {
     diag.sidebar.toggleBtnExists = !!sidebarToggleBtn;
     diag.sidebar.toggleBtnVisible = sidebarToggleBtn ? sidebarToggleBtn.style.display === 'flex' : false;
 
-    const connEl = diagPanel.querySelector('[data-diag="connection"]');
-    const roomEl = diagPanel.querySelector('[data-diag="room"]');
-    const videoEl = diagPanel.querySelector('[data-diag="video"]');
-    const lastEl = diagPanel.querySelector('[data-diag="last"]');
+    const dashSummaryEl = diagPanel.querySelector('[data-diag="dash-summary"]');
+    const dashAlertsEl = diagPanel.querySelector('[data-diag="dash-alerts"]');
     const sidebarEl = diagPanel.querySelector('[data-diag="sidebar"]');
     const msgsEl = diagPanel.querySelector('[data-diag="messages"]');
     const errsEl = diagPanel.querySelector('[data-diag="errors"]');
 
-    if (connEl) {
+    if (dashSummaryEl) {
       const c = diag.connectionStatus;
-      connEl.innerHTML = `Connection: <span class="ws-diag-${c}">${c}</span>`;
+      const s = diag.sync;
+      const m = s.metrics;
+      const ratePct = (ok, fail) => {
+        const t = ok + fail;
+        return t > 0 ? `${Math.round((ok / t) * 100)}%` : '—';
+      };
+      const roomOne = roomState
+        ? `${roomState.roomCode} · ${roomState.isHost ? 'Host' : 'Viewer'} · ${(roomState.members || []).length} in room`
+        : 'Not in a room';
+      const rtt = diag.timing.lastRttMs != null ? `${Math.round(diag.timing.lastRttMs)} ms` : '—';
+      const rttExtra =
+        diag.timing.lastRttSource != null
+          ? ` <span class="ws-diag-muted">(${String(diag.timing.lastRttSource).replace(/_/g, ' ')})</span>`
+          : '';
+      const drift = diag.timing.driftEwmSec != null ? `${diag.timing.driftEwmSec.toFixed(2)}s` : '—';
+      const lastIn = s.lastRecvAt ? formatDiagTimeAgo(s.lastRecvAt) : 'never';
+      const vb = diag.videoBuffering;
+      const vh = diag.videoHealthLast;
+      let videoInner = '';
+      if (vh) {
+        const ct = typeof vh.currentTime === 'number' ? vh.currentTime.toFixed(1) : '—';
+        const dur = vh.duration != null ? vh.duration.toFixed(0) : '—';
+        videoInner = `readyState <strong>${vh.readyState}</strong> · ${vh.paused ? 'paused' : 'playing'} · <code>t=${ct}s</code> / ${dur}s`;
+      } else {
+        videoInner = diag.videoAttached
+          ? 'Attached (no snapshot yet)'
+          : '<span class="ws-diag-warn">No &lt;video&gt;</span>';
+      }
+      const cs = diag.clusterSync;
+      const clusterLine = cs ? cs.label : 'No cluster snapshot yet';
+      const sw = diag.serviceWorkerTransport;
+      const swShort = sw
+        ? `WS open/close ${sw.wsOpenCount}/${sw.wsCloseCount} · send fail ${sw.wsSendFailures ?? 0}`
+        : 'Overlay closed — open for SW stats';
+      const eo = diag.extensionOps;
+      const msgFail = diag.messaging.runtimeSendFailures ?? 0;
+      const phaseStr =
+        diag.transportPhase != null && String(diag.transportPhase).trim() !== ''
+          ? String(diag.transportPhase).trim()
+          : '';
+      const connNorm = String(c).trim().toLowerCase();
+      const connectionExtra =
+        phaseStr && phaseStr.toLowerCase() !== connNorm
+          ? ` <span class="ws-diag-muted">· ${phaseStr}</span>`
+          : '';
+      const anyAttention =
+        catIssues.multiplayer ||
+        catIssues.server ||
+        catIssues.technical ||
+        catIssues.logs ||
+        (siteSync.key === 'prime' && catIssues.prime);
+
+      let primeRow = '';
+      if (siteSync.key === 'prime' && diag.primeSync) {
+        const p = diag.primeSync;
+        const driftP =
+          typeof p.viewerDriftSec === 'number' && !Number.isNaN(p.viewerDriftSec)
+            ? `${p.viewerDriftSec >= 0 ? '+' : ''}${p.viewerDriftSec.toFixed(2)}s`
+            : '—';
+        primeRow = `
+          <div class="ws-diag-session-cell ws-diag-session-span2">
+            <span class="ws-diag-session-label">Prime</span>
+            <div>SDK shell <strong>${p.inSdkShell ? 'yes' : 'no'}</strong> · ${p.adDetectorActive ? '<span class="ws-diag-warn">Ad UI</span>' : 'Content'} · viewer Δhost <strong>${driftP}</strong> · ad score ${p.adScore}</div>
+          </div>`;
+      }
+
+      dashSummaryEl.innerHTML = `
+        <div class="ws-diag-session-grid">
+          <div class="ws-diag-session-cell">
+            <span class="ws-diag-session-label">Connection</span>
+            <div><span class="ws-diag-chip ws-diag-chip-${['connected', 'disconnected', 'syncing', 'reconnecting'].includes(c) ? c : 'unknown'}">${c}</span>${connectionExtra}</div>
+            <div class="ws-diag-session-sub">RTT <strong>${rtt}</strong>${rttExtra}</div>
+          </div>
+          <div class="ws-diag-session-cell">
+            <span class="ws-diag-session-label">Room</span>
+            <div>${roomOne}</div>
+          </div>
+          <div class="ws-diag-session-cell">
+            <span class="ws-diag-session-label">Video</span>
+            <div>${videoInner}</div>
+            <div class="ws-diag-session-sub ws-diag-muted">Rebuffer: waiting×${vb.waiting} · stalled×${vb.stalled}</div>
+          </div>
+          <div class="ws-diag-session-cell">
+            <span class="ws-diag-session-label">Sync applies (this tab)</span>
+            <div>Post-apply drift (EWM) <strong>${drift}</strong> · last inbound <strong>${lastIn}</strong></div>
+            <div class="ws-diag-session-sub ws-diag-muted">Play ${ratePct(m.playOk, m.playFail)} · Pause ${ratePct(m.pauseOk, m.pauseFail)} · Seek ${ratePct(m.seekOk, m.seekFail)}</div>
+          </div>
+          <div class="ws-diag-session-cell">
+            <span class="ws-diag-session-label">Cluster playback</span>
+            <div>${clusterLine}</div>
+          </div>
+          <div class="ws-diag-session-cell">
+            <span class="ws-diag-session-label">Bridge &amp; service worker</span>
+            <div class="ws-diag-session-sub">${swShort}</div>
+            <div class="ws-diag-session-sub ws-diag-muted">Tab→BG fail ×${msgFail} · server err ×${eo.serverErrors} · SYNC_STATE deferred (no video) ${eo.syncStateDeferredNoVideo ?? 0}</div>
+          </div>
+          ${primeRow}
+        </div>
+        <div class="ws-diag-overview-compact ws-diag-overview-chips">
+          <span class="ws-diag-chip ws-diag-chip-${diag.tabHidden ? 'syncing' : 'connected'}">${diag.tabHidden ? 'Tab hidden' : 'Tab active'}</span>
+        </div>
+        ${
+          anyAttention
+            ? '<div class="ws-diag-overview-hint ws-diag-warn">Some rows above or categories show <strong>Attention</strong> — use sections below to trace the path.</div>'
+            : '<div class="ws-diag-overview-hint ws-diag-muted">Live session snapshot — expand categories as needed.</div>'
+        }
+        <div class="ws-diag-overview-hint ws-diag-muted" style="margin-top:6px">Full support bundle: <strong>Record &amp; export</strong> (just below) → step 1 record, step 2 export. Compact bar: <strong>Record</strong> + <strong>Export</strong>.</div>
+      `;
     }
-    if (roomEl) {
-      roomEl.textContent = roomState
-        ? `Room: ${roomState.roomCode} | ${(roomState.members || []).length} members`
-        : 'Room: —';
-    }
-    if (videoEl) {
-      videoEl.innerHTML = `Video: <span class="ws-diag-${diag.videoAttached ? 'ok' : 'warn'}">${diag.videoAttached ? 'Attached' : 'Not found'}</span>`;
-    }
-    if (lastEl && diag.lastEvent) {
-      const e = diag.lastEvent;
-      const d = e.detail ? (e.detail.fromUsername || e.detail.source || JSON.stringify(e.detail).slice(0, 30)) : '';
-      lastEl.textContent = `Last: ${e.event} ${d ? '(' + d + ')' : ''} ${formatDiagTime(e.t)}`;
-    } else if (lastEl) {
-      lastEl.textContent = 'Last: —';
+    if (dashAlertsEl) {
+      const errN = diag.errors.length;
+      const parts = [];
+      if (errN) {
+        parts.push(
+          `<div class="ws-diag-alert ws-diag-warn">${errN} error${errN > 1 ? 's' : ''} — open <strong>Logs &amp; sidebar</strong>.</div>`
+        );
+      }
+      for (const t of syncTips.filter((x) => x.level === 'warn').slice(0, 4)) {
+        parts.push(`<div class="ws-diag-alert ws-diag-warn">${t.text}</div>`);
+      }
+      dashAlertsEl.innerHTML = parts.join('');
+      dashAlertsEl.style.display = parts.length ? 'block' : 'none';
     }
     if (sidebarEl) {
       const s = diag.sidebar;
@@ -2900,11 +4503,11 @@ export function runPlayShareContent() {
         : '<div class="ws-diag-row ws-diag-muted">No errors</div>';
     }
 
-    const syncTabContent = diagPanel?.querySelector('.ws-diag-tab-content[data-diag-tab="sync"]');
-    if (syncTabContent?.classList.contains('active')) {
+    {
       const s = diag.sync;
       const m = s.metrics;
       const staleEl = diagPanel.querySelector('[data-diag="sync-stale"]');
+      const profileLineEl = diagPanel.querySelector('[data-diag="sync-profile-line"]');
       const timingEl = diagPanel.querySelector('[data-diag="sync-timing"]');
       const videoHealthEl = diagPanel.querySelector('[data-diag="sync-video-health"]');
       const findVideoEl = diagPanel.querySelector('[data-diag="sync-findvideo"]');
@@ -2924,20 +4527,25 @@ export function runPlayShareContent() {
       if (staleEl) {
         if (diag.tabHidden) {
           staleEl.classList.add('visible');
-          staleEl.textContent = 'Tab hidden — sync apply may wait until visible; diagnostics still update.';
+          staleEl.textContent = 'Tab hidden — remote play/pause may wait until you return to this tab.';
         } else {
           staleEl.classList.remove('visible');
           staleEl.textContent = '';
         }
       }
+      if (profileLineEl) {
+        const iv = playbackProfile;
+        profileLineEl.innerHTML = `<div class="ws-diag-row"><code>${iv.handlerKey}</code> · host pos ${iv.hostPositionIntervalMs}ms · reconcile ${iv.viewerReconcileIntervalMs}ms · apply debounce ${iv.applyDebounceMs}ms · outbound coalesce ${iv.playbackOutboundCoalesceMs ?? 0}ms · slack ${iv.playbackSlackSec != null ? iv.playbackSlackSec + 's' : '—'}</div>`;
+      }
       if (timingEl) {
         const rtt = diag.timing.lastRttMs != null ? `${Math.round(diag.timing.lastRttMs)}ms` : '—';
         const ewm = diag.timing.driftEwmSec != null ? `${diag.timing.driftEwmSec.toFixed(3)}s` : '—';
         const lastRecv = s.lastRecvAt ? formatDiagTimeAgo(s.lastRecvAt) : 'never';
+        const rttSrc = diag.timing.lastRttSource || '—';
         timingEl.innerHTML = `
-          <div class="ws-diag-row">Last RTT (heartbeat): ${rtt}</div>
-          <div class="ws-diag-row">Drift EWM (post-apply): ${ewm}</div>
-          <div class="ws-diag-row ws-diag-muted">Last inbound sync event: ${lastRecv}</div>
+          <div class="ws-diag-row">RTT <strong>${rtt}</strong> <span class="ws-diag-muted">(${rttSrc})</span></div>
+          <div class="ws-diag-row">Drift EWM (post-apply): <strong>${ewm}</strong></div>
+          <div class="ws-diag-row ws-diag-muted">Last inbound sync: ${lastRecv}</div>
         `;
       }
       if (videoHealthEl) {
@@ -2952,9 +4560,126 @@ export function runPlayShareContent() {
           : `<div class="ws-diag-row ws-diag-muted">No video element</div>
              <div class="ws-diag-row ws-diag-muted"><code>waiting</code>×${vb.waiting} <code>stalled</code>×${vb.stalled}</div>`;
       }
+      const videoProfilerStatusEl = diagPanel.querySelector('[data-diag="video-profiler-status"]');
+      if (videoProfilerStatusEl) {
+        try {
+          const st = getVideoProfiler().getStatus();
+          const endMs = st.recording ? Date.now() : st.endedAtMs;
+          const durSec =
+            st.startedAtMs != null && endMs != null
+              ? Math.max(0, Math.round((endMs - st.startedAtMs) / 1000))
+              : null;
+          const dur = durSec != null ? `${durSec}s` : '—';
+          const rec = st.recording ? 'Recording' : st.startedAtMs != null ? 'Stopped' : 'Idle';
+          const err = st.lastMediaError ? `${st.lastMediaError.name}` : 'none';
+          const topCounts = Object.entries(st.eventTypeCounts)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5)
+            .map(([k, n]) => `${k}×${n}`)
+            .join(' · ');
+          const um = st.userMarkerCount != null ? st.userMarkerCount : 0;
+          const lim = st.recordingLimits;
+          const capLine =
+            lim && typeof lim.approxMaxWallMinutes === 'number'
+              ? `Every ${lim.snapshotIntervalMs / 1000}s · keeps last <strong>${lim.maxSnapshots}</strong> snaps (~<strong>${lim.approxMaxWallMinutes}</strong> min wall if full) · max <strong>${lim.maxEvents}</strong> events (ring buffer).`
+              : '';
+          videoProfilerStatusEl.innerHTML = `<strong>${rec}</strong> · elapsed ${dur} · snapshots <strong>${st.snapshotCount}</strong> · events <strong>${st.eventCount}</strong> · markers <strong>${um}</strong><br/>
+            <span class="ws-diag-muted">${capLine} Timeline is merged into the <strong>unified</strong> Export report / Copy JSON; stop recording to freeze samples. v3 — EME/PiP, frame callback sample, long tasks. Stall hints: ${st.playheadStallMarkers} · last media error: ${err}${topCounts ? ` · top events: ${topCounts}` : ''}</span>`;
+        } catch {
+          videoProfilerStatusEl.textContent = 'Profiler unavailable.';
+        }
+      }
+      const recToggle = diagPanel.querySelector('#diagCompactRecordToggle');
+      const recLabel = diagPanel.querySelector('[data-diag="compact-rec-label"]');
+      const profilerStartBtn = diagPanel.querySelector('#diagVideoProfilerStart');
+      const profilerStopBtn = diagPanel.querySelector('#diagVideoProfilerStop');
+      const profilerMarkerBtn = diagPanel.querySelector('#diagVideoProfilerMarker');
+      try {
+        const recording = getVideoProfiler().isRecording();
+        const v = findVideo() || video;
+        const canStart = !!v;
+
+        if (profilerStartBtn) {
+          profilerStartBtn.disabled = recording || !canStart;
+          profilerStartBtn.title = recording
+            ? 'Already recording — use Stop when finished'
+            : !canStart
+              ? 'Start playback first — recording needs a video element'
+              : 'Start capturing profiler snapshots into the unified export';
+        }
+        if (profilerStopBtn) {
+          profilerStopBtn.disabled = !recording;
+          profilerStopBtn.title = recording
+            ? 'Stop capturing (freeze profiler timeline for export)'
+            : 'Not recording — nothing to stop';
+        }
+        if (profilerMarkerBtn) {
+          profilerMarkerBtn.disabled = !recording;
+          profilerMarkerBtn.title = recording
+            ? 'Add a labeled point in the JSON timeline'
+            : 'Start recording first to add markers';
+        }
+
+        if (recToggle && recLabel) {
+          recToggle.classList.toggle('ws-diag-compact-rec-active', recording);
+          recToggle.setAttribute('aria-pressed', recording ? 'true' : 'false');
+          recLabel.textContent = recording ? 'Stop' : 'Record';
+          recToggle.disabled = recording ? false : !canStart;
+          recToggle.title = recording
+            ? 'Stop profiler recording'
+            : !canStart
+              ? 'Start playback first — then record'
+              : 'Start profiler recording (included in unified export)';
+        }
+      } catch {
+        if (profilerStartBtn) profilerStartBtn.disabled = false;
+        if (profilerStopBtn) profilerStopBtn.disabled = true;
+        if (profilerMarkerBtn) profilerMarkerBtn.disabled = true;
+        if (recToggle) recToggle.disabled = false;
+        if (recLabel) recLabel.textContent = 'Record';
+      }
       if (findVideoEl) {
         const fv = diag.findVideo;
         findVideoEl.innerHTML = `<div class="ws-diag-row">cache hits: ${fv.cacheReturns} | full scans: ${fv.fullScans} | invalidations: ${fv.invalidations} | attaches: ${fv.videoAttachCount}</div>`;
+      }
+      const primeMissedStatusEl = diagPanel.querySelector('[data-diag="prime-missed-ad-status"]');
+      if (primeMissedStatusEl) {
+        if (diag.lastPrimeMissedAdCapture) {
+          const c = diag.lastPrimeMissedAdCapture;
+          primeMissedStatusEl.textContent = `Ad JSON: ${formatDiagTimeAgo(c.at)} · ${c.clipboardOk ? 'clipboard ok' : 'clipboard failed'}`;
+        } else {
+          primeMissedStatusEl.textContent = 'Ad JSON: not yet';
+        }
+      }
+      const primeSummaryEl = diagPanel.querySelector('[data-diag="sync-prime-summary"]');
+      const primeQuietEl = diagPanel.querySelector('[data-diag-quiet="prime"]');
+      if (primeSummaryEl || primeQuietEl) {
+        if (diag.primeSync) {
+          refreshPrimeSyncTelemetry();
+          const p = diag.primeSync;
+          const drift =
+            typeof p.viewerDriftSec === 'number' && !Number.isNaN(p.viewerDriftSec)
+              ? `${p.viewerDriftSec >= 0 ? '+' : ''}${p.viewerDriftSec.toFixed(2)}s`
+              : '—';
+          const sel = p.selectorThatMatched ? String(p.selectorThatMatched).replace(/</g, '&lt;') : '—';
+          const reasonsStr =
+            p.adReasons && p.adReasons.length
+              ? p.adReasons.map((r) => String(r).replace(/&/g, '&amp;').replace(/</g, '&lt;')).join(', ')
+              : 'none';
+          if (primeSummaryEl) {
+            primeSummaryEl.innerHTML = `
+            <div><span class="ws-diag-${p.inSdkShell ? 'ok' : 'warn'}">Shell ${p.inSdkShell ? '✓' : '?'}</span> · Ad cues <strong>${p.adScore}</strong> · <span class="ws-diag-${p.adDetectorActive ? 'warn' : 'ok'}">${p.adDetectorActive ? 'IN AD' : 'content'}</span> · room ad hold ${p.extensionLocalAd ? 'on' : 'off'} · peers in ad ${p.peersInAd}</div>
+            <div class="ws-diag-muted" style="margin-top:4px">Channels: ${reasonsStr}</div>
+            <div style="margin-top:4px">Viewer Δ host <strong>${drift}</strong> · <code>${sel}</code></div>
+          `;
+          }
+          if (primeQuietEl) {
+            primeQuietEl.textContent = `Shell ${p.inSdkShell ? 'OK' : 'check'} · ${p.adDetectorActive ? 'Ad UI' : 'Content'} · Δhost ${drift}`;
+          }
+        } else {
+          if (primeSummaryEl) primeSummaryEl.innerHTML = '<span class="ws-diag-muted">Prime telemetry not active.</span>';
+          if (primeQuietEl) primeQuietEl.textContent = 'Prime telemetry not active yet.';
+        }
       }
       if (tuJumpsEl) {
         const jumps = diag.timeupdateJumps.slice(0, 6);
@@ -2990,11 +4715,10 @@ export function runPlayShareContent() {
             : '—';
         const cs = diag.clusterSync;
         const clusterLine = cs
-          ? `<div class="ws-diag-row ws-diag-muted">Cluster: ${cs.label}${cs.staleCount ? ` · ${cs.staleCount} stale` : ''}</div>`
-          : '<div class="ws-diag-row ws-diag-muted">Cluster: — (no snapshot yet)</div>';
+          ? `<div class="ws-diag-row">${cs.label}${cs.staleCount ? ` · ${cs.staleCount} stale reports` : ''}${cs.freshMemberCount != null ? ` · ${cs.freshMemberCount} fresh` : ''}</div>`
+          : '<div class="ws-diag-row ws-diag-muted">No cluster snapshot yet</div>';
         thisDeviceEl.innerHTML = `
-          <div class="ws-diag-row">${platform.name} | ${roomState?.isHost ? 'Host' : 'Viewer'}</div>
-          <div class="ws-diag-row">Video: ${diag.videoAttached ? '✓' : '✗'} | Room: ${roomState?.roomCode || '—'} | Tab: ${diag.tabHidden ? 'hidden' : 'visible'}</div>
+          <div class="ws-diag-row">${platform.name} · Tab <strong>${diag.tabHidden ? 'hidden' : 'visible'}</strong></div>
           <div class="ws-diag-row ws-diag-muted">Room rules: ${pol}</div>
           ${clusterLine}
         `;
@@ -3019,36 +4743,84 @@ export function runPlayShareContent() {
         `;
       }
       if (metricsEl) {
-        const playRate = m.playOk + m.playFail > 0 ? ((m.playOk / (m.playOk + m.playFail)) * 100).toFixed(0) : '—';
-        const pauseRate = m.pauseOk + m.pauseFail > 0 ? ((m.pauseOk / (m.pauseOk + m.pauseFail)) * 100).toFixed(0) : '—';
-        const seekRate = m.seekOk + m.seekFail > 0 ? ((m.seekOk / (m.seekOk + m.seekFail)) * 100).toFixed(0) : '—';
+        const rate = (ok, fail) => {
+          const t = ok + fail;
+          return t > 0 ? `${Math.round((ok / t) * 100)}%` : '—';
+        };
         const testExtra = s.testResults?.done && s.testResults.peerTimeouts != null
-          ? `<div class="ws-diag-row">Test peer wait timeouts: ${s.testResults.peerTimeouts} (need 2+ members for peer rows)</div>`
+          ? `<div class="ws-diag-row ws-diag-muted">Soak: peer wait timeouts ${s.testResults.peerTimeouts}</div>`
           : '';
         metricsEl.innerHTML = `
-          <div class="ws-diag-row">Play: ${m.playSent} sent / ${m.playRecv} recv / ${m.playOk}✓ ${m.playFail}✗ (${playRate}%)</div>
-          <div class="ws-diag-row">Pause: ${m.pauseSent} sent / ${m.pauseRecv} recv / ${m.pauseOk}✓ ${m.pauseFail}✗ (${pauseRate}%)</div>
-          <div class="ws-diag-row">Seek: ${m.seekSent} sent / ${m.seekRecv} recv / ${m.seekOk}✓ ${m.seekFail}✗ (${seekRate}%)</div>
-          ${s.testRunning ? '<div class="ws-diag-row ws-diag-warn">Test running…</div>' : ''}
-          ${s.testResults?.done ? `<div class="ws-diag-row">Test done in ${((Date.now() - s.testResults.start) / 1000).toFixed(1)}s${s.testResults.soakRounds > 1 ? ` (${s.testResults.soakRounds} rounds)` : ''}</div>` : ''}
+          <div class="ws-diag-row"><strong>▶</strong> ${m.playOk}✓ ${m.playFail}✗ (${rate(m.playOk, m.playFail)}) · ${m.playSent}→sent ${m.playRecv}←in</div>
+          <div class="ws-diag-row"><strong>⏸</strong> ${m.pauseOk}✓ ${m.pauseFail}✗ (${rate(m.pauseOk, m.pauseFail)}) · ${m.pauseSent}→ ${m.pauseRecv}←</div>
+          <div class="ws-diag-row"><strong>⏩</strong> ${m.seekOk}✓ ${m.seekFail}✗ (${rate(m.seekOk, m.seekFail)}) · ${m.seekSent}→ ${m.seekRecv}←</div>
+          ${s.testRunning ? '<div class="ws-diag-row ws-diag-warn">Sync test running…</div>' : ''}
+          ${s.testResults?.done ? `<div class="ws-diag-row ws-diag-muted">Last test ${((Date.now() - s.testResults.start) / 1000).toFixed(1)}s${s.testResults.soakRounds > 1 ? ` ×${s.testResults.soakRounds}` : ''}</div>` : ''}
           ${testExtra}
         `;
       }
       if (peersEl) {
         const peers = Object.entries(s.peerReports);
-        peersEl.innerHTML = peers.length
-          ? peers.map(([cid, r]) => {
+        const sampleByPeer = diag.peerRecordingSamples.byClient;
+        const sampleKeys = Object.keys(sampleByPeer);
+        const peerSamplesLine =
+          diagnosticsUiEnabled && sampleKeys.length > 0
+            ? `<div class="ws-diag-row ws-diag-muted">Profiler peer samples (unified export): ${sampleKeys
+                .map((cid) => {
+                  const rows = sampleByPeer[cid];
+                  const u = rows && rows[0] && typeof rows[0].fromUsername === 'string' ? rows[0].fromUsername : '';
+                  return `${u || String(cid).slice(0, 8) + '…'} ×${rows?.length ?? 0}`;
+                })
+                .join(' · ')} · every ${DIAG_PEER_DEV_SHARE_MS / 1000}s while a dev peer records</div>`
+            : '';
+        const peerHint = diagnosticsUiEnabled
+          ? ' Dev peers stream compact samples to the tab that is recording the video profiler; unified JSON includes them. Otherwise use Request peer report.'
+          : '';
+        peersEl.innerHTML =
+          peerSamplesLine +
+          (peers.length
+            ? peers.map(([cid, r]) => {
               const ago = formatDiagTimeAgo(r.lastReceived);
               const pm = r.metrics || {};
               const pPlay = (pm.playOk || 0) + (pm.playFail || 0) > 0 ? ((pm.playOk || 0) / ((pm.playOk || 0) + (pm.playFail || 0)) * 100).toFixed(0) : '—';
               const pPause = (pm.pauseOk || 0) + (pm.pauseFail || 0) > 0 ? ((pm.pauseOk || 0) / ((pm.pauseOk || 0) + (pm.pauseFail || 0)) * 100).toFixed(0) : '—';
               const pSeek = (pm.seekOk || 0) + (pm.seekFail || 0) > 0 ? ((pm.seekOk || 0) / ((pm.seekOk || 0) + (pm.seekFail || 0)) * 100).toFixed(0) : '—';
+              const dd = r.devDiag;
+              let devLines = '';
+              if (dd && typeof dd === 'object') {
+                const tim = /** @type {{ lastRttMs?: number, lastRttSource?: string, driftEwmSec?: number }} */ (dd.timing || {});
+                const tr = /** @type {{ connectionStatus?: string, transportPhase?: string }} */ (dd.transport || {});
+                const cs = /** @type {{ spreadSec?: number, synced?: boolean }|null} */ (dd.clusterSync || null);
+                const pb = /** @type {{ ct?: number|null, playing?: boolean|null, rs?: number|null }} */ (dd.playback || {});
+                const vp = /** @type {{ snapshotCount?: number, recording?: boolean }|null} */ (dd.videoProfiler || null);
+                const parts = [];
+                if (typeof tim.lastRttMs === 'number') {
+                  parts.push(
+                    `RTT ${Math.round(tim.lastRttMs)}ms${tim.lastRttSource ? ` (${tim.lastRttSource})` : ''}`
+                  );
+                }
+                if (typeof tim.driftEwmSec === 'number') parts.push(`drift EWM ${tim.driftEwmSec.toFixed(2)}s`);
+                if (tr.connectionStatus) parts.push(`${tr.connectionStatus}${tr.transportPhase ? ` · ${tr.transportPhase}` : ''}`);
+                if (cs && typeof cs.spreadSec === 'number') {
+                  parts.push(`cluster Δ${cs.spreadSec.toFixed(2)}s${cs.synced ? ' ✓' : ''}`);
+                }
+                if (pb && pb.ct != null) {
+                  parts.push(`t=${pb.ct}s${pb.playing ? ' ▶' : ' ⏸'}`);
+                }
+                if (vp && typeof vp.snapshotCount === 'number') {
+                  parts.push(`profiler ${vp.snapshotCount} snaps${vp.recording ? ' · rec' : ''}`);
+                }
+                if (parts.length) {
+                  devLines = `<div class="ws-diag-row ws-diag-muted" style="font-size:11px;line-height:1.35">${parts.join(' · ')}</div>`;
+                }
+              }
               return `<div class="ws-diag-peer">
                 <div class="ws-diag-row">${r.username || cid} (${r.platform || '?'}) ${r.isHost ? '👑' : ''}</div>
                 <div class="ws-diag-row ws-diag-muted">Play ${pPlay}% | Pause ${pPause}% | Seek ${pSeek}% | ${ago}</div>
+                ${devLines}
               </div>`;
             }).join('')
-          : '<div class="ws-diag-row ws-diag-muted">No peer data. Open diagnostic on both devices & click "Request peer report"</div>';
+            : `<div class="ws-diag-row ws-diag-muted">No peer report rows yet.${peerHint} Manual: Request peer report.</div>`);
       }
       if (remoteEl) {
         const rem = s.remoteApplyResults.slice(0, 10);
@@ -3062,8 +4834,9 @@ export function runPlayShareContent() {
           : '<div class="ws-diag-row ws-diag-muted">When you send play/pause/seek, peers report back here</div>';
       }
       if (suggestionsEl) {
-        const tips = getSyncSuggestions();
-        suggestionsEl.innerHTML = tips.map(t => `<div class="ws-diag-row ws-diag-${t.level}">${t.text}</div>`).join('') || '<div class="ws-diag-row ws-diag-muted">No suggestions</div>';
+        suggestionsEl.innerHTML =
+          syncTips.map((t) => `<div class="ws-diag-row ws-diag-${t.level}">${t.text}</div>`).join('') ||
+          '<div class="ws-diag-row ws-diag-muted">No suggestions</div>';
       }
       if (eventsEl) {
         const filt = (s.eventFilter || '').trim().toLowerCase();
@@ -3080,6 +4853,11 @@ export function runPlayShareContent() {
             }).join('')
           : '<div class="ws-diag-row ws-diag-muted">No sync events yet (adjust filter)</div>';
       }
+
+      applyDiagSectionVisibility(catIssues);
+      applyDashboardBlockVisibility();
+      syncDashLayoutCheckboxesFromDiag();
+      updateCompactConsoleStrip(catIssues);
     }
   }
 
@@ -3090,6 +4868,7 @@ export function runPlayShareContent() {
     diagVisible = !diagVisible;
     if (diagVisible) {
       if (!diagOverlay) injectDiagnosticOverlay();
+      reparentPlayShareUiForFullscreen();
       diagOverlay.style.display = 'flex';
       diagOverlay.setAttribute('aria-hidden', 'false');
       try {
@@ -3112,10 +4891,12 @@ export function runPlayShareContent() {
       sendDiagReport();
       sendBg({ source: 'playshare', type: 'DIAG_ROOM_TRACE_REQUEST' });
     } else if (diagOverlay) {
+      closeDiagDashModal();
       diagOverlay.style.display = 'none';
       diagOverlay.setAttribute('aria-hidden', 'true');
       if (diagRefreshInterval) { clearInterval(diagRefreshInterval); diagRefreshInterval = null; }
     }
+    if (siteSync.key === 'prime') syncPrimeTelemetryPolling();
   }
 
   function injectDiagnosticOverlay() {
@@ -3128,164 +4909,286 @@ export function runPlayShareContent() {
       display:none;position:fixed;z-index:2147483647;
       left:16px;bottom:16px;top:auto;right:auto;
       flex-direction:column;align-items:flex-start;gap:0;
-      font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
-      font-size:12px;line-height:1.45;pointer-events:auto;
+      font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+      font-size:13px;line-height:1.5;pointer-events:auto;
       max-width:calc(100vw - 24px);
     `;
 
     diagPanel = document.createElement('div');
     diagPanel.className = 'ws-diag-panel';
     diagPanel.setAttribute('role', 'dialog');
-    diagPanel.setAttribute('aria-label', 'PlayShare sync diagnostics (developer tool)');
+    diagPanel.setAttribute('aria-label', 'PlayShare sync analytics console');
     diagPanel.innerHTML = `
       <div class="ws-diag-header">
-        <div class="ws-diag-header-top">
-          <button type="button" class="ws-diag-drag" title="Drag panel">⠿</button>
-          <div class="ws-diag-brand">
-            <span class="ws-diag-title">Sync diagnostics</span>
-            <span class="ws-diag-dev-badge">DEV</span>
+        <div class="ws-diag-header-accent" aria-hidden="true"></div>
+        <div class="ws-diag-header-main">
+          <button type="button" class="ws-diag-drag" title="Drag panel"><span class="ws-diag-drag-grip" aria-hidden="true"></span></button>
+          <div class="ws-diag-header-center ws-diag-header-brand">
+            <div class="ws-diag-header-title-row">
+              <span class="ws-diag-title">Sync analytics</span>
+              <span class="ws-diag-dev-badge">DEV</span>
+            </div>
           </div>
-          <div class="ws-diag-header-actions">
-            <button type="button" class="ws-diag-icon-btn" id="diagWideToggle" title="Wider / narrower panel">⤢</button>
-            <button type="button" class="ws-diag-icon-btn ws-diag-minimize-btn" title="Minimize">▁</button>
-            <button type="button" class="ws-diag-icon-btn ws-diag-close" title="Close (Ctrl+Shift+D)">×</button>
+          <div class="ws-diag-header-aside">
+            <div class="ws-diag-header-icon-rail" role="toolbar" aria-label="Panel">
+              <button type="button" class="ws-diag-icon-btn ws-diag-icon-customize" id="diagDashCustomizeOpen" title="Customize visible sections"></button>
+              <button type="button" class="ws-diag-icon-btn" id="diagConsoleViewToggle" title="Dashboard ↔ compact strip" aria-pressed="true"><span class="ws-diag-icon-console-view" aria-hidden="true"></span></button>
+              <button type="button" class="ws-diag-icon-btn" id="diagWideToggle" title="Wider panel"><span class="ws-diag-icon-wide" aria-hidden="true"></span></button>
+              <button type="button" class="ws-diag-icon-btn ws-diag-minimize-btn" title="Minimize"><span class="ws-diag-icon-min" aria-hidden="true"></span></button>
+              <button type="button" class="ws-diag-icon-btn ws-diag-close" title="Close (⌃⇧D)"><span class="ws-diag-icon-x" aria-hidden="true"></span></button>
+            </div>
           </div>
-        </div>
-        <p class="ws-diag-subhint">Internal only — refine sync · <kbd>⌃</kbd><kbd>⇧</kbd><kbd>D</kbd> toggles · not in release build</p>
-        <div class="ws-diag-tab-row">
-          <button type="button" class="ws-diag-tab active" data-diag-tab="general">General</button>
-          <button type="button" class="ws-diag-tab" data-diag-tab="sync">Sync</button>
         </div>
       </div>
-      <div class="ws-diag-tab-content active" data-diag-tab="general">
-        <div class="ws-diag-body ws-diag-body-scroll">
-          <details class="ws-diag-details" open>
-            <summary>Connection & media</summary>
-            <div class="ws-diag-card">
-              <div data-diag="connection">Connection: —</div>
-              <div data-diag="room">Room: —</div>
-              <div data-diag="video">Video: —</div>
-              <div data-diag="last" class="ws-diag-last-line">Last: —</div>
-            </div>
-          </details>
-          <details class="ws-diag-details" open>
-            <summary>Sidebar</summary>
-            <div class="ws-diag-card">
-              <div data-diag="sidebar" class="ws-diag-sidebar"></div>
-              <div class="ws-diag-actions">
-                <button type="button" class="ws-diag-btn ws-diag-btn-secondary" id="diagForceOpen">Force open sidebar</button>
-              </div>
-            </div>
-          </details>
-          <details class="ws-diag-details" open>
-            <summary>Recent events</summary>
-            <div data-diag="messages" class="ws-diag-list ws-diag-scrollbox-sm"></div>
-          </details>
-          <details class="ws-diag-details" open>
-            <summary>Errors</summary>
-            <div data-diag="errors" class="ws-diag-list ws-diag-scrollbox-sm"></div>
-          </details>
+      <div class="ws-diag-compact-root ws-diag-body-scroll">
+        <div class="ws-diag-compact-components" role="group" aria-label="Sync, ad detection, video">
+          <button type="button" class="ws-diag-comp-tile ws-diag-comp-ok" data-diag-comp="sync" title="Sync — open multiplayer &amp; transport in dashboard">
+            <span class="ws-diag-comp-ic" aria-hidden="true"><svg class="ws-diag-comp-svg" viewBox="0 0 24 24"><path fill="currentColor" d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.96 7.96 0 0020 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.96 7.96 0 004 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg></span>
+            <span class="ws-diag-comp-name">Sync</span>
+            <span class="ws-diag-comp-line" data-diag-comp-line="sync"></span>
+          </button>
+          <button type="button" class="ws-diag-comp-tile ws-diag-comp-ok" data-diag-comp="ad" title="Ad detection — open Prime or technical in dashboard">
+            <span class="ws-diag-comp-ic" aria-hidden="true"><svg class="ws-diag-comp-svg" viewBox="0 0 24 24"><path fill="currentColor" d="M18 4H6a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2zm0 14H6V6h12v12zm-8-9v6l4-3-4-3z"/></svg></span>
+            <span class="ws-diag-comp-name">Ad</span>
+            <span class="ws-diag-comp-line" data-diag-comp-line="ad"></span>
+          </button>
+          <button type="button" class="ws-diag-comp-tile ws-diag-comp-ok" data-diag-comp="video" title="Video — open technical in dashboard">
+            <span class="ws-diag-comp-ic" aria-hidden="true"><svg class="ws-diag-comp-svg" viewBox="0 0 24 24"><path fill="currentColor" d="M17 10.5V7a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h12a1 1 0 001-1v-3.5l4 4v-11l-4 4z"/></svg></span>
+            <span class="ws-diag-comp-name">Video</span>
+            <span class="ws-diag-comp-line" data-diag-comp-line="video"></span>
+          </button>
+        </div>
+        <div class="ws-diag-compact-snaps">
+          <button type="button" class="ws-diag-btn ws-diag-btn-sm ws-diag-compact-rec" id="diagCompactRecordToggle" aria-pressed="false" title="Start or stop session recording (video profiler — included in unified export)">
+            <span class="ws-diag-rec-dot" aria-hidden="true"></span><span data-diag="compact-rec-label">Record</span>
+          </button>
+          ${
+            siteSync.key === 'prime'
+              ? `<button type="button" class="ws-diag-btn ws-diag-btn-sm ws-diag-btn-missed-ad diag-prime-missed-ad-btn" title="Missed-ad investigation only (not in unified export)">Ad snap</button>
+            <button type="button" class="ws-diag-btn ws-diag-btn-sm ws-diag-btn-primary-compact" id="diagCompactUnifiedExport" title="Download full report: extension + recording + Prime">Export</button>`
+              : '<button type="button" class="ws-diag-btn ws-diag-btn-sm ws-diag-btn-primary-compact" id="diagCompactExport" title="Download full report: extension + recording">Export</button>'
+          }
         </div>
       </div>
-      <div class="ws-diag-tab-content" data-diag-tab="sync">
-        <div class="ws-diag-body ws-diag-body-scroll">
-          <div data-diag="sync-stale" class="ws-diag-stale-banner" aria-live="polite"></div>
+      <div class="ws-diag-detailed-root ws-diag-body-scroll">
+        <div data-diag="sync-stale" class="ws-diag-stale-banner" aria-live="polite"></div>
 
-          <details class="ws-diag-details" open>
-            <summary>Overview · timing · device</summary>
-            <div class="ws-diag-card ws-diag-metrics-grid">
-              <div class="ws-diag-metric-block">
-                <span class="ws-diag-metric-label">Timing &amp; drift</span>
-                <div data-diag="sync-timing" class="ws-diag-sync-block"></div>
-              </div>
-              <div class="ws-diag-metric-block">
-                <span class="ws-diag-metric-label">This device</span>
-                <div data-diag="sync-this-device" class="ws-diag-sync-block"></div>
-              </div>
-              <div class="ws-diag-metric-block ws-diag-span-2">
-                <span class="ws-diag-metric-label">Extension bridge (counters)</span>
-                <div data-diag="sync-extension-bridge" class="ws-diag-sync-block"></div>
-              </div>
-              <div class="ws-diag-metric-block ws-diag-span-2">
-                <span class="ws-diag-metric-label">Video element</span>
-                <div data-diag="sync-video-health" class="ws-diag-sync-block"></div>
+        <div data-diag-dash-block="overview">
+        <div class="ws-diag-section-label">Session overview</div>
+        <div data-diag="dash-summary" class="ws-diag-dash-summary"></div>
+        </div>
+        <div data-diag-dash-block="alerts">
+        <div data-diag="dash-alerts" class="ws-diag-dash-alerts" aria-live="polite"></div>
+        </div>
+
+        <div data-diag-dash-block="actions" class="ws-diag-dash-actions-wrap">
+        <div class="ws-diag-section-label">Record &amp; export</div>
+        <div class="ws-diag-record-export-card">
+          <p class="ws-diag-record-export-lead">Capture a <strong>single JSON</strong> for support: sync analytics, server connectivity, optional Prime digest, and <strong>video profiler snapshots</strong> from this session. Optional: <strong>Stop</strong> recording first to freeze the profiler timeline; export still works while recording.</p>
+          <div class="ws-diag-workflow-steps">
+            <div class="ws-diag-workflow-step">
+              <div class="ws-diag-step-badge" aria-hidden="true">1</div>
+              <div class="ws-diag-step-body">
+                <div class="ws-diag-step-title">Record session</div>
+                <div data-diag="video-profiler-status" class="ws-diag-row ws-diag-muted ws-diag-profiler-status-compact">Idle — press Start when the video is playing.</div>
+                <div class="ws-diag-step-actions-row">
+                  <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerStart">Start recording</button>
+                  <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerStop">Stop</button>
+                  <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerMarker" title="Add a labeled point in the JSON timeline">Mark moment</button>
+                  <button type="button" class="ws-diag-btn ws-diag-btn-ghost ws-diag-btn-sm" id="diagVideoProfilerClear" title="Discard captured snapshots and events">Clear session</button>
+                </div>
               </div>
             </div>
-          </details>
-
-          <details class="ws-diag-details" open>
-            <summary>Player &amp; DOM</summary>
-            <div class="ws-diag-card">
-              <span class="ws-diag-inline-label">findVideo cache</span>
-              <div data-diag="sync-findvideo" class="ws-diag-sync-block ws-diag-scrollbox"></div>
-              <span class="ws-diag-inline-label">Timeupdate jumps</span>
-              <div data-diag="sync-tujumps" class="ws-diag-sync-block ws-diag-scrollbox"></div>
-              <span class="ws-diag-inline-label">Apply timeline (local)</span>
-              <div data-diag="sync-timeline" class="ws-diag-sync-block ws-diag-scrollbox"></div>
-            </div>
-          </details>
-
-          <details class="ws-diag-details" open>
-            <summary>Server trace</summary>
-            <div class="ws-diag-card">
-              <div data-diag="sync-server-trace" class="ws-diag-sync-block ws-diag-scrollbox"></div>
-              <div class="ws-diag-actions">
-                <button type="button" class="ws-diag-btn ws-diag-btn-secondary" id="diagRoomTraceRefresh">Refresh server trace</button>
+            <div class="ws-diag-workflow-step">
+              <div class="ws-diag-step-badge" aria-hidden="true">2</div>
+              <div class="ws-diag-step-body">
+                <div class="ws-diag-step-title">Save full report</div>
+                <p class="ws-diag-step-hint ws-diag-muted">Refreshes RTT and server trace, then bundles everything into one file.</p>
+                <div class="ws-diag-step-export-row">
+                  <button type="button" class="ws-diag-btn" id="diagExportDownload" title="Unified JSON: extension + connectivity + profiler + Prime (on Prime)">Export report</button>
+                  <details class="ws-diag-details ws-diag-details-more ws-diag-details-more-inline">
+                    <summary class="ws-diag-more-summary">More formats &amp; tools</summary>
+                    <div class="ws-diag-more-inner">
+                      <div class="ws-diag-more-group">
+                        <span class="ws-diag-more-label">Export</span>
+                        <div class="ws-diag-actions ws-diag-actions-col">
+                          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagExportCopy" title="Same unified bundle as Export report">Copy JSON</button>
+                          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagExportCopyCompactProfiler" title="Unified JSON with trimmed profiler snapshots">Copy JSON (compact profiler)</button>
+                          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagExportDownloadWithProfilerFrame" title="Large file: embeds profiler JPEG when canvas is not DRM-blocked">Download + video frame</button>
+                          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagExportNarrativeCopy">Copy text summary</button>
+                          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagExportNarrativeDownload">Download .txt</button>
+                        </div>
+                      </div>
+                      <div class="ws-diag-more-group">
+                        <span class="ws-diag-more-label">Diagnostics</span>
+                        <div class="ws-diag-actions ws-diag-actions-col">
+                          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagSyncTest">Sync test</button>
+                          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagSyncTestSoak">Sync test ×5</button>
+                          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagSyncReport">Request peer report</button>
+                          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagSyncReset">Reset metrics</button>
+                          <button type="button" class="ws-diag-btn ws-diag-btn-ghost ws-diag-btn-sm" id="diagThemeToggle">Toggle theme</button>
+                        </div>
+                      </div>
+                    </div>
+                  </details>
+                </div>
               </div>
             </div>
-          </details>
+          </div>
+        </div>
+        </div>
 
-          <details class="ws-diag-details" open>
-            <summary>Metrics · peers · remote applies</summary>
-            <div class="ws-diag-card">
-              <span class="ws-diag-inline-label">Counts (this device)</span>
-              <div data-diag="sync-metrics" class="ws-diag-sync-block ws-diag-scrollbox"></div>
-              <span class="ws-diag-inline-label">Peer snapshots</span>
+        ${
+          siteSync.key === 'prime'
+            ? `<div class="ws-diag-prime-wrap" data-diag-sec-wrap="prime" data-diag-dash-block="prime">
+          <div class="ws-diag-section-label ws-diag-sec-head-prime">
+            <span>Prime</span>
+            <span data-diag-sec-badge class="ws-diag-sec-badge ws-diag-badge-ok">OK</span>
+          </div>
+          <p class="ws-diag-sec-quiet" data-diag-quiet="prime">Prime player looks normal.</p>
+          <div data-diag-body="prime">
+            <div data-diag="sync-prime-summary" class="ws-diag-prime-summary"></div>
+          </div>
+          <div class="ws-diag-prime-snapshot-row">
+            <button type="button" class="ws-diag-btn ws-diag-btn-sm ws-diag-btn-missed-ad diag-prime-missed-ad-btn" id="diagPrimeMissedAdCapture" title="Missed-ad investigation only — separate from unified export">Ad snapshot</button>
+          </div>
+          <div class="ws-diag-prime-status-compact ws-diag-muted" aria-live="polite">
+            <span data-diag="prime-missed-ad-status"></span><span class="ws-diag-status-sep"> · </span><span>Prime player digest is included in <strong>Export report</strong> / <strong>Copy JSON</strong>.</span>
+          </div>
+        </div>`
+            : ''
+        }
+
+        <div class="ws-diag-section-label ws-diag-section-label-tight">Categories</div>
+
+        <details class="ws-diag-details" data-diag-sec="multiplayer" data-diag-dash-block="multiplayer" open>
+          <summary class="ws-diag-sec-sum">
+            <span class="ws-diag-sec-name">Multiplayer</span>
+            <span data-diag-sec-badge class="ws-diag-sec-badge ws-diag-badge-ok">OK</span>
+          </summary>
+          <div class="ws-diag-card">
+            <p class="ws-diag-sec-quiet" data-diag-quiet="multiplayer">No multiplayer sync issues detected.</p>
+            <div data-diag-body="multiplayer">
+              <span class="ws-diag-inline-label">Applies (this tab)</span>
+              <div data-diag="sync-metrics" class="ws-diag-sync-block ws-diag-scrollbox-sm"></div>
+              <span class="ws-diag-inline-label">Peers</span>
               <div data-diag="sync-peers" class="ws-diag-sync-block ws-diag-scrollbox-md"></div>
-              <span class="ws-diag-inline-label">Remote apply results</span>
+              <span class="ws-diag-inline-label">Remote results</span>
               <div data-diag="sync-remote-results" class="ws-diag-sync-block ws-diag-scrollbox-md"></div>
               <span class="ws-diag-inline-label">Suggestions</span>
               <div data-diag="sync-suggestions" class="ws-diag-sync-block ws-diag-scrollbox-sm"></div>
             </div>
-          </details>
+          </div>
+        </details>
 
-          <details class="ws-diag-details" open>
-            <summary>Live sync event log</summary>
-            <div class="ws-diag-card">
-              <label class="ws-diag-filter-label" for="diagEventFilter">Filter rows</label>
-              <input type="search" id="diagEventFilter" class="ws-diag-filter" placeholder="e.g. play_recv, alice, correlation…" autocomplete="off" />
+        <details class="ws-diag-details" data-diag-sec="server" data-diag-dash-block="server" open>
+          <summary class="ws-diag-sec-sum">
+            <span class="ws-diag-sec-name">Server trace &amp; timeline</span>
+            <span data-diag-sec-badge class="ws-diag-sec-badge ws-diag-badge-ok">OK</span>
+          </summary>
+          <div class="ws-diag-card">
+            <p class="ws-diag-sec-quiet" data-diag-quiet="server">Transport and trace look healthy.</p>
+            <div data-diag-body="server">
+              <div class="ws-diag-actions">
+                <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagRoomTraceRefresh">Refresh trace</button>
+              </div>
+              <span class="ws-diag-inline-label">Server</span>
+              <div data-diag="sync-server-trace" class="ws-diag-sync-block ws-diag-scrollbox"></div>
+              <span class="ws-diag-inline-label">Local timeline</span>
+              <div data-diag="sync-timeline" class="ws-diag-sync-block ws-diag-scrollbox"></div>
+            </div>
+          </div>
+        </details>
+
+        <details class="ws-diag-details" data-diag-sec="technical" data-diag-dash-block="technical" open>
+          <summary class="ws-diag-sec-sum">
+            <span class="ws-diag-sec-name">Technical</span>
+            <span data-diag-sec-badge class="ws-diag-sec-badge ws-diag-badge-ok">OK</span>
+          </summary>
+          <div class="ws-diag-card">
+            <p class="ws-diag-sec-quiet" data-diag-quiet="technical">Timing, video, and counters look normal.</p>
+            <div data-diag-body="technical">
+              <span class="ws-diag-inline-label">Timing</span>
+              <div data-diag="sync-timing" class="ws-diag-sync-block"></div>
+              <span class="ws-diag-inline-label">Profile</span>
+              <div data-diag="sync-profile-line" class="ws-diag-sync-block ws-diag-muted"></div>
+              <span class="ws-diag-inline-label">Transport &amp; counters</span>
+              <div data-diag="sync-extension-bridge" class="ws-diag-sync-block ws-diag-tech-dense"></div>
+              <span class="ws-diag-inline-label">Video</span>
+              <div data-diag="sync-video-health" class="ws-diag-sync-block"></div>
+              <div class="ws-diag-sync-block ws-diag-muted" style="font-size:11px;line-height:1.45;margin-bottom:8px">
+                <strong>Video profiler</strong> — use <strong>Record &amp; export</strong> above (steps 1–2). With other dev clients in the room, peer samples during recording show under <strong>Multiplayer → Peers</strong>.
+              </div>
+              <span class="ws-diag-inline-label">Device &amp; cluster</span>
+              <div data-diag="sync-this-device" class="ws-diag-sync-block"></div>
+              <span class="ws-diag-inline-label">findVideo</span>
+              <div data-diag="sync-findvideo" class="ws-diag-sync-block"></div>
+              <span class="ws-diag-inline-label">Timeupdate jumps</span>
+              <div data-diag="sync-tujumps" class="ws-diag-sync-block ws-diag-scrollbox-sm"></div>
+            </div>
+          </div>
+        </details>
+
+        <details class="ws-diag-details" data-diag-sec="logs" data-diag-dash-block="logs" open>
+          <summary class="ws-diag-sec-sum">
+            <span class="ws-diag-sec-name">Logs &amp; sidebar</span>
+            <span data-diag-sec-badge class="ws-diag-sec-badge ws-diag-badge-ok">OK</span>
+          </summary>
+          <div class="ws-diag-card">
+            <p class="ws-diag-sec-quiet" data-diag-quiet="logs">No errors and sidebar is available.</p>
+            <div data-diag-body="logs">
+              <span class="ws-diag-inline-label">Sidebar</span>
+              <div data-diag="sidebar" class="ws-diag-sidebar"></div>
+              <div class="ws-diag-actions">
+                <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagForceOpen">Force open sidebar</button>
+              </div>
+              <span class="ws-diag-inline-label">Sync event log</span>
+              <label class="ws-diag-filter-label" for="diagEventFilter">Filter</label>
+              <input type="search" id="diagEventFilter" class="ws-diag-filter" placeholder="play_recv, user, id…" autocomplete="off" />
               <div data-diag="sync-events" class="ws-diag-sync-block ws-diag-scrollbox-lg ws-diag-events"></div>
+              <span class="ws-diag-inline-label">Recent messages</span>
+              <div data-diag="messages" class="ws-diag-list ws-diag-scrollbox-sm"></div>
+              <span class="ws-diag-inline-label">Errors</span>
+              <div data-diag="errors" class="ws-diag-list ws-diag-scrollbox-sm"></div>
             </div>
-          </details>
-
-          <details class="ws-diag-details" open>
-            <summary>Export report · automated tests</summary>
-            <div class="ws-diag-card">
-              <p class="ws-diag-help">Exports are <strong>redacted</strong>. Each export <strong>refreshes RTT</strong> from the service worker and requests a <strong>fresh server trace</strong> (~0.5s) so analysts see a consistent snapshot.</p>
-              <div class="ws-diag-btn-group">
-                <span class="ws-diag-btn-group-label">Export</span>
-                <div class="ws-diag-actions">
-                  <button type="button" class="ws-diag-btn" id="diagExportCopy">Full JSON</button>
-                  <button type="button" class="ws-diag-btn ws-diag-btn-secondary" id="diagExportDownload">Download .json</button>
-                  <button type="button" class="ws-diag-btn ws-diag-btn-secondary" id="diagExportNarrativeCopy">Text summary</button>
-                  <button type="button" class="ws-diag-btn ws-diag-btn-secondary" id="diagExportNarrativeDownload">Download .txt</button>
-                </div>
-              </div>
-              <div class="ws-diag-btn-group">
-                <span class="ws-diag-btn-group-label">Tests &amp; tools</span>
-                <div class="ws-diag-actions">
-                  <button type="button" class="ws-diag-btn" id="diagSyncTest">Run sync test</button>
-                  <button type="button" class="ws-diag-btn ws-diag-btn-secondary" id="diagSyncTestSoak">Soak 5×</button>
-                  <button type="button" class="ws-diag-btn ws-diag-btn-secondary" id="diagSyncReport">Peer report</button>
-                  <button type="button" class="ws-diag-btn ws-diag-btn-secondary" id="diagSyncReset">Reset metrics</button>
-                  <button type="button" class="ws-diag-btn ws-diag-btn-ghost" id="diagThemeToggle">Theme</button>
-                </div>
-              </div>
-            </div>
-          </details>
+          </div>
+        </details>
+      </div>
+      <div id="diagDashModalRoot" class="ws-diag-dash-modal-root" hidden aria-hidden="true">
+        <div class="ws-diag-dash-modal-backdrop" data-diag-dash-modal-dismiss tabindex="-1" aria-hidden="true"></div>
+        <div class="ws-diag-dash-modal-panel" role="dialog" aria-modal="true" aria-labelledby="diagDashModalTitle" tabindex="-1">
+          <div class="ws-diag-dash-modal-head">
+            <h2 id="diagDashModalTitle" class="ws-diag-dash-modal-title">Customize dashboard</h2>
+            <button type="button" class="ws-diag-dash-modal-x" id="diagDashCustomizeClose" aria-label="Close">×</button>
+          </div>
+          <p class="ws-diag-dash-modal-lead">Turn sections on or off in the detailed view. You can always reopen this from the header.</p>
+          <div class="ws-diag-dash-toggles ws-diag-dash-modal-toggles" data-diag-dash-customize>
+            <label class="ws-diag-dash-toggle"><input type="checkbox" data-dash-toggle="overview" checked /> Session overview</label>
+            <label class="ws-diag-dash-toggle"><input type="checkbox" data-dash-toggle="alerts" checked /> Alerts</label>
+            ${siteSync.key === 'prime' ? '<label class="ws-diag-dash-toggle"><input type="checkbox" data-dash-toggle="prime" checked /> Prime</label>' : ''}
+            <label class="ws-diag-dash-toggle"><input type="checkbox" data-dash-toggle="actions" checked /> Record &amp; export</label>
+            <label class="ws-diag-dash-toggle"><input type="checkbox" data-dash-toggle="multiplayer" checked /> Multiplayer</label>
+            <label class="ws-diag-dash-toggle"><input type="checkbox" data-dash-toggle="server" checked /> Server &amp; timeline</label>
+            <label class="ws-diag-dash-toggle"><input type="checkbox" data-dash-toggle="technical" checked /> Technical</label>
+            <label class="ws-diag-dash-toggle"><input type="checkbox" data-dash-toggle="logs" checked /> Logs &amp; sidebar</label>
+          </div>
+          <div class="ws-diag-dash-modal-footer">
+            <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagDashModalReset">Reset all sections</button>
+            <button type="button" class="ws-diag-btn ws-diag-btn-sm" id="diagDashCustomizeDone">Done</button>
+          </div>
         </div>
       </div>
     `;
+
+    const diagDashModalOnEscape = (e) => {
+      if (e.key !== 'Escape' || !diagVisible) return;
+      const root = diagPanel.querySelector('#diagDashModalRoot');
+      if (!root || root.hasAttribute('hidden')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeDiagDashModal();
+    };
+    document.addEventListener('keydown', diagDashModalOnEscape);
 
     const closeBtn = diagPanel.querySelector('.ws-diag-close');
     closeBtn.addEventListener('click', toggleDiagnostic);
@@ -3293,6 +5196,7 @@ export function runPlayShareContent() {
     diagPanel.querySelector('.ws-diag-minimize-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
       diag.panelMinimized = !diag.panelMinimized;
+      if (diag.panelMinimized) closeDiagDashModal();
       diagPanel.classList.toggle('ws-diag-minimized', diag.panelMinimized);
     });
 
@@ -3300,6 +5204,94 @@ export function runPlayShareContent() {
       e.stopPropagation();
       diag.overlayWide = !diag.overlayWide;
       diagPanel.classList.toggle('ws-diag-wide', diag.overlayWide);
+    });
+
+    diagPanel.querySelector('#diagConsoleViewToggle')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setDiagConsoleView(diag.consoleView === 'compact' ? 'detailed' : 'compact');
+    });
+
+    diagPanel.querySelector('#diagCompactExport')?.addEventListener('click', () => {
+      downloadDiagExport().catch(() => diagLog('ERROR', { message: 'Export failed' }));
+    });
+    diagPanel.querySelector('#diagCompactUnifiedExport')?.addEventListener('click', () => {
+      downloadDiagExport().catch(() => diagLog('ERROR', { message: 'Export failed' }));
+    });
+    diagPanel.querySelector('#diagCompactRecordToggle')?.addEventListener('click', () => {
+      try {
+        if (getVideoProfiler().isRecording()) stopVideoProfilerSession();
+        else startVideoProfilerSession();
+      } catch {
+        diagLog('ERROR', { message: 'Profiler toggle failed' });
+      }
+      updateDiagnosticOverlay();
+    });
+
+    diagPanel.querySelector('#diagDashCustomizeOpen')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openDiagDashModal();
+    });
+    diagPanel.querySelector('#diagDashCustomizeClose')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeDiagDashModal();
+    });
+    diagPanel.querySelector('#diagDashCustomizeDone')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeDiagDashModal();
+    });
+    diagPanel.querySelector('#diagDashModalReset')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      for (const k of Object.keys(diag.dashBlocks)) diag.dashBlocks[k] = true;
+      persistDiagConsolePrefs();
+      applyDashboardBlockVisibility();
+      syncDashLayoutCheckboxesFromDiag();
+    });
+    diagPanel.querySelector('#diagDashModalRoot')?.addEventListener('click', (e) => {
+      const t = e.target;
+      if (t instanceof Element && t.closest('[data-diag-dash-modal-dismiss]')) closeDiagDashModal();
+    });
+
+    diagPanel.addEventListener('change', (e) => {
+      const t = e.target;
+      if (!(t instanceof HTMLInputElement) || t.type !== 'checkbox') return;
+      const key = t.getAttribute('data-dash-toggle');
+      if (!key || !(key in diag.dashBlocks)) return;
+      diag.dashBlocks[key] = t.checked;
+      persistDiagConsolePrefs();
+      applyDashboardBlockVisibility();
+    });
+
+    diagPanel.addEventListener('click', (e) => {
+      const compBtn = e.target.closest('[data-diag-comp]');
+      if (compBtn && diagPanel.contains(compBtn)) {
+        const comp = compBtn.getAttribute('data-diag-comp');
+        if (!comp) return;
+        e.preventDefault();
+        setDiagConsoleView('detailed');
+        const openSec = (sec) => {
+          const det = diagPanel.querySelector(`details[data-diag-sec="${sec}"]`);
+          if (det) {
+            det.open = true;
+            det.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          }
+        };
+        if (comp === 'sync') {
+          openSec('multiplayer');
+          return;
+        }
+        if (comp === 'ad') {
+          if (siteSync.key === 'prime') {
+            diagPanel.querySelector('[data-diag-sec-wrap="prime"]')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          } else {
+            openSec('technical');
+          }
+          return;
+        }
+        if (comp === 'video') {
+          openSec('technical');
+        }
+        return;
+      }
     });
 
     const dragBtn = diagPanel.querySelector('.ws-diag-drag');
@@ -3323,17 +5315,6 @@ export function runPlayShareContent() {
     });
     document.addEventListener('mouseup', () => { diagDrag.active = false; });
 
-    diagPanel.querySelectorAll('.ws-diag-tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        diagPanel.querySelectorAll('.ws-diag-tab').forEach(t => t.classList.remove('active'));
-        diagPanel.querySelectorAll('.ws-diag-tab-content').forEach(c => c.classList.remove('active'));
-        tab.classList.add('active');
-        const target = diagPanel.querySelector(`.ws-diag-tab-content[data-diag-tab="${tab.dataset.diagTab}"]`);
-        if (target) target.classList.add('active');
-        updateDiagnosticOverlay();
-      });
-    });
-
     const forceOpenBtn = diagPanel.querySelector('#diagForceOpen');
     if (forceOpenBtn) {
       forceOpenBtn.addEventListener('click', () => {
@@ -3354,11 +5335,56 @@ export function runPlayShareContent() {
     diagPanel.querySelector('#diagRoomTraceRefresh')?.addEventListener('click', () => {
       sendBg({ source: 'playshare', type: 'DIAG_ROOM_TRACE_REQUEST' });
     });
+    const primeMissedAdCaptureHandler = () => {
+      if (siteSync.key !== 'prime') return;
+      try {
+        captureVideoHealthSnapshot();
+        const autoCaptureContext = buildPrimeSnapshotAutoContext();
+        const payload = capturePrimeMissedAdDebugPayload({
+          getVideo: () => findVideo() || video,
+          localAdBreakActive,
+          inRoom: !!roomState,
+          videoHealth: diag.videoHealthLast,
+          autoCaptureContext
+        });
+        const json = JSON.stringify(payload, null, 2);
+        const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        const rc = autoCaptureContext.roomCodeShort || 'noroom';
+        a.download = `playshare-prime-missed-ad-${rc}-${autoCaptureContext.capturedAtMs}.json`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        const finish = (clipboardOk) => {
+          diag.lastPrimeMissedAdCapture = { at: Date.now(), clipboardOk };
+          diagLog('DIAG_EXPORT', { primeMissedAdCapture: true, clipboardOk });
+          updateDiagnosticOverlay();
+        };
+        if (navigator.clipboard?.writeText) {
+          navigator.clipboard.writeText(json).then(() => finish(true), () => finish(false));
+        } else {
+          finish(false);
+        }
+      } catch (e) {
+        diagLog('ERROR', { message: e && e.message ? e.message : String(e) });
+        updateDiagnosticOverlay();
+      }
+    };
+    diagPanel.querySelectorAll('.diag-prime-missed-ad-btn').forEach((b) => {
+      b.addEventListener('click', primeMissedAdCaptureHandler);
+    });
+
     diagPanel.querySelector('#diagExportCopy')?.addEventListener('click', () => {
       copyDiagExport().catch(() => diagLog('ERROR', { message: 'Export failed' }));
     });
     diagPanel.querySelector('#diagExportDownload')?.addEventListener('click', () => {
       downloadDiagExport().catch(() => diagLog('ERROR', { message: 'Export failed' }));
+    });
+    diagPanel.querySelector('#diagExportCopyCompactProfiler')?.addEventListener('click', () => {
+      copyUnifiedExportCompactProfiler().catch(() => diagLog('ERROR', { message: 'Export failed' }));
+    });
+    diagPanel.querySelector('#diagExportDownloadWithProfilerFrame')?.addEventListener('click', () => {
+      downloadUnifiedExportWithProfilerFrame().catch(() => diagLog('ERROR', { message: 'Export failed' }));
     });
     diagPanel.querySelector('#diagExportNarrativeCopy')?.addEventListener('click', () => {
       copyDiagNarrative().catch(() => diagLog('ERROR', { message: 'Export failed' }));
@@ -3380,226 +5406,775 @@ export function runPlayShareContent() {
     const diagSyncReset = diagPanel.querySelector('#diagSyncReset');
     if (diagSyncReset) diagSyncReset.addEventListener('click', resetSyncMetrics);
 
+    diagPanel.querySelector('#diagVideoProfilerStart')?.addEventListener('click', () => {
+      startVideoProfilerSession();
+    });
+    diagPanel.querySelector('#diagVideoProfilerStop')?.addEventListener('click', () => {
+      stopVideoProfilerSession();
+    });
+    diagPanel.querySelector('#diagVideoProfilerMarker')?.addEventListener('click', () => {
+      if (!getVideoProfiler().isRecording()) return;
+      const raw = typeof window !== 'undefined' && window.prompt ? window.prompt('Marker label (optional):', '') : '';
+      const note = raw != null ? String(raw).trim() : '';
+      getVideoProfiler().dropMarker(note || undefined);
+      updateDiagnosticOverlay();
+    });
+    diagPanel.querySelector('#diagVideoProfilerClear')?.addEventListener('click', () => {
+      clearVideoProfilerSession();
+    });
+
     diagOverlay.appendChild(diagPanel);
     diagPanel.classList.toggle('ws-diag-light', diag.theme === 'light');
     diagPanel.classList.toggle('ws-diag-minimized', diag.panelMinimized);
     diagPanel.classList.toggle('ws-diag-wide', diag.overlayWide);
+    setDiagConsoleView(diag.consoleView);
     document.body.appendChild(diagOverlay);
+    reparentPlayShareUiForFullscreen();
 
     const diagStyles = document.createElement('style');
     diagStyles.textContent = `
-      .ws-diag-panel kbd {
-        display:inline-block;padding:1px 5px;margin:0 1px;font-size:10px;font-family:inherit;
-        background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.2);border-radius:4px;
-      }
-      .ws-diag-panel.ws-diag-light kbd {
-        background:#e2e8f0;border-color:#cbd5e1;color:#0f172a;
-      }
       .ws-diag-panel {
-        background:rgba(18,20,24,0.97);color:#e8eaed;
-        border:1px solid rgba(78,205,196,0.35);border-radius:12px;
-        box-shadow:0 12px 40px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,0,0,0.3);
+        --ws-diag-bg0:#0a0c10;
+        --ws-diag-bg1:#12151c;
+        --ws-diag-border:rgba(56,189,248,0.14);
+        --ws-diag-text:#e8edf4;
+        --ws-diag-muted:#8b95a8;
+        --ws-diag-accent:#22d3ee;
+        --ws-diag-accent-dim:rgba(34,211,238,0.12);
+        --ws-diag-violet:#a78bfa;
+        --ws-diag-surface:rgba(255,255,255,0.035);
+        --ws-diag-surface2:rgba(255,255,255,0.055);
+        background:linear-gradient(165deg, rgba(18,21,28,0.98) 0%, var(--ws-diag-bg0) 48%, #0d1016 100%);
+        color:var(--ws-diag-text);
+        border:1px solid var(--ws-diag-border);
+        border-radius:16px;
+        box-shadow:
+          0 0 0 1px rgba(0,0,0,0.5),
+          0 24px 48px -12px rgba(0,0,0,0.65),
+          0 0 80px -20px rgba(34,211,238,0.08);
+        position:relative;
         width:min(420px,calc(100vw - 20px));max-height:min(78vh,720px);
         overflow:hidden;display:flex;flex-direction:column;
-        font-variant-numeric: tabular-nums;
+        font-variant-numeric:tabular-nums;
+        backdrop-filter:saturate(1.15) blur(20px);
+        -webkit-backdrop-filter:saturate(1.15) blur(20px);
       }
       .ws-diag-panel.ws-diag-wide {
         width:min(720px,calc(100vw - 20px));max-height:min(85vh,800px);
       }
+      .ws-diag-panel.ws-diag-view-compact {
+        width:min(252px,calc(100vw - 20px));
+        max-height:min(280px,48vh);
+      }
+      .ws-diag-panel.ws-diag-view-compact.ws-diag-wide {
+        width:min(280px,calc(100vw - 20px));
+      }
+      .ws-diag-panel.ws-diag-view-compact .ws-diag-header-brand { display:none !important; }
+      .ws-diag-panel.ws-diag-view-compact .ws-diag-header-accent { height:1px; }
+      .ws-diag-panel.ws-diag-view-compact #diagDashCustomizeOpen { display:none !important; }
+      .ws-diag-panel.ws-diag-view-compact #diagWideToggle { display:none !important; }
+      .ws-diag-panel.ws-diag-view-compact .ws-diag-header {
+        padding:5px 6px 5px;
+        border-bottom-color:rgba(255,255,255,0.06);
+      }
+      .ws-diag-panel.ws-diag-view-compact .ws-diag-header-main {
+        align-items:center;gap:6px;width:100%;
+      }
+      .ws-diag-panel.ws-diag-view-compact .ws-diag-drag {
+        width:28px;height:28px;border-radius:8px;
+      }
+      .ws-diag-panel.ws-diag-view-compact .ws-diag-header-aside { margin-left:auto; }
+      .ws-diag-panel.ws-diag-view-compact .ws-diag-header-icon-rail { padding:2px;gap:1px;border-radius:9px; }
+      .ws-diag-panel.ws-diag-view-compact .ws-diag-header-icon-rail .ws-diag-icon-btn {
+        width:28px;height:28px;border-radius:7px;
+      }
+      .ws-diag-panel.ws-diag-view-compact .ws-diag-compact-root { padding:8px 8px 10px; }
+      .ws-diag-panel.ws-diag-view-detailed .ws-diag-compact-root { display:none !important; }
+      .ws-diag-panel.ws-diag-view-compact .ws-diag-detailed-root { display:none !important; }
+      .ws-diag-icon-console-view { display:inline-block; }
+      .ws-diag-icon-console-view::after { content:'▭';font-size:15px;line-height:1;opacity:0.9; }
+      .ws-diag-panel.ws-diag-view-compact .ws-diag-icon-console-view::after { content:'⊞'; }
+      .ws-diag-compact-root.ws-diag-body-scroll,
+      .ws-diag-detailed-root.ws-diag-body-scroll {
+        flex:1;min-height:0;
+      }
+      .ws-diag-compact-root { padding:12px 14px 14px; }
+      .ws-diag-compact-components {
+        display:flex;flex-direction:row;justify-content:stretch;gap:6px;margin-bottom:10px;
+      }
+      .ws-diag-comp-tile {
+        flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:4px;
+        padding:8px 4px 6px;border-radius:10px;border:2px solid transparent;cursor:pointer;
+        background:var(--ws-diag-surface);color:#e2e8f0;
+        transition:border-color 0.15s,background 0.15s,box-shadow 0.15s,transform 0.12s,color 0.15s;
+      }
+      .ws-diag-comp-tile:hover { transform:translateY(-1px); }
+      .ws-diag-comp-tile.ws-diag-comp-ok {
+        border-color:rgba(52,211,153,0.5);
+        box-shadow:0 0 0 1px rgba(52,211,153,0.08);
+      }
+      .ws-diag-comp-tile.ws-diag-comp-warn {
+        border-color:rgba(250,204,21,0.85);
+        background:rgba(66,52,11,0.28);
+        color:#fef9c3;
+        box-shadow:0 0 12px -5px rgba(250,204,21,0.4);
+      }
+      .ws-diag-comp-ic { display:flex;align-items:center;justify-content:center; }
+      .ws-diag-comp-svg {
+        width:20px;height:20px;display:block;opacity:0.9;pointer-events:none;
+      }
+      .ws-diag-comp-tile.ws-diag-comp-warn .ws-diag-comp-svg { opacity:1; }
+      .ws-diag-comp-name {
+        font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;
+        color:var(--ws-diag-muted);
+      }
+      .ws-diag-comp-tile.ws-diag-comp-warn .ws-diag-comp-name { color:#fde68a; }
+      .ws-diag-comp-line {
+        font-size:9px;line-height:1.25;text-align:center;word-break:break-word;
+        color:#94a3b8;max-width:100%;padding:0 2px;
+      }
+      .ws-diag-comp-tile.ws-diag-comp-warn .ws-diag-comp-line { color:#fef3c7; }
+      .ws-diag-compact-snaps { display:flex;flex-wrap:wrap;gap:8px;justify-content:center;align-items:center; }
+      .ws-diag-compact-rec {
+        display:inline-flex;align-items:center;gap:6px;
+        border:1px solid rgba(255,255,255,0.14);background:rgba(0,0,0,0.35);
+      }
+      .ws-diag-compact-rec .ws-diag-rec-dot {
+        width:8px;height:8px;border-radius:50%;
+        background:#64748b;box-shadow:0 0 0 2px rgba(100,116,139,0.35);
+        transition:background 0.2s,box-shadow 0.2s;
+      }
+      .ws-diag-compact-rec.ws-diag-compact-rec-active {
+        border-color:rgba(248,113,113,0.45);background:rgba(127,29,29,0.22);
+      }
+      .ws-diag-compact-rec.ws-diag-compact-rec-active .ws-diag-rec-dot {
+        background:#f87171;box-shadow:0 0 0 2px rgba(248,113,113,0.4);
+        animation:ws-diag-rec-pulse 1.4s ease-in-out infinite;
+      }
+      @keyframes ws-diag-rec-pulse {
+        0%,100% { opacity:1; }
+        50% { opacity:0.55; }
+      }
+      .ws-diag-btn-primary-compact {
+        font-weight:600;
+        border-color:rgba(129,140,248,0.45);
+        background:linear-gradient(180deg, rgba(99,102,241,0.35) 0%, rgba(79,70,229,0.22) 100%);
+      }
+      .ws-diag-record-export-card {
+        border-radius:14px;
+        border:1px solid rgba(255,255,255,0.1);
+        background:linear-gradient(165deg, rgba(30,27,75,0.35) 0%, rgba(15,23,42,0.5) 55%, rgba(15,23,42,0.35) 100%);
+        padding:14px 16px 16px;
+        margin:0 0 18px;
+        box-shadow:0 0 28px -12px rgba(99,102,241,0.25);
+      }
+      .ws-diag-record-export-lead { font-size:11.5px;line-height:1.55;color:var(--ws-diag-muted);margin:0 0 14px; }
+      .ws-diag-record-export-lead strong { color:#e2e8f0;font-weight:600; }
+      .ws-diag-workflow-steps { display:flex;flex-direction:column;gap:16px; }
+      .ws-diag-workflow-step {
+        display:grid;grid-template-columns:34px 1fr;gap:4px 14px;align-items:start;
+      }
+      .ws-diag-step-badge {
+        width:30px;height:30px;border-radius:50%;
+        display:flex;align-items:center;justify-content:center;
+        font-size:13px;font-weight:800;
+        background:rgba(99,102,241,0.22);
+        border:1px solid rgba(129,140,248,0.42);
+        color:#c7d2fe;margin-top:2px;
+      }
+      .ws-diag-step-title { font-size:12.5px;font-weight:700;color:#f1f5f9;margin-bottom:4px; }
+      .ws-diag-step-hint { font-size:11px;margin:0 0 8px;line-height:1.45; }
+      .ws-diag-step-actions-row, .ws-diag-step-export-row {
+        display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;
+      }
+      .ws-diag-profiler-status-compact { font-size:11px;line-height:1.45;margin-bottom:2px; }
+      .ws-diag-details-more-inline { flex:1;min-width:160px;max-width:100%; }
+      .ws-diag-dash-modal-root[hidden] { display:none !important; }
+      .ws-diag-dash-modal-root:not([hidden]) {
+        position:absolute;inset:0;z-index:30;
+        display:flex;align-items:flex-end;justify-content:center;
+        padding:10px;padding-bottom:14px;box-sizing:border-box;
+        pointer-events:auto;
+      }
+      .ws-diag-dash-modal-backdrop {
+        position:absolute;inset:0;
+        background:rgba(2,6,12,0.62);
+        backdrop-filter:blur(6px) saturate(1.1);
+        -webkit-backdrop-filter:blur(6px) saturate(1.1);
+      }
+      .ws-diag-dash-modal-panel {
+        position:relative;z-index:1;
+        width:100%;max-width:380px;max-height:min(70vh,480px);
+        overflow:auto;
+        border-radius:14px;
+        background:linear-gradient(180deg, rgba(22,26,34,0.98) 0%, rgba(14,17,24,0.99) 100%);
+        border:1px solid rgba(255,255,255,0.1);
+        box-shadow:0 20px 50px rgba(0,0,0,0.55),0 0 0 1px rgba(34,211,238,0.06);
+        padding:16px 18px 14px;
+      }
+      .ws-diag-dash-modal-head {
+        display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
+        margin-bottom:8px;
+      }
+      .ws-diag-dash-modal-title {
+        margin:0;font-size:15px;font-weight:700;letter-spacing:-0.02em;color:#f1f5f9;line-height:1.25;
+      }
+      .ws-diag-dash-modal-x {
+        flex-shrink:0;width:32px;height:32px;margin:-6px -4px 0 0;border-radius:10px;border:none;
+        background:transparent;color:var(--ws-diag-muted);font-size:22px;line-height:1;cursor:pointer;
+        display:flex;align-items:center;justify-content:center;
+        transition:color 0.15s,background 0.15s;
+      }
+      .ws-diag-dash-modal-x:hover { color:#f8fafc;background:rgba(255,255,255,0.06); }
+      .ws-diag-dash-modal-lead {
+        margin:0 0 12px;font-size:11.5px;line-height:1.45;color:var(--ws-diag-muted);
+      }
+      .ws-diag-dash-modal-toggles { margin-bottom:14px; }
+      .ws-diag-dash-modal-footer {
+        display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;
+        padding-top:12px;border-top:1px solid rgba(255,255,255,0.06);
+      }
+      .ws-diag-dash-toggles {
+        display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;font-size:11px;
+      }
+      @media (max-width:400px) {
+        .ws-diag-dash-toggles { grid-template-columns:1fr; }
+      }
+      .ws-diag-dash-toggle {
+        display:flex;align-items:center;gap:8px;cursor:pointer;color:#b8c2d4;
+      }
+      .ws-diag-dash-toggle input { flex-shrink:0; }
+      .ws-diag-header-accent {
+        height:2px;
+        background:linear-gradient(90deg, #22d3ee 0%, #818cf8 50%, #e879f9 100%);
+        opacity:0.95;
+      }
       .ws-diag-header {
         flex-shrink:0;
-        padding:10px 12px 8px;
-        background:linear-gradient(180deg, rgba(35,38,45,0.98) 0%, rgba(22,24,28,0.99) 100%);
-        border-bottom:1px solid rgba(255,255,255,0.08);
+        padding:8px 10px 8px;
+        background:linear-gradient(185deg, rgba(255,255,255,0.05) 0%, transparent 100%);
+        border-bottom:1px solid rgba(255,255,255,0.07);
       }
-      .ws-diag-header-top {
-        display:flex;align-items:center;gap:8px;
+      .ws-diag-header-main {
+        display:flex;align-items:center;gap:10px;flex-wrap:wrap;
       }
       .ws-diag-drag {
-        flex-shrink:0;width:28px;height:32px;border-radius:6px;
-        border:1px dashed rgba(255,255,255,0.2);background:rgba(0,0,0,0.2);
-        color:#888;font-size:14px;line-height:1;cursor:grab;padding:0;
+        flex-shrink:0;width:30px;height:30px;border-radius:9px;
+        border:1px solid rgba(255,255,255,0.08);
+        background:var(--ws-diag-surface);
+        color:var(--ws-diag-muted);
+        cursor:grab;padding:0;display:flex;align-items:center;justify-content:center;
+        transition:background 0.15s,border-color 0.15s,color 0.15s;
       }
+      .ws-diag-drag:hover { border-color:rgba(34,211,238,0.35);color:var(--ws-diag-accent);background:var(--ws-diag-accent-dim); }
       .ws-diag-drag:active { cursor:grabbing; }
-      .ws-diag-brand { flex:1;min-width:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap; }
-      .ws-diag-title { font-weight:700;font-size:14px;letter-spacing:-0.02em;color:#f1f5f9; }
+      .ws-diag-drag-grip {
+        width:12px;height:16px;
+        opacity:0.55;
+        background:repeating-linear-gradient(
+          180deg,
+          currentColor 0px,
+          currentColor 2px,
+          transparent 2px,
+          transparent 5px
+        );
+        border-radius:1px;
+      }
+      .ws-diag-header-center { flex:1;min-width:0; }
+      .ws-diag-header-title-row {
+        display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+      }
+      .ws-diag-title {
+        font-weight:700;font-size:14px;letter-spacing:-0.03em;
+        color:#f8fafc;
+      }
       .ws-diag-dev-badge {
-        font-size:9px;font-weight:800;letter-spacing:0.06em;padding:2px 6px;border-radius:4px;
-        background:#7c3aed;color:#fff;
+        font-size:7px;font-weight:800;letter-spacing:0.12em;padding:3px 7px;border-radius:999px;
+        background:linear-gradient(135deg, #6366f1 0%, #4f46e5 55%, #4338ca 100%);
+        color:#eef2ff;
+        box-shadow:0 1px 0 rgba(255,255,255,0.15) inset,0 2px 8px rgba(79,70,229,0.35);
       }
-      .ws-diag-header-actions { display:flex;gap:4px;flex-shrink:0; }
+      .ws-diag-header-aside {
+        display:flex;flex-direction:row;align-items:center;gap:8px;flex-shrink:0;margin-left:auto;
+      }
+      .ws-diag-icon-customize::after {
+        content:'⚙';font-size:15px;line-height:1;opacity:0.88;
+      }
+      .ws-diag-header-icon-rail {
+        display:flex;align-items:center;gap:2px;
+        padding:3px;border-radius:10px;
+        background:rgba(0,0,0,0.28);
+        border:1px solid rgba(255,255,255,0.06);
+      }
+      .ws-diag-header-icon-rail .ws-diag-icon-btn {
+        width:30px;height:30px;border-radius:8px;border:none;
+        background:transparent;
+      }
+      .ws-diag-header-icon-rail .ws-diag-icon-btn:hover {
+        background:rgba(255,255,255,0.08);
+      }
       .ws-diag-icon-btn {
-        width:32px;height:32px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);
-        background:rgba(0,0,0,0.25);color:#94a3b8;font-size:16px;line-height:1;cursor:pointer;padding:0;
+        width:34px;height:34px;border-radius:10px;
+        border:1px solid rgba(255,255,255,0.08);
+        background:var(--ws-diag-surface);
+        color:var(--ws-diag-muted);
+        cursor:pointer;padding:0;
+        display:flex;align-items:center;justify-content:center;
+        transition:background 0.15s,border-color 0.15s,color 0.15s,transform 0.12s;
       }
-      .ws-diag-icon-btn:hover { color:#fff;border-color:rgba(78,205,196,0.5);background:rgba(78,205,196,0.12); }
-      .ws-diag-subhint {
-        margin:8px 0 0 36px;font-size:11px;color:#64748b;line-height:1.35;
+      .ws-diag-icon-btn:hover {
+        color:#f1f5f9;
+        border-color:rgba(34,211,238,0.4);
+        background:var(--ws-diag-accent-dim);
+        transform:translateY(-1px);
       }
-      .ws-diag-tab-row {
-        display:flex;gap:6px;margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.06);
+      .ws-diag-icon-wide::after { content:'⤢';font-size:15px;line-height:1;opacity:0.9; }
+      .ws-diag-icon-min::after { content:'―';font-size:13px;line-height:1;opacity:0.85;font-weight:600; }
+      .ws-diag-icon-x::after { content:'×';font-size:20px;line-height:1;font-weight:300; }
+      .ws-diag-panel kbd {
+        display:inline-block;padding:2px 6px;margin:0 2px;font-size:10px;font-family:ui-monospace,monospace;
+        background:var(--ws-diag-surface2);border:1px solid rgba(255,255,255,0.1);border-radius:6px;
+        color:#cbd5e1;
       }
-      .ws-diag-tab {
-        flex:1;border:none;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:600;cursor:pointer;
-        background:rgba(0,0,0,0.2);color:#94a3b8;
+      .ws-diag-section-label {
+        font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.11em;
+        color:var(--ws-diag-muted);margin:4px 0 10px;
       }
-      .ws-diag-tab:hover { color:#cbd5e1; }
-      .ws-diag-tab.active {
-        background:rgba(78,205,196,0.18);color:#4ECDC4;box-shadow:inset 0 0 0 1px rgba(78,205,196,0.35);
+      .ws-diag-dash-summary {
+        padding:12px 12px;border-radius:12px;margin-bottom:10px;
+        background:var(--ws-diag-surface2);
+        border:1px solid rgba(255,255,255,0.06);
+        border-left:3px solid var(--ws-diag-accent);
+        box-shadow:0 1px 0 rgba(255,255,255,0.04) inset;
       }
-      .ws-diag-tab-content { display:none;flex:1;min-height:0; }
-      .ws-diag-tab-content.active { display:flex;flex-direction:column; }
+      .ws-diag-session-grid {
+        display:grid;
+        grid-template-columns:1fr 1fr;
+        gap:8px 10px;
+        margin-bottom:10px;
+        font-size:11px;line-height:1.45;color:#dce3ee;
+      }
+      @media (max-width:360px) {
+        .ws-diag-session-grid { grid-template-columns:1fr; }
+        .ws-diag-session-span2 { grid-column:1; }
+      }
+      .ws-diag-session-cell {
+        background:rgba(0,0,0,0.22);
+        border-radius:10px;
+        padding:8px 10px;
+        border:1px solid rgba(255,255,255,0.06);
+      }
+      .ws-diag-session-span2 { grid-column:1/-1; }
+      .ws-diag-session-label {
+        display:block;
+        font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;
+        color:var(--ws-diag-muted);
+        margin-bottom:5px;
+      }
+      .ws-diag-session-sub { font-size:10px;margin-top:4px;line-height:1.4; }
+      .ws-diag-overview-chips { margin-top:2px; }
+      .ws-diag-overview-compact {
+        display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px;
+      }
+      .ws-diag-overview-meta {
+        font-size:12px;line-height:1.45;color:#dce3ee;
+      }
+      .ws-diag-overview-hint {
+        font-size:11px;line-height:1.45;margin-top:10px;padding-top:10px;
+        border-top:1px solid rgba(255,255,255,0.06);
+      }
+      .ws-diag-section-label-tight { margin-top:12px;margin-bottom:8px; }
+      .ws-diag-sec-head-prime {
+        display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;
+        margin-bottom:8px;
+      }
+      .ws-diag-sec-head-prime .ws-diag-prime-label { font-size:13px;font-weight:600;color:#d1dae6;margin:0; }
+      .ws-diag-details > summary.ws-diag-sec-sum {
+        display:flex;flex-wrap:wrap;align-items:center;gap:10px;
+      }
+      .ws-diag-details > summary.ws-diag-sec-sum::after { margin-left:auto; }
+      .ws-diag-sec-name { font-size:13px;font-weight:600;color:#d1dae6; }
+      .ws-diag-sec-badge {
+        font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;
+        padding:3px 8px;border-radius:999px;border:1px solid transparent;
+      }
+      .ws-diag-badge-ok {
+        color:#86efac;border-color:rgba(52,211,153,0.35);background:rgba(6,78,59,0.35);
+      }
+      .ws-diag-badge-warn {
+        color:#fde047;border-color:rgba(250,204,21,0.35);background:rgba(66,52,11,0.35);
+      }
+      .ws-diag-sec-quiet {
+        font-size:11px;line-height:1.45;color:var(--ws-diag-muted);margin:0 0 10px;
+      }
+      .ws-diag-chip-unknown {
+        color:#c5d0e0;border-color:rgba(148,163,184,0.35);background:rgba(30,41,59,0.45);
+      }
+      .ws-diag-dash-line { font-size:12.5px;line-height:1.5;margin-top:8px;color:#dce3ee; }
+      .ws-diag-dash-line:first-of-type { margin-top:0; }
+      .ws-diag-dash-last {
+        font-size:11px;margin-top:10px;padding-top:10px;
+        border-top:1px solid rgba(255,255,255,0.06);color:var(--ws-diag-muted);
+      }
+      .ws-diag-dash-alerts { margin-bottom:12px; }
+      .ws-diag-alert {
+        font-size:11.5px;line-height:1.45;padding:10px 12px;border-radius:10px;margin-bottom:8px;
+        background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.06);
+      }
+      .ws-diag-dash-actions {
+        display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start;margin:14px 0 16px;
+      }
+      .ws-diag-details-more {
+        margin:0;flex:1;min-width:148px;border-radius:12px;
+        background:var(--ws-diag-surface);border:1px solid rgba(255,255,255,0.08);
+      }
+      .ws-diag-details-more > summary.ws-diag-more-summary {
+        list-style:none;cursor:pointer;user-select:none;padding:12px 14px;
+        font-size:12.5px;font-weight:600;color:#a8b4c8;
+      }
+      .ws-diag-details-more > summary.ws-diag-more-summary::-webkit-details-marker { display:none; }
+      .ws-diag-details-more > summary.ws-diag-more-summary::after { content:'›';float:right;opacity:0.5;font-weight:400;transform:rotate(0deg);transition:transform 0.2s; }
+      .ws-diag-details-more[open] > summary.ws-diag-more-summary::after { transform:rotate(90deg); }
+      .ws-diag-more-inner { padding:0 12px 12px;border-top:1px solid rgba(255,255,255,0.06); }
+      .ws-diag-more-group { margin-top:12px; }
+      .ws-diag-more-group:first-child { margin-top:10px; }
+      .ws-diag-more-label {
+        display:block;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;
+        color:var(--ws-diag-muted);margin-bottom:8px;
+      }
+      .ws-diag-actions-col { flex-direction:column;align-items:stretch; }
+      .ws-diag-actions-col .ws-diag-btn { width:100%;box-sizing:border-box;justify-content:center; }
+      .ws-diag-chip-row { display:flex;flex-wrap:wrap;gap:8px;align-items:center; }
+      .ws-diag-chip {
+        font-size:11px;font-weight:600;padding:6px 11px;border-radius:999px;
+        background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.08);color:#c5d0e0;
+      }
+      .ws-diag-chip-wide { flex:1;min-width:min(100%,200px);border-radius:10px;font-weight:500; }
+      .ws-diag-chip-connected { color:#86efac;border-color:rgba(52,211,153,0.35);background:rgba(6,78,59,0.35); }
+      .ws-diag-chip-disconnected { color:#fca5a5;border-color:rgba(248,113,113,0.35);background:rgba(127,29,29,0.28); }
+      .ws-diag-chip-syncing, .ws-diag-chip-reconnecting { color:#fde047;border-color:rgba(250,204,21,0.3);background:rgba(66,52,11,0.35); }
+      .ws-diag-prime-wrap {
+        margin-bottom:16px;padding:14px;border-radius:12px;
+        background:linear-gradient(135deg, rgba(15,23,42,0.55) 0%, rgba(0,0,0,0.25) 100%);
+        border:1px solid rgba(129,140,248,0.2);
+        box-shadow:0 0 24px -8px rgba(129,140,248,0.15);
+      }
+      .ws-diag-prime-summary { font-size:12px;line-height:1.55;color:#c8d0e0; }
+      .ws-diag-prime-snapshot-row { display:flex;flex-wrap:wrap;gap:8px;margin-top:12px; }
+      .ws-diag-prime-status-compact { font-size:10.5px;margin-top:10px;line-height:1.45;word-break:break-word;color:var(--ws-diag-muted); }
+      .ws-diag-status-sep { opacity:0.4; }
+      .ws-diag-btn-sm { padding:8px 13px;font-size:11.5px;border-radius:10px; }
+      .ws-diag-tech-dense .ws-diag-row { font-size:10px;line-height:1.45;margin-bottom:4px; }
       .ws-diag-body-scroll {
-        padding:10px 12px 14px;overflow-y:auto;overflow-x:hidden;
-        flex:1;min-height:0;
-        scroll-behavior:smooth;
+        padding:14px 16px 18px;overflow-y:auto;overflow-x:hidden;
+        flex:1;min-height:0;scroll-behavior:smooth;
       }
-      .ws-diag-details { margin-bottom:10px;border-radius:10px;background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.06); }
+      .ws-diag-body-scroll::-webkit-scrollbar { width:8px; }
+      .ws-diag-body-scroll::-webkit-scrollbar-track { background:transparent; }
+      .ws-diag-body-scroll::-webkit-scrollbar-thumb {
+        background:rgba(255,255,255,0.12);border-radius:8px;border:2px solid transparent;background-clip:padding-box;
+      }
+      .ws-diag-details {
+        margin-bottom:10px;border-radius:12px;
+        background:var(--ws-diag-surface);border:1px solid rgba(255,255,255,0.07);
+        overflow:hidden;
+      }
       .ws-diag-details > summary {
         list-style:none;cursor:pointer;user-select:none;
-        padding:10px 12px;font-size:12px;font-weight:700;color:#cbd5e1;
-        border-radius:10px;
+        padding:12px 14px;font-size:13px;font-weight:600;color:#d1dae6;
+        border-left:3px solid transparent;
+        transition:border-color 0.15s,background 0.15s;
       }
       .ws-diag-details > summary::-webkit-details-marker { display:none; }
-      .ws-diag-details > summary::after { content:'▸';float:right;opacity:0.45;font-weight:400; }
-      .ws-diag-details[open] > summary::after { content:'▾'; }
+      .ws-diag-details > summary::after { content:'›';float:right;opacity:0.45;font-weight:400;transition:transform 0.2s; }
+      .ws-diag-details[open] > summary::after { transform:rotate(90deg);opacity:0.7; }
       .ws-diag-details[open] > summary {
-        border-bottom:1px solid rgba(255,255,255,0.06);border-radius:10px 10px 0 0;
+        border-left-color:var(--ws-diag-accent);
+        background:rgba(34,211,238,0.06);
+        border-bottom:1px solid rgba(255,255,255,0.06);
       }
-      .ws-diag-card {
-        padding:10px 12px 12px;
-      }
-      .ws-diag-metrics-grid {
-        display:grid;grid-template-columns:1fr 1fr;gap:10px;
-      }
+      .ws-diag-card { padding:12px 14px 14px; }
+      .ws-diag-metrics-grid { display:grid;grid-template-columns:1fr 1fr;gap:10px; }
       .ws-diag-span-2 { grid-column:1/-1; }
       @media (max-width:480px) {
         .ws-diag-metrics-grid { grid-template-columns:1fr; }
         .ws-diag-span-2 { grid-column:1; }
       }
       .ws-diag-metric-block .ws-diag-metric-label {
-        display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;
-        color:#64748b;margin-bottom:6px;
+        display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;
+        color:var(--ws-diag-muted);margin-bottom:6px;
       }
       .ws-diag-inline-label {
-        display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;
-        color:#64748b;margin:10px 0 6px;
+        display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;
+        color:var(--ws-diag-muted);margin:12px 0 8px;
       }
       .ws-diag-inline-label:first-child { margin-top:0; }
-      .ws-diag-sync-block {
-        font-size:11px;color:#94a3b8;line-height:1.5;
+      .ws-diag-sync-block { font-size:11.5px;color:#9ca8bc;line-height:1.55; }
+      .ws-diag-scrollbox,
+      .ws-diag-scrollbox-sm,
+      .ws-diag-scrollbox-md,
+      .ws-diag-scrollbox-lg {
+        overflow-y:auto;padding:8px 10px;border-radius:10px;
+        background:rgba(0,0,0,0.45);border:1px solid rgba(255,255,255,0.06);
       }
-      .ws-diag-scrollbox { max-height:100px;overflow-y:auto;padding:6px 8px;border-radius:8px;background:rgba(0,0,0,0.25); }
-      .ws-diag-scrollbox-sm { max-height:88px;overflow-y:auto;padding:6px 8px;border-radius:8px;background:rgba(0,0,0,0.25); }
-      .ws-diag-scrollbox-md { max-height:140px;overflow-y:auto;padding:6px 8px;border-radius:8px;background:rgba(0,0,0,0.25); }
-      .ws-diag-scrollbox-lg { max-height:220px;overflow-y:auto;padding:6px 8px;border-radius:8px;background:rgba(0,0,0,0.25); }
-      .ws-diag-events .ws-diag-row { font-family:ui-monospace,SFMono-Regular,monospace;font-size:10px; }
+      .ws-diag-scrollbox { max-height:100px; }
+      .ws-diag-scrollbox-sm { max-height:88px; }
+      .ws-diag-scrollbox-md { max-height:140px; }
+      .ws-diag-scrollbox-lg { max-height:220px; }
+      .ws-diag-events .ws-diag-row { font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px; }
       .ws-diag-last-line { margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.06); }
-      .ws-diag-stale-banner { font-size:11px;padding:10px 12px;border-radius:10px;margin-bottom:10px;display:none;line-height:1.4; }
+      .ws-diag-stale-banner {
+        font-size:12px;padding:12px 14px;border-radius:12px;margin-bottom:12px;display:none;line-height:1.45;
+      }
       .ws-diag-stale-banner.visible {
-        display:block;background:rgba(180,83,9,0.22);color:#fdba74;border:1px solid rgba(251,146,60,0.45);
+        display:block;
+        background:linear-gradient(135deg, rgba(120,53,15,0.45) 0%, rgba(69,26,3,0.5) 100%);
+        color:#fed7aa;border:1px solid rgba(251,191,36,0.35);
       }
-      .ws-diag-filter-label { display:block;font-size:10px;font-weight:700;color:#64748b;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.04em; }
+      .ws-diag-filter-label {
+        display:block;font-size:10px;font-weight:700;color:var(--ws-diag-muted);
+        margin-bottom:6px;text-transform:uppercase;letter-spacing:0.06em;
+      }
       .ws-diag-filter {
-        width:100%;box-sizing:border-box;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.12);
-        color:#e2e8f0;border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:12px;
+        width:100%;box-sizing:border-box;background:rgba(0,0,0,0.45);
+        border:1px solid rgba(255,255,255,0.1);color:var(--ws-diag-text);
+        border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:12.5px;
       }
-      .ws-diag-filter:focus { outline:none;border-color:rgba(78,205,196,0.55);box-shadow:0 0 0 2px rgba(78,205,196,0.15); }
-      .ws-diag-help { font-size:11px;color:#94a3b8;margin:0 0 12px;line-height:1.45; }
+      .ws-diag-filter:focus {
+        outline:none;border-color:rgba(34,211,238,0.5);
+        box-shadow:0 0 0 3px rgba(34,211,238,0.12);
+      }
+      .ws-diag-help { font-size:11px;color:#9ca8bc;margin:0 0 12px;line-height:1.45; }
+      .ws-diag-help-tight { margin-bottom:6px; }
+      .ws-diag-btn-missed-ad {
+        background:linear-gradient(180deg, #fbbf24 0%, #d97706 100%) !important;
+        color:#1c1917 !important;
+        box-shadow:0 2px 12px rgba(217,119,6,0.4);
+        border:none !important;
+      }
       .ws-diag-btn-group { margin-bottom:12px; }
       .ws-diag-btn-group:last-child { margin-bottom:0; }
       .ws-diag-btn-group-label {
-        display:block;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:#64748b;margin-bottom:6px;
+        display:block;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;
+        color:var(--ws-diag-muted);margin-bottom:6px;
       }
-      .ws-diag-panel.ws-diag-minimized .ws-diag-tab-row,
-      .ws-diag-panel.ws-diag-minimized .ws-diag-tab-content,
-      .ws-diag-panel.ws-diag-minimized .ws-diag-subhint { display:none !important; }
+      .ws-diag-panel.ws-diag-minimized .ws-diag-body-scroll { display:none !important; }
       .ws-diag-panel.ws-diag-minimized { max-height:none; }
       .ws-diag-panel.ws-diag-minimized .ws-diag-header { border-bottom:none; }
 
       .ws-diag-panel.ws-diag-light {
-        background:rgba(255,255,255,0.98);color:#0f172a;border-color:#cbd5e1;
-        box-shadow:0 12px 40px rgba(15,23,42,0.12);
+        --ws-diag-bg0:#fafbfc;
+        --ws-diag-bg1:#fff;
+        --ws-diag-border:rgba(15,23,42,0.1);
+        --ws-diag-text:#0f172a;
+        --ws-diag-muted:#64748b;
+        --ws-diag-accent:#0891b2;
+        --ws-diag-accent-dim:rgba(8,145,178,0.08);
+        --ws-diag-violet:#7c3aed;
+        --ws-diag-surface:rgba(15,23,42,0.04);
+        --ws-diag-surface2:rgba(15,23,42,0.06);
+        background:linear-gradient(165deg, #ffffff 0%, #f8fafc 50%, #f1f5f9 100%);
+        color:var(--ws-diag-text);
+        border-color:#e2e8f0;
+        box-shadow:0 24px 48px -12px rgba(15,23,42,0.12),0 0 0 1px rgba(15,23,42,0.04);
       }
+      .ws-diag-panel.ws-diag-light .ws-diag-header-accent { opacity:1; }
       .ws-diag-panel.ws-diag-light .ws-diag-header {
-        background:linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+        background:linear-gradient(180deg, rgba(255,255,255,0.9) 0%, rgba(248,250,252,0.95) 100%);
         border-bottom-color:#e2e8f0;
       }
+      .ws-diag-panel.ws-diag-light.ws-diag-view-compact .ws-diag-header { border-bottom-color:#e2e8f0; }
       .ws-diag-panel.ws-diag-light .ws-diag-title { color:#0f172a; }
-      .ws-diag-panel.ws-diag-light .ws-diag-subhint { color:#64748b; }
-      .ws-diag-panel.ws-diag-light .ws-diag-tab { background:#e2e8f0;color:#475569; }
-      .ws-diag-panel.ws-diag-light .ws-diag-tab.active { background:#ccfbf1;color:#0f766e;box-shadow:inset 0 0 0 1px #5eead4; }
+      .ws-diag-panel.ws-diag-light .ws-diag-session-cell {
+        background:#fff;border-color:#e2e8f0;color:#334155;
+      }
+      .ws-diag-panel.ws-diag-light .ws-diag-session-label { color:#64748b; }
+      .ws-diag-panel.ws-diag-light .ws-diag-header-icon-rail {
+        background:rgba(15,23,42,0.05);border-color:#e2e8f0;
+      }
+      .ws-diag-panel.ws-diag-light .ws-diag-header-icon-rail .ws-diag-icon-btn:hover {
+        background:rgba(15,23,42,0.06);
+      }
+      .ws-diag-panel.ws-diag-light .ws-diag-dash-modal-backdrop { background:rgba(15,23,42,0.35); }
+      .ws-diag-panel.ws-diag-light .ws-diag-dash-modal-panel {
+        background:#fff;border-color:#e2e8f0;
+        box-shadow:0 24px 48px rgba(15,23,42,0.15);
+      }
+      .ws-diag-panel.ws-diag-light .ws-diag-dash-modal-title { color:#0f172a; }
+      .ws-diag-panel.ws-diag-light .ws-diag-dash-modal-lead { color:var(--ws-diag-muted); }
+      .ws-diag-panel.ws-diag-light .ws-diag-dash-modal-footer { border-top-color:#e2e8f0; }
+      .ws-diag-panel.ws-diag-light .ws-diag-dash-modal-x:hover { background:#f1f5f9;color:#0f172a; }
+      .ws-diag-panel.ws-diag-light kbd {
+        background:#f1f5f9;border-color:#e2e8f0;color:#334155;
+      }
+      .ws-diag-panel.ws-diag-light .ws-diag-dash-summary {
+        background:#fff;border-color:#e2e8f0;border-left-color:var(--ws-diag-accent);
+        box-shadow:0 1px 2px rgba(15,23,42,0.04);
+      }
+      .ws-diag-panel.ws-diag-light .ws-diag-dash-line { color:#1e293b; }
+      .ws-diag-panel.ws-diag-light .ws-diag-dash-last { border-top-color:#e2e8f0;color:var(--ws-diag-muted); }
+      .ws-diag-panel.ws-diag-light .ws-diag-overview-meta { color:#334155; }
+      .ws-diag-panel.ws-diag-light .ws-diag-overview-hint { border-top-color:#e2e8f0; }
+      .ws-diag-panel.ws-diag-light .ws-diag-sec-name,
+      .ws-diag-panel.ws-diag-light .ws-diag-sec-head-prime .ws-diag-prime-label { color:#0f172a; }
+      .ws-diag-panel.ws-diag-light .ws-diag-badge-ok { background:#dcfce7;border-color:#86efac;color:#166534; }
+      .ws-diag-panel.ws-diag-light .ws-diag-badge-warn { background:#fef9c3;border-color:#fde047;color:#854d0e; }
+      .ws-diag-panel.ws-diag-light .ws-diag-chip-unknown { background:#f1f5f9;border-color:#cbd5e1;color:#475569; }
+      .ws-diag-panel.ws-diag-light .ws-diag-record-export-card {
+        background:linear-gradient(165deg, rgba(238,242,255,0.9) 0%, #fff 50%, #f8fafc 100%);
+        border-color:#e2e8f0;box-shadow:0 2px 12px rgba(99,102,241,0.08);
+      }
+      .ws-diag-panel.ws-diag-light .ws-diag-record-export-lead strong { color:#0f172a; }
+      .ws-diag-panel.ws-diag-light .ws-diag-step-badge {
+        background:#eef2ff;border-color:#c7d2fe;color:#4338ca;
+      }
+      .ws-diag-panel.ws-diag-light .ws-diag-step-title { color:#0f172a; }
+      .ws-diag-panel.ws-diag-light .ws-diag-compact-rec { background:#fff;border-color:#e2e8f0; }
+      .ws-diag-panel.ws-diag-light .ws-diag-compact-rec.ws-diag-compact-rec-active {
+        background:#fef2f2;border-color:#fecaca;
+      }
+      .ws-diag-panel.ws-diag-light .ws-diag-btn-primary-compact {
+        background:linear-gradient(180deg, #eef2ff 0%, #e0e7ff 100%);
+        border-color:#a5b4fc;color:#312e81;
+      }
+      .ws-diag-panel.ws-diag-light .ws-diag-details-more { background:#f8fafc;border-color:#e2e8f0; }
+      .ws-diag-panel.ws-diag-light .ws-diag-details-more > summary.ws-diag-more-summary { color:#475569; }
+      .ws-diag-panel.ws-diag-light .ws-diag-more-inner { border-top-color:#e2e8f0; }
       .ws-diag-panel.ws-diag-light .ws-diag-details { background:#f8fafc;border-color:#e2e8f0; }
       .ws-diag-panel.ws-diag-light .ws-diag-details > summary { color:#334155; }
+      .ws-diag-panel.ws-diag-light .ws-diag-details[open] > summary {
+        background:rgba(8,145,178,0.06);border-bottom-color:#e2e8f0;border-left-color:var(--ws-diag-accent);
+      }
       .ws-diag-panel.ws-diag-light .ws-diag-scrollbox,
       .ws-diag-panel.ws-diag-light .ws-diag-scrollbox-sm,
       .ws-diag-panel.ws-diag-light .ws-diag-scrollbox-md,
-      .ws-diag-panel.ws-diag-light .ws-diag-scrollbox-lg { background:#f1f5f9;color:#334155; }
+      .ws-diag-panel.ws-diag-light .ws-diag-scrollbox-lg {
+        background:#fff;border-color:#e2e8f0;color:#334155;
+      }
       .ws-diag-panel.ws-diag-light .ws-diag-sync-block { color:#475569; }
       .ws-diag-panel.ws-diag-light .ws-diag-filter { background:#fff;border-color:#cbd5e1;color:#0f172a; }
+      .ws-diag-panel.ws-diag-light .ws-diag-section-label { color:#64748b; }
+      .ws-diag-panel.ws-diag-light .ws-diag-comp-tile { background:#f8fafc;color:#0f172a; }
+      .ws-diag-panel.ws-diag-light .ws-diag-comp-tile.ws-diag-comp-ok { border-color:#22c55e;box-shadow:none; }
+      .ws-diag-panel.ws-diag-light .ws-diag-comp-tile.ws-diag-comp-warn {
+        border-color:#eab308;background:#fef9c3;color:#854d0e;box-shadow:none;
+      }
+      .ws-diag-panel.ws-diag-light .ws-diag-comp-name { color:#64748b; }
+      .ws-diag-panel.ws-diag-light .ws-diag-comp-tile.ws-diag-comp-warn .ws-diag-comp-name { color:#854d0e; }
+      .ws-diag-panel.ws-diag-light .ws-diag-comp-line { color:#64748b; }
+      .ws-diag-panel.ws-diag-light .ws-diag-comp-tile.ws-diag-comp-warn .ws-diag-comp-line { color:#713f12; }
+      .ws-diag-panel.ws-diag-light .ws-diag-dash-toggle { color:#475569; }
+      .ws-diag-panel.ws-diag-light .ws-diag-chip { background:#f1f5f9;border-color:#e2e8f0;color:#334155; }
+      .ws-diag-panel.ws-diag-light .ws-diag-chip-connected { background:#dcfce7;border-color:#86efac;color:#166534; }
+      .ws-diag-panel.ws-diag-light .ws-diag-chip-disconnected { background:#fee2e2;border-color:#fca5a5;color:#991b1b; }
+      .ws-diag-panel.ws-diag-light .ws-diag-prime-wrap {
+        background:linear-gradient(135deg, #f5f3ff 0%, #faf5ff 100%);
+        border-color:#ddd6fe;
+        box-shadow:none;
+      }
+      .ws-diag-panel.ws-diag-light .ws-diag-prime-summary { color:#334155; }
+      .ws-diag-panel.ws-diag-light .ws-diag-drag,
+      .ws-diag-panel.ws-diag-light .ws-diag-icon-btn {
+        background:#f1f5f9;border-color:#e2e8f0;color:#64748b;
+      }
+      .ws-diag-panel.ws-diag-light .ws-diag-drag:hover,
+      .ws-diag-panel.ws-diag-light .ws-diag-icon-btn:hover {
+        border-color:rgba(8,145,178,0.45);color:#0e7490;background:rgba(8,145,178,0.08);
+      }
+      .ws-diag-panel.ws-diag-light .ws-diag-stale-banner.visible {
+        background:linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+        color:#92400e;border-color:#fcd34d;
+      }
+      .ws-diag-panel.ws-diag-light .ws-diag-alert {
+        background:#f8fafc;border-color:#e2e8f0;color:#334155;
+      }
 
-      .ws-diag-list { font-size:11px;color:#94a3b8; }
-      .ws-diag-row { margin-bottom:4px; }
-      .ws-diag-muted { color:#64748b; }
+      .ws-diag-list { font-size:11.5px;color:#9ca8bc; }
+      .ws-diag-row { margin-bottom:5px; }
+      .ws-diag-muted { color:var(--ws-diag-muted); }
       .ws-diag-err { color:#f87171; }
       .ws-diag-connected, .ws-diag-ok { color:#4ade80; }
       .ws-diag-disconnected { color:#f87171; }
       .ws-diag-warn { color:#fbbf24; }
       .ws-diag-info { color:#38bdf8; }
-      .ws-diag-sidebar { font-size:11px;color:#94a3b8; }
-      .ws-diag-peer { margin-bottom:8px;padding:8px;background:rgba(255,255,255,0.04);border-radius:8px;border:1px solid rgba(255,255,255,0.06); }
+      .ws-diag-sidebar { font-size:11.5px;color:#9ca8bc; }
+      .ws-diag-peer {
+        margin-bottom:8px;padding:10px;background:var(--ws-diag-surface2);
+        border-radius:10px;border:1px solid rgba(255,255,255,0.06);
+      }
       .ws-diag-panel.ws-diag-light .ws-diag-peer { background:#fff;border-color:#e2e8f0; }
       .ws-diag-sync-play-ok, .ws-diag-sync-pause-ok, .ws-diag-sync-seek-ok { color:#4ade80; }
       .ws-diag-sync-play-fail, .ws-diag-sync-pause-fail, .ws-diag-sync-seek-fail { color:#f87171; }
       .ws-diag-sync-play-sent, .ws-diag-sync-pause-sent, .ws-diag-sync-seek-sent { color:#38bdf8; }
       .ws-diag-sync-play-recv, .ws-diag-sync-pause-recv, .ws-diag-sync-seek-recv { color:#fbbf24; }
 
-      .ws-diag-actions { display:flex;flex-wrap:wrap;gap:8px;margin-top:4px; }
+      .ws-diag-actions { display:flex;flex-wrap:wrap;gap:8px;margin-top:6px; }
       .ws-diag-btn {
-        border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:600;cursor:pointer;
-        background:linear-gradient(180deg, #2dd4bf 0%, #14b8a6 100%);color:#0f172a;
-        box-shadow:0 2px 6px rgba(20,184,166,0.35);
+        border:none;border-radius:10px;padding:10px 16px;font-size:12.5px;font-weight:600;cursor:pointer;
+        background:linear-gradient(180deg, #2dd4bf 0%, #0d9488 100%);
+        color:#042f2e;
+        box-shadow:0 2px 8px rgba(13,148,136,0.35),0 1px 0 rgba(255,255,255,0.2) inset;
+        transition:filter 0.15s,transform 0.12s;
       }
-      .ws-diag-btn:hover { filter:brightness(1.08); }
-      .ws-diag-btn:disabled { opacity:0.45;cursor:not-allowed;filter:none; }
+      .ws-diag-btn:hover { filter:brightness(1.06);transform:translateY(-1px); }
+      .ws-diag-btn:active { transform:translateY(0); }
+      .ws-diag-btn:disabled { opacity:0.45;cursor:not-allowed;filter:none;transform:none; }
       .ws-diag-btn-secondary {
-        background:rgba(255,255,255,0.08);color:#e2e8f0;box-shadow:none;border:1px solid rgba(255,255,255,0.12);
+        background:var(--ws-diag-surface2);
+        color:#e2e8f0;box-shadow:none;
+        border:1px solid rgba(255,255,255,0.1);
       }
-      .ws-diag-btn-secondary:hover { background:rgba(255,255,255,0.12); }
+      .ws-diag-btn-secondary:hover { background:rgba(255,255,255,0.1);filter:none; }
       .ws-diag-panel.ws-diag-light .ws-diag-btn-secondary { background:#fff;color:#0f172a;border-color:#cbd5e1; }
-      .ws-diag-btn-ghost { background:transparent;color:#94a3b8;box-shadow:none;border:1px dashed rgba(255,255,255,0.2); }
-      .ws-diag-btn-ghost:hover { color:#cbd5e1;border-style:solid; }
+      .ws-diag-panel.ws-diag-light .ws-diag-btn-secondary:hover { background:#f8fafc; }
+      .ws-diag-btn-ghost {
+        background:transparent;color:var(--ws-diag-muted);box-shadow:none;
+        border:1px dashed rgba(255,255,255,0.18);
+      }
+      .ws-diag-btn-ghost:hover { color:#cbd5e1;border-style:solid;background:var(--ws-diag-surface);filter:none; }
       .ws-diag-panel.ws-diag-light .ws-diag-btn-ghost { color:#64748b;border-color:#94a3b8; }
+      .ws-diag-panel.ws-diag-light .ws-diag-btn-ghost:hover { background:#f1f5f9;color:#334155; }
+      .ws-diag-panel.ws-diag-light .ws-diag-btn {
+        background:linear-gradient(180deg, #06b6d4 0%, #0891b2 100%);
+        color:#fff;
+        box-shadow:0 2px 8px rgba(8,145,178,0.35);
+      }
     `;
     document.head.appendChild(diagStyles);
   }
 
   if (diagnosticsUiEnabled) {
-    const diagToggleBtn = document.createElement('button');
+    diagToggleBtn = document.createElement('button');
     diagToggleBtn.id = 'ws-diag-toggle';
-    diagToggleBtn.title = 'Sync diagnostics (dev) — Ctrl+Shift+D';
-    diagToggleBtn.textContent = '⚙';
+    diagToggleBtn.title = 'Sync analytics (dev) — Ctrl+Shift+D';
+    diagToggleBtn.textContent = '◆';
     diagToggleBtn.style.cssText = `
     position:fixed;bottom:16px;left:16px;z-index:2147483646;
-    width:36px;height:36px;border-radius:10px;
-    background:rgba(18,20,24,0.92);border:1px solid rgba(78,205,196,0.35);
-    color:#4ECDC4;font-size:18px;line-height:1;cursor:pointer;
+    width:40px;height:40px;border-radius:12px;
+    background:linear-gradient(165deg, rgba(22,26,34,0.96) 0%, rgba(10,12,16,0.98) 100%);
+    border:1px solid rgba(34,211,238,0.28);
+    color:#22d3ee;font-size:14px;line-height:1;cursor:pointer;font-weight:700;
     display:flex;align-items:center;justify-content:center;
-    transition:background 0.2s,color 0.2s,transform 0.15s;
-    box-shadow:0 4px 16px rgba(0,0,0,0.35);
+    transition:background 0.2s,border-color 0.2s,color 0.2s,transform 0.15s,box-shadow 0.2s;
+    box-shadow:0 4px 20px rgba(0,0,0,0.45),0 0 24px -6px rgba(34,211,238,0.25);
   `;
     diagToggleBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleDiagnostic(); });
     diagToggleBtn.addEventListener('mouseenter', () => {
-      diagToggleBtn.style.background = 'rgba(30,40,40,0.98)';
-      diagToggleBtn.style.color = '#5eead4';
-      diagToggleBtn.style.transform = 'scale(1.05)';
+      diagToggleBtn.style.background = 'linear-gradient(165deg, rgba(30,40,48,0.98) 0%, rgba(15,20,28,0.99) 100%)';
+      diagToggleBtn.style.borderColor = 'rgba(34,211,238,0.5)';
+      diagToggleBtn.style.color = '#67e8f9';
+      diagToggleBtn.style.transform = 'translateY(-2px)';
+      diagToggleBtn.style.boxShadow = '0 8px 28px rgba(0,0,0,0.5),0 0 32px -4px rgba(34,211,238,0.35)';
     });
     diagToggleBtn.addEventListener('mouseleave', () => {
-      diagToggleBtn.style.background = 'rgba(18,20,24,0.92)';
-      diagToggleBtn.style.color = '#4ECDC4';
-      diagToggleBtn.style.transform = 'scale(1)';
+      diagToggleBtn.style.background = 'linear-gradient(165deg, rgba(22,26,34,0.96) 0%, rgba(10,12,16,0.98) 100%)';
+      diagToggleBtn.style.borderColor = 'rgba(34,211,238,0.28)';
+      diagToggleBtn.style.color = '#22d3ee';
+      diagToggleBtn.style.transform = 'translateY(0)';
+      diagToggleBtn.style.boxShadow = '0 4px 20px rgba(0,0,0,0.45),0 0 24px -6px rgba(34,211,238,0.25)';
     });
     document.body.appendChild(diagToggleBtn);
+    reparentPlayShareUiForFullscreen();
 
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'D') {
@@ -3703,21 +6278,51 @@ export function runPlayShareContent() {
 
   // Listen for room state changes (e.g. room created in popup while this tab is open)
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'local' || !changes.roomState) return;
+    if (area !== 'local') return;
+    if (siteSync.key === 'prime' && changes[PRIME_SYNC_DEBUG_STORAGE_KEY]) {
+      primeSyncDebugHud = !!changes[PRIME_SYNC_DEBUG_STORAGE_KEY].newValue;
+      updatePrimeHudVisibility();
+    }
+    if (!changes.roomState) return;
     const newState = changes.roomState.newValue;
     if (newState) applyRoomState(newState);
     else {
+      stopPeerRecordingSampleLoop();
+      const cid = roomState?.clientId;
+      if (diagnosticsUiEnabled && cid && getVideoProfiler().isRecording()) {
+        try {
+          sendBg({
+            source: 'playshare',
+            type: 'DIAG_PROFILER_COLLECTION',
+            active: false,
+            collectorClientId: cid
+          });
+        } catch {
+          /* ignore */
+        }
+      }
+      diag.profilerPeerCollection.remoteCollectorClientId = null;
       roomState = null;
+      suppressPlaybackEchoUntil = 0;
+      clearPlaybackOutboundCoalesce();
+      clearRemotePlaybackDebouncedQueue();
+      lastLocalPlaybackWireAt = 0;
+      lastLocalWirePlayingSent = null;
       peersInAdBreak.clear();
       localAdBreakActive = false;
       stopAdBreakMonitor();
-      diag.reportSession = { startedAt: null, roomCode: null };
+      pendingSyncState = null;
+      syncPendingSyncStateDiagFlag();
       hostAuthoritativeRef = null;
-      stopPositionReportInterval();
+      diag.reportSession = { startedAt: null, roomCode: null };
+      stopHostPositionHeartbeat();
+      stopViewerSyncInterval();
       stopViewerReconcileLoop();
+      stopPositionReportInterval();
       diag.clusterSync = null;
       lastClusterSidebarKey = null;
       hideClusterSyncBadge();
+      diagLog('ROOM_LEFT', { source: 'storage' });
       hideSidebarToggle();
       closeSidebar();
     }
@@ -3731,4 +6336,60 @@ export function runPlayShareContent() {
     }
   });
 
+  if (siteSync.key === 'prime') {
+    try {
+      chrome.storage.local.get({ [PRIME_SYNC_DEBUG_STORAGE_KEY]: false }, (d) => {
+        primeSyncDebugHud = !!d[PRIME_SYNC_DEBUG_STORAGE_KEY];
+        updatePrimeHudVisibility();
+      });
+      window.__playsharePrime = {
+        getStatus() {
+          refreshPrimeSyncTelemetry();
+          const p = diag.primeSync;
+          const v = videoElForPrimeTelemetry();
+          return {
+            adapterKey: siteSync.key,
+            adDetectorHeuristic: p ? p.adDetectorActive : null,
+            adScore: p ? p.adScore : null,
+            adStrongSignal: p ? p.adStrong : null,
+            adAuthoritative: p ? p.adDetectorActive : null,
+            adReasons: p && p.adReasons ? [...p.adReasons] : [],
+            adChannels: p && p.adChannels ? { ...p.adChannels } : null,
+            adMonitor: {
+              primeConsecutiveEnter: PRIME_AD_BREAK_MONITOR_OPTIONS.enterConsecutiveSamples,
+              primeConsecutiveExit: PRIME_AD_BREAK_MONITOR_OPTIONS.exitConsecutiveSamples,
+              primeMinHoldMs: PRIME_AD_BREAK_MONITOR_OPTIONS.minAdHoldMs,
+              primeDebounceEnterMs: PRIME_AD_BREAK_MONITOR_OPTIONS.debounceEnterMs,
+              primeDebounceExitMs: PRIME_AD_BREAK_MONITOR_OPTIONS.debounceExitMs
+            },
+            inMainSdkPlayerShell: p ? p.inSdkShell : null,
+            extensionLocalAdBreak: localAdBreakActive,
+            peersInAdBreakCount: peersInAdBreak.size,
+            viewerDriftSec: p && typeof p.viewerDriftSec === 'number' ? p.viewerDriftSec : null,
+            findVideoSelectorMatched: p ? p.selectorThatMatched : null,
+            hostPositionIntervalMs: playbackProfile.hostPositionIntervalMs,
+            viewerReconcileIntervalMs: playbackProfile.viewerReconcileIntervalMs,
+            video: v
+              ? {
+                  currentTime: v.currentTime,
+                  paused: v.paused,
+                  readyState: v.readyState,
+                  duration: v.duration
+                }
+              : null,
+            room: roomState ? { code: roomState.roomCode, isHost: roomState.isHost } : null,
+            help:
+              'Prime: popup → “Prime sync HUD”. Dev diagnostics: Ctrl+Shift+D on the video tab (Sync tab = overview + snapshots).'
+          };
+        }
+      };
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const onFullscreenChange = () => reparentPlayShareUiForFullscreen();
+  document.addEventListener('fullscreenchange', onFullscreenChange);
+  document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+  document.addEventListener('mozfullscreenchange', onFullscreenChange);
 }

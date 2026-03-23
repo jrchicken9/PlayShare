@@ -284,6 +284,18 @@ async function init() {
 
 init();
 
+/** Same key as `PRIME_SYNC_DEBUG_STORAGE_KEY` in content `sites/prime-video-sync.js`. */
+const PRIME_SYNC_DEBUG_STORAGE_KEY = 'primeSyncDebugHud';
+const primeSyncDebugHudInput = document.getElementById('primeSyncDebugHud');
+if (primeSyncDebugHudInput) {
+  chrome.storage.local.get({ [PRIME_SYNC_DEBUG_STORAGE_KEY]: false }, (d) => {
+    primeSyncDebugHudInput.checked = !!d[PRIME_SYNC_DEBUG_STORAGE_KEY];
+  });
+  primeSyncDebugHudInput.addEventListener('change', () => {
+    chrome.storage.local.set({ [PRIME_SYNC_DEBUG_STORAGE_KEY]: primeSyncDebugHudInput.checked });
+  });
+}
+
 // ── Auth handlers ─────────────────────────────────────────────────────────────
 if (btnLogin) {
   btnLogin.addEventListener('click', async () => {

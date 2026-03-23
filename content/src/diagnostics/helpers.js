@@ -2,7 +2,7 @@
  * Pure helpers for diagnostic export / timeline / analytics (for support & improvement).
  */
 
-export const DIAGNOSTIC_REPORT_SCHEMA = '2.4';
+export const DIAGNOSTIC_REPORT_SCHEMA = '2.5';
 
 export function pushDiagTimeline(timeline, entry, maxLen = 40) {
   timeline.unshift({ t: Date.now(), ...entry });
@@ -402,6 +402,27 @@ export function buildNarrativeSummary(payload) {
   const rttProv = payload.timing?.lastRttSource ? ` [${payload.timing.lastRttSource}]` : '';
   lines.push(`RTT last: ${rttLine}${rttProv} | Drift EWM: ${payload.timing?.driftEwmSec != null ? payload.timing.driftEwmSec.toFixed(4) + 's' : '—'} (after remote apply only)`);
   lines.push('');
+  lines.push('--- Extension & server connectivity ---');
+  const cd = payload.connectionDetail;
+  const tabConn = `${payload.connectionStatus ?? '—'}${cd?.transportPhase ? ` · transport: ${cd.transportPhase}` : ''}`;
+  lines.push(`Signaling socket (as seen by this tab): ${tabConn}`);
+  if (cd?.connectionMessage) lines.push(`Transport detail: ${cd.connectionMessage}`);
+  const swt = payload.serviceWorkerTransport;
+  if (swt && typeof swt === 'object') {
+    lines.push(
+      `Service worker WebSocket: host ${swt.serverHost ?? '—'} · readyState ${swt.wsReadyState ?? '—'} · opens ${swt.wsOpenCount ?? 0} · closes ${swt.wsCloseCount ?? 0} · send failures ${swt.wsSendFailures ?? 0}`
+    );
+    lines.push(
+      `  last open: ${swt.lastWsOpenedAt != null ? new Date(swt.lastWsOpenedAt).toISOString() : '—'} · last close: ${swt.lastWsClosedAt != null ? new Date(swt.lastWsClosedAt).toISOString() : '—'}`
+    );
+  } else {
+    lines.push('Service worker WebSocket: no snapshot (open Sync analytics once to refresh GET_DIAG).');
+  }
+  const msg = payload.messaging;
+  lines.push(
+    `Tab ↔ service worker messaging: runtime.lastError ×${msg?.runtimeSendFailures ?? 0} · send() threw ×${msg?.sendThrowCount ?? 0}${msg?.runtimeLastErrorMessage ? ` · last: ${msg.runtimeLastErrorMessage}` : ''}`
+  );
+  lines.push('');
   if (payload.capture) {
     const c = payload.capture;
     lines.push('--- How this snapshot was captured ---');
@@ -458,30 +479,12 @@ export function buildNarrativeSummary(payload) {
     lines.push(`waiting ×${v.waiting ?? 0} · stalled ×${v.stalled ?? 0}`);
     lines.push('');
   }
-  if (
-    payload.messaging &&
-    ((payload.messaging.runtimeSendFailures ?? 0) > 0 || (payload.messaging.sendThrowCount ?? 0) > 0)
-  ) {
-    const m = payload.messaging;
-    lines.push('--- Tab → service worker messaging ---');
-    lines.push(`chrome.runtime.lastError ×${m.runtimeSendFailures ?? 0} · send threw ×${m.sendThrowCount ?? 0}`);
-    if (m.runtimeLastErrorMessage) lines.push(`Last: ${m.runtimeLastErrorMessage}`);
-    lines.push('');
-  }
   const ctd = a.correlationTraceDelivery;
   if (ctd && (ctd.matched > 0 || ctd.traceEventsWithIdConsidered > 0)) {
     lines.push('--- Server trace ↔ client recv (correlationId) ---');
     const s = ctd.summary || {};
     lines.push(
       `Matched ${ctd.matched}/${ctd.traceEventsWithIdConsidered} playback rows · clientRecv−serverTrace ms: n=${s.count ?? 0} avg=${s.avg ?? '—'} p50=${s.p50 ?? '—'} p90=${s.p90 ?? '—'}${ctd.clockSkewSuspected ? ' · clock skew suspected' : ''}`
-    );
-    lines.push('');
-  }
-  if (eb?.serviceWorkerTransport && typeof eb.serviceWorkerTransport === 'object') {
-    const t = eb.serviceWorkerTransport;
-    lines.push('--- Service worker WebSocket (since worker start) ---');
-    lines.push(
-      `Opens ${t.wsOpenCount ?? 0} · closes ${t.wsCloseCount ?? 0} · send failures ${t.wsSendFailures ?? 0} · target ${t.serverHost ?? '—'} · last open ${t.lastWsOpenedAt != null ? new Date(t.lastWsOpenedAt).toISOString() : '—'} · last close ${t.lastWsClosedAt != null ? new Date(t.lastWsClosedAt).toISOString() : '—'}`
     );
     lines.push('');
   }
@@ -692,6 +695,16 @@ export function buildDiagnosticExport({
         }
       : null,
     connectionStatus: diag.connectionStatus,
+    connectionDetail: {
+      transportPhase:
+        diag.transportPhase && String(diag.transportPhase).trim()
+          ? truncStr(String(diag.transportPhase).trim(), 64)
+          : null,
+      connectionMessage:
+        diag.connectionMessage && String(diag.connectionMessage).trim()
+          ? truncStr(String(diag.connectionMessage).trim(), 200)
+          : null
+    },
     tabHidden: !!diag.tabHidden,
     diagOverlayStale: !!diag.diagOverlayStale,
     clusterSync: diag.clusterSync
@@ -752,8 +765,8 @@ export function buildDiagnosticExport({
     })),
     analytics,
     howToUse:
-      'Upload JSON or paste narrativeSummary. v2.3: apply denials (sync lock, Netflix debounce, tab-hidden deferral, host-only), messaging failures, WS send drops, video waiting/stalled, correlationTraceDelivery (trace vs recv). Export refreshes RTT + trace. No full URLs/chat.',
-    note: 'Redacted for privacy. sessionChronology + dataCompleteness describe how the test was run and what was clipped.'
+      'Upload JSON or paste narrativeSummary. v2.5: top “Extension & server connectivity” + extensionOps / serviceWorkerTransport / connectionDetail in JSON. v2.3+: apply denials, messaging failures, WS send drops, buffering, correlationTraceDelivery. Export refreshes RTT + trace. No full URLs/chat.',
+    note: 'Redacted for privacy. sessionChronology + dataCompleteness describe how the test was run and what was clipped. When embedded under playshareUnifiedExport, this object is the "extension" slice alongside videoPlayerProfiler and (on Prime) primeSiteDebug.'
   };
 
   payload.narrativeSummary = buildNarrativeSummary({

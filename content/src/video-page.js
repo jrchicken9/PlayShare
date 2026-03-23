@@ -67,11 +67,6 @@ export function scoreVideoElement(v) {
     if (v.getAttribute('aria-hidden') === 'true') score *= 0.25;
     if (!v.paused) score *= 1.35;
     if (v.muted && (rect.width < 320 || rect.height < 180)) score *= 0.4;
-    try {
-      if (v.closest?.('.atvwebplayersdk-player-container, [class*="atvwebplayersdk-player"], [class*="webPlayerInner"]')) {
-        score *= 1.85;
-      }
-    } catch { /* ignore */ }
     return score;
   } catch {
     return -Infinity;

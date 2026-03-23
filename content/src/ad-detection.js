@@ -1,3 +1,5 @@
+import { detectPrimeVideoAd, isPrimeVideoHostname } from './sites/prime-video-sync.js';
+
 /**
  * Best-effort ad-break detection (DOM heuristics). Platforms change often — pair with manual controls.
  * @param {string} hostname
@@ -6,6 +8,7 @@
 export function detectAdPlaying(hostname, video) {
   const h = (hostname || '').toLowerCase();
   try {
+    if (isPrimeVideoHostname(h)) return detectPrimeVideoAd(video);
     if (/youtube\.com|youtu\.be/.test(h)) return detectYouTubeAd();
     if (/hulu\.com/.test(h)) return detectHuluAd();
     if (/crave\.ca/.test(h)) return detectCraveAd();
@@ -48,18 +51,46 @@ function detectPeacockAd() {
 }
 
 /**
- * Debounced enter/exit to avoid flicker from DOM churn.
+ * @typedef {object} AdBreakMonitorOptions
+ * @property {number} [debounceEnterMs]
+ * @property {number} [debounceExitMs]
+ * @property {number} [enterConsecutiveSamples] — raw “ad” reads in a row before enter debounce can start (default 1).
+ * @property {number} [exitConsecutiveSamples] — raw “clear” reads in a row before exit debounce can start (default 1).
+ * @property {number} [minAdHoldMs] — ignore exit debouncing until this long after enter (avoids “complete” during short UI flicker).
+ * @property {(hostname: string, video: HTMLVideoElement|null|undefined) => boolean} [detectOverride]
+ */
+
+/**
+ * Debounced enter/exit + consecutive sampling + optional min hold so “ad complete” is stable after DOM settles.
  * @param {string} hostname
  * @param {() => HTMLVideoElement|null|undefined} getVideo
  * @param {{ onEnter: () => void, onExit: () => void, debounceEnterMs?: number, debounceExitMs?: number }} callbacks
+ * @param {AdBreakMonitorOptions} [monitorOptions]
  */
-export function createAdBreakMonitor(hostname, getVideo, callbacks) {
-  const debounceEnterMs = callbacks.debounceEnterMs ?? 650;
-  const debounceExitMs = callbacks.debounceExitMs ?? 900;
+export function createAdBreakMonitor(hostname, getVideo, callbacks, monitorOptions = {}) {
+  const debounceEnterMs =
+    monitorOptions.debounceEnterMs ?? callbacks.debounceEnterMs ?? 650;
+  const debounceExitMs =
+    monitorOptions.debounceExitMs ?? callbacks.debounceExitMs ?? 900;
+  const enterNeed = Math.max(1, monitorOptions.enterConsecutiveSamples ?? 1);
+  const exitNeed = Math.max(1, monitorOptions.exitConsecutiveSamples ?? 1);
+  const minAdHoldMs = Math.max(0, monitorOptions.minAdHoldMs ?? 0);
+
   let intervalId = null;
   let inAd = false;
   let enterT = null;
   let exitT = null;
+  let consecOn = 0;
+  let consecOff = 0;
+  let adEnteredAt = 0;
+
+  function rawDetect() {
+    const video = getVideo();
+    if (monitorOptions.detectOverride) {
+      return monitorOptions.detectOverride(hostname, video);
+    }
+    return detectAdPlaying(hostname, video);
+  }
 
   function clearEnter() {
     if (enterT) {
@@ -75,32 +106,57 @@ export function createAdBreakMonitor(hostname, getVideo, callbacks) {
   }
 
   function tick() {
-    const ad = detectAdPlaying(hostname, getVideo());
+    const ad = rawDetect();
     if (ad) {
+      consecOn = Math.min(consecOn + 1, 99);
+      consecOff = 0;
+    } else {
+      consecOff = Math.min(consecOff + 1, 99);
+      consecOn = 0;
+    }
+
+    const enterArmed = consecOn >= enterNeed;
+    const exitArmed = consecOff >= exitNeed;
+
+    if (!inAd) {
       clearExit();
-      if (!inAd && !enterT) {
-        enterT = setTimeout(() => {
-          enterT = null;
-          if (!inAd) {
+      if (enterArmed) {
+        if (!enterT) {
+          enterT = setTimeout(() => {
+            enterT = null;
+            if (inAd) return;
+            if (!rawDetect()) return;
             inAd = true;
+            adEnteredAt = Date.now();
             try {
               callbacks.onEnter();
-            } catch { /* ignore */ }
-          }
-        }, debounceEnterMs);
+            } catch {
+              /* ignore */
+            }
+          }, debounceEnterMs);
+        }
+      } else {
+        clearEnter();
       }
     } else {
       clearEnter();
-      if (inAd && !exitT) {
-        exitT = setTimeout(() => {
-          exitT = null;
-          if (inAd) {
+      const holdOk = !minAdHoldMs || Date.now() - adEnteredAt >= minAdHoldMs;
+      if (exitArmed && holdOk) {
+        if (!exitT) {
+          exitT = setTimeout(() => {
+            exitT = null;
+            if (!inAd) return;
+            if (rawDetect()) return;
             inAd = false;
             try {
               callbacks.onExit();
-            } catch { /* ignore */ }
-          }
-        }, debounceExitMs);
+            } catch {
+              /* ignore */
+            }
+          }, debounceExitMs);
+        }
+      } else {
+        clearExit();
       }
     }
   }
@@ -108,11 +164,22 @@ export function createAdBreakMonitor(hostname, getVideo, callbacks) {
   return {
     start() {
       if (intervalId) return;
+      // Prime (and others) often mount ad UI in the same tick as <video> attach; waiting 400ms
+      // for the first interval loses the first sample and delays AD_BREAK_START after refresh.
+      tick();
+      try {
+        setTimeout(tick, 100);
+      } catch {
+        /* ignore */
+      }
       intervalId = setInterval(tick, 400);
     },
     stop() {
       clearEnter();
       clearExit();
+      consecOn = 0;
+      consecOff = 0;
+      adEnteredAt = 0;
       if (intervalId) {
         clearInterval(intervalId);
         intervalId = null;
@@ -121,7 +188,9 @@ export function createAdBreakMonitor(hostname, getVideo, callbacks) {
         inAd = false;
         try {
           callbacks.onExit();
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
     }
   };

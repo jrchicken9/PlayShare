@@ -2,6 +2,7 @@
  * Per-site playback / sync tuning (DRM-safe vs aggressive apply).
  */
 import { contentConstants as C } from './constants.js';
+import { getPrimePlaybackProfilePatch, isPrimeVideoHostname } from './sites/prime-video-sync.js';
 
 /** @typedef {ReturnType<typeof getPlaybackProfile>} PlaybackProfile */
 
@@ -20,7 +21,9 @@ const BASE = {
   syncStateApplyDelayMs: 0,
   syncRequestDelayMs: 500,
   applyDelayNetflix: C.APPLY_DELAY_NETFLIX,
-  applyDelayPrime: C.APPLY_DELAY_PRIME
+  applyDelayPrime: C.APPLY_DELAY_PRIME,
+  /** 0 = send every local PLAY/PAUSE immediately. */
+  playbackOutboundCoalesceMs: 0
 };
 
 /**
@@ -53,23 +56,9 @@ export function getPlaybackProfile(hostname, pathname) {
       applyDebounceMs: C.SYNC_DEBOUNCE_MS,
       syncRequestDelayMs: 1500
     };
-  } else if (/primevideo\.com/.test(h) || /amazon\.(com|ca)/.test(h)) {
-    profile = {
-      ...profile,
-      handlerKey: 'prime',
-      label: 'Prime Video',
-      /** Player often mounts before `duration` / readyState is final — pick best `<video>` earlier. */
-      useRelaxedVideoReady: true,
-      hostSeekSuppressAfterPlayMs: C.HOST_SEEK_SUPPRESS_AFTER_PLAY_MS_PRIME,
-      syncRequestDelayMs: 900,
-      /** Prime ignores a bare `video.play()` unless UI fallbacks run (see forcePlay). */
-      aggressiveRemoteSync: true,
-      syncStateApplyDelayMs: C.PRIME_SYNC_STATE_APPLY_DELAY_MS,
-      applyDebounceMs: C.PRIME_APPLY_DEBOUNCE_MS,
-      /** Looser seek / reconcile threshold than default 0.5s. */
-      playbackSlackSec: C.SYNC_THRESHOLD_PRIME,
-      timeJumpThresholdSec: C.PRIME_TIME_JUMP_THRESHOLD
-    };
+  } else if (isPrimeVideoHostname(h)) {
+    /* Prime intervals, slack, debounce — only these hostnames; content script still requires isVideoPage(). */
+    profile = { ...profile, ...getPrimePlaybackProfilePatch() };
   }
 
   return profile;

@@ -15,6 +15,7 @@
     "build:content:watch": "esbuild content/src/entry.js --bundle --outfile=content/content.bundle.js --format=iife --platform=browser --target=chrome109 --legal-comments=none --charset=utf8 --define:PLAYSHARE_CONTENT_DIAGNOSTICS=true --watch",
     "package:extension": "bash scripts/package-extension.sh",
     "prepackage:extension": "npm run sync-streaming && npm run build:content",
+    "package:extension:dev": "bash scripts/package-extension-dev.sh",
     "package:extension:both": "bash scripts/package-extension-both.sh",
     "start": "node server.js",
     "dev": "node server.js",

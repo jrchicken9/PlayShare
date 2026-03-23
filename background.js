@@ -352,6 +352,8 @@ function handleServerMessage(msg) {
     case 'TYPING_STOP':
     case 'DIAG_SYNC_APPLY_RESULT':
     case 'DIAG_SYNC_REPORT':
+    case 'DIAG_PROFILER_COLLECTION':
+    case 'DIAG_PEER_RECORDING_SAMPLE':
     case 'DIAG_ROOM_TRACE':
     case 'POSITION_SNAPSHOT':
       broadcastToTabs(msg);
@@ -505,6 +507,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'TYPING_STOP':
     case 'DIAG_SYNC_APPLY_RESULT':
     case 'DIAG_SYNC_REPORT':
+    case 'DIAG_PROFILER_COLLECTION':
+    case 'DIAG_PEER_RECORDING_SAMPLE':
     case 'DIAG_ROOM_TRACE_REQUEST':
       send(msg);
       sendResponse({ ok: true });

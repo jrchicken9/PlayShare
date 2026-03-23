@@ -890,6 +890,17 @@ wss.on('connection', (ws) => {
         break;
       }
 
+      case 'DIAG_PROFILER_COLLECTION':
+      case 'DIAG_PEER_RECORDING_SAMPLE': {
+        if (!client.roomCode) return;
+        broadcastAll(client.roomCode, {
+          ...msg,
+          fromClientId: clientId,
+          fromUsername: client.username
+        });
+        break;
+      }
+
       // ── Chat ─────────────────────────────────────────────────────────────
       case 'CHAT': {
         if (!client.roomCode) return;

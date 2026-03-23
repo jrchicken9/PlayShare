@@ -22,6 +22,11 @@ export const contentConstants = {
   SYNC_DEBOUNCE_MS: 800,
   /** Coalesce rapid SYNC_STATE + position packets on Prime. */
   PRIME_APPLY_DEBOUNCE_MS: 420,
+  /**
+   * Host/local: trailing-edge coalesce PLAY/PAUSE wires to the room (ms). Reduces out-of-order
+   * bursts when the player fires events faster than peers can apply (0 = off).
+   */
+  PRIME_PLAYBACK_OUTBOUND_COALESCE_MS: 140,
   /** Let Prime settle after programmatic seek before play(). */
   PRIME_SYNC_STATE_APPLY_DELAY_MS: 220,
   PRIME_TIME_JUMP_THRESHOLD: 2.0,
@@ -31,6 +36,9 @@ export const contentConstants = {
   VIEWER_SYNC_INTERVAL_MS: 20000,
   /** Viewer reconciliation vs host timeline (hybrid continuous sync). */
   SYNC_RECONCILE_INTERVAL_MS: 2500,
+  /** Prime: slightly faster host anchor + viewer reconcile (ABR/UI latency). */
+  PRIME_HOST_POSITION_INTERVAL_MS: 2200,
+  PRIME_VIEWER_RECONCILE_INTERVAL_MS: 2200,
   SYNC_DRIFT_HARD_SEC: 0.5,
   /** Below this magnitude, leave playbackRate at 1 (avoids endless micro-nudges). */
   SYNC_DRIFT_SOFT_MIN_SEC: 0.08,
@@ -46,6 +54,11 @@ export const contentConstants = {
   APPLY_DELAY_NETFLIX: 150,
   APPLY_DELAY_PRIME: 120,
   DIAG_DEBOUNCE_MS: 150,
+  /**
+   * Dev build only: interval for `DIAG_PEER_RECORDING_SAMPLE` while a peer is recording the video
+   * profiler (collector tab); samples are bundled into the unified export JSON.
+   */
+  DIAG_PEER_DEV_SHARE_MS: 12000,
   /**
    * After remote sync mutates the video element, ignore play/pause/seeked long enough that we
    * do not emit PLAY/SEEK (collaborative) or revert seeks (host-only) — avoids feedback loops

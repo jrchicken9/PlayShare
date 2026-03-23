@@ -683,4 +683,24 @@ body {
   font-size: 10px;
   color: #6a6a6a;
 }
-.ws-footer-line { text-align: center; line-height: 1.3; }
+.ws-footer-line { text-align: center; line-height: 1.3; flex: 1 1 100%; }
+.ws-footer-prime-debug {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex: 1 1 100%;
+  max-width: 100%;
+  font-size: 10px;
+  color: #8a8a8a;
+  line-height: 1.35;
+  cursor: pointer;
+  user-select: none;
+  text-align: left;
+}
+.ws-footer-prime-debug input[type="checkbox"] {
+  accent-color: #00A8E1;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+  flex-shrink: 0;
+}
