@@ -5,5 +5,6 @@ node_modules/
 *.log
 # Optional local archives (source is in-repo)
 watchsync-*.zip
-playshare-extension.zip
-playshare-extension-dev.zip
+# Root-only build artifacts; public/install/playshare-extension.zip is committed for the homepage download.
+/playshare-extension.zip
+/playshare-extension-dev.zip

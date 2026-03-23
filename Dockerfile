@@ -5,9 +5,7 @@ RUN apk add --no-cache bash zip
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
-RUN npm run package:extension \
-  && mkdir -p public/install \
-  && cp playshare-extension.zip public/install/playshare-extension.zip
+RUN npm run package:extension
 
 FROM node:20-alpine
 WORKDIR /app

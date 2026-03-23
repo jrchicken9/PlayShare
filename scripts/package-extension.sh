@@ -4,7 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-OUT="${1:-playshare-extension.zip}"
+mkdir -p public/install
+# Default: zip for homepage + Railway (GET /install/playshare-extension.zip). Pass a path for other artifacts (e.g. root zip for CI).
+OUT="${1:-public/install/playshare-extension.zip}"
 rm -f "$OUT"
 
 zip -r "$OUT" \
@@ -30,6 +32,5 @@ echo "Load in Chrome: chrome://extensions → Developer mode → Load unpacked (
 
 # Homepage shows this next to the .zip download; matches manifest baked into the zip.
 VERSION="$(node -p "JSON.parse(require('fs').readFileSync('manifest.json','utf8')).version")"
-mkdir -p public/install
 printf '%s\n' "$VERSION" > public/install/playshare-extension.version
 echo "Wrote public/install/playshare-extension.version ($VERSION)"

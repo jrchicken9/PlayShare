@@ -4,6 +4,6 @@ node_modules
 .env.*
 *.log
 .DS_Store
-# Root-level zips only; extension source must stay in context for Docker pack stage
-playshare-extension.zip
-playshare-extension-dev.zip
+# Root-level zips only; do not exclude public/install/playshare-extension.zip (homepage artifact).
+/playshare-extension.zip
+/playshare-extension-dev.zip

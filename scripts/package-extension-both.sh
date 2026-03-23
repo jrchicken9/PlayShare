@@ -20,5 +20,5 @@ rm -f "$MAN_BAK"
 npm run build:content
 
 echo ""
-echo "Store upload:     $(pwd)/playshare-extension.zip"
-echo "Developer load:   $(pwd)/playshare-extension-dev.zip  (shows as \"PlayShare (Developer)\" in chrome://extensions; diagnostics on; same version as store zip)"
+echo "Store / homepage: $(pwd)/playshare-extension.zip  (or run npm run package:extension → public/install/playshare-extension.zip)"
+echo "Local dev only:   $(pwd)/playshare-extension-dev.zip  (not for distribution; diagnostics on; gitignored)"
