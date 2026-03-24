@@ -1008,11 +1008,15 @@ function explorerHtml() {
       <div class="chk" style="margin-top: 12px">
         <label><input type="checkbox" id="gateSkipOpenAi" /> Use server LLM only (<code>PLAYSHARE_DIAG_AI_API_KEY</code> or <code>OPENAI_API_KEY</code> on the host — skip key above)</label>
       </div>
+      <p id="gateOwnKeyHint" class="muted" style="display: none; margin-top: 10px; font-size: 12px; line-height: 1.45">
+        To paste <strong>your</strong> OpenAI key, uncheck “Use server LLM only” first (that option disables the key field). While it stays checked, only the server’s env keys are used for the AI assistant.
+      </p>
       <p id="gateServerLlmHint" class="muted" style="display: none; margin-top: 10px; font-size: 13px; line-height: 1.5">
         This host reports an LLM key in its environment (Railway variables or a local <code>.env</code> file). You can leave the OpenAI field empty and keep “Use server LLM only” checked.
       </p>
       <p class="muted" style="margin-top: 12px; font-size: 12px; line-height: 1.45">Secrets are kept in this tab only until you close it or refresh; they are not written to sessionStorage.</p>
       <button type="button" id="gateSubmit">Continue</button>
+      <p id="gateWorking" class="muted" style="display: none; margin-top: 12px; font-size: 13px; line-height: 1.45" aria-live="polite"></p>
       <div id="gateErr" class="alert err" style="display: none; margin-top: 14px"></div>
     </div>
   </div>
@@ -1201,6 +1205,20 @@ function explorerHtml() {
 
   function $(id) { return document.getElementById(id); }
 
+  /** Resolve API base when the app is mounted under a path prefix (same origin as this page). */
+  function intelBase() {
+    var p = window.location.pathname || '';
+    var needle = '/diag/intel';
+    var idx = p.indexOf(needle);
+    if (idx >= 0) return p.slice(0, idx + needle.length);
+    return needle;
+  }
+  /** @param {string} suffix path after /diag/intel e.g. '/cases?limit=1' */
+  function intelApi(suffix) {
+    var s = suffix.charAt(0) === '/' ? suffix : '/' + suffix;
+    return intelBase() + s;
+  }
+
   function enterExplorerApp() {
     var g = $('gateRoot');
     var a = $('playshareExplorerApp');
@@ -1238,6 +1256,7 @@ function explorerHtml() {
     var skipAi = $('gateSkipOpenAi') && $('gateSkipOpenAi').checked;
     var err = $('gateErr');
     var btn = $('gateSubmit');
+    var working = $('gateWorking');
     if (err) {
       err.style.display = 'none';
       err.textContent = '';
@@ -1258,8 +1277,23 @@ function explorerHtml() {
       return;
     }
     if (btn) btn.disabled = true;
+    if (working) {
+      working.style.display = 'block';
+      working.textContent = 'Checking credentials with the server…';
+    }
     try {
-      var r = await fetch('/diag/intel/cases?limit=1', { headers: { Authorization: 'Bearer ' + bearer } });
+      var r;
+      try {
+        r = await fetch(intelApi('/cases?limit=1'), { headers: { Authorization: 'Bearer ' + bearer } });
+      } catch (eFetch) {
+        if (err) {
+          err.textContent =
+            'Could not reach the diagnostics API (network error). Open this page from your PlayShare server’s link (…/diag/intel/explorer), not a downloaded copy. If you use a reverse proxy, keep the same path prefix. ' +
+            (eFetch && eFetch.message ? '(' + eFetch.message + ')' : '');
+          err.style.display = 'block';
+        }
+        return;
+      }
       if (r.status === 401 || r.status === 403) {
         if (err) {
           err.textContent =
@@ -1294,11 +1328,22 @@ function explorerHtml() {
       $('tok').value = bearer;
       enterExplorerApp();
     } finally {
+      if (working) working.style.display = 'none';
       if (btn) btn.disabled = false;
     }
   }
 
-  fetch('/diag/intel/public-meta')
+  function syncGateOpenAiEnabled() {
+    var sk = $('gateSkipOpenAi');
+    var inp = $('gateOpenAi');
+    var hint = $('gateOwnKeyHint');
+    if (!inp) return;
+    var dis = !!(sk && sk.checked);
+    inp.disabled = dis;
+    if (hint) hint.style.display = dis ? 'block' : 'none';
+  }
+
+  fetch(intelApi('/public-meta'))
     .then(function (r) {
       return r.json();
     })
@@ -1309,6 +1354,7 @@ function explorerHtml() {
         if (gs) gs.checked = true;
         var gh = $('gateServerLlmHint');
         if (gh) gh.style.display = 'block';
+        syncGateOpenAiEnabled();
       }
     })
     .catch(function () {});
@@ -1319,6 +1365,19 @@ function explorerHtml() {
       validateAndEnterFromGate();
     };
   }
+  var gateSkipEl = $('gateSkipOpenAi');
+  if (gateSkipEl) gateSkipEl.addEventListener('change', syncGateOpenAiEnabled);
+  syncGateOpenAiEnabled();
+
+  function gateMaybeSubmit(e) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    validateAndEnterFromGate();
+  }
+  var gb = $('gateBearer');
+  if (gb) gb.addEventListener('keydown', gateMaybeSubmit);
+  var go = $('gateOpenAi');
+  if (go) go.addEventListener('keydown', gateMaybeSubmit);
 
   var btnReunlock = $('btnReunlock');
   if (btnReunlock) {
@@ -1335,6 +1394,7 @@ function explorerHtml() {
       if ($('gateBearer')) $('gateBearer').value = '';
       if ($('gateOpenAi')) $('gateOpenAi').value = '';
       if ($('gateSkipOpenAi')) $('gateSkipOpenAi').checked = !!serverLlmConfigured;
+      syncGateOpenAiEnabled();
       var gr = $('gateRoot');
       var ap = $('playshareExplorerApp');
       if (ap) ap.hidden = true;
@@ -1475,7 +1535,7 @@ function explorerHtml() {
       box.querySelectorAll('[data-explain]').forEach(function (btn) {
         btn.onclick = function () {
           var rid = btn.getAttribute('data-explain');
-          if (rid) jget('/diag/intel/cases/' + rid + '/explain');
+          if (rid) jget(intelApi('/cases/' + rid + '/explain'));
         };
       });
       return;
@@ -1552,7 +1612,7 @@ function explorerHtml() {
         '<p style="margin-top:12px"><button type="button" class="linkish" id="btnExplainThis">Open plain-language explain</button></p></div>';
       var bid = row.report_id;
       $('btnExplainThis').onclick = function () {
-        if (bid) jget('/diag/intel/cases/' + bid + '/explain');
+        if (bid) jget(intelApi('/cases/' + bid + '/explain'));
       };
       return;
     }
@@ -1640,7 +1700,7 @@ function explorerHtml() {
     if (plat) q.push('platform=' + encodeURIComponent(plat));
     if (tag) q.push('tag=' + encodeURIComponent(tag));
     if (cl) q.push('cluster=' + encodeURIComponent(cl));
-    return '/diag/intel/cases?' + q.join('&');
+    return intelApi('/cases?' + q.join('&'));
   }
 
   function searchPath(offset) {
@@ -1648,14 +1708,14 @@ function explorerHtml() {
     var raw = ($('sq').value || '').trim();
     var limRaw = parseInt(($('fSearchLim').value || '25').trim(), 10) || 25;
     var lim = Math.min(40, Math.max(1, limRaw));
-    return '/diag/intel/search?q=' + encodeURIComponent(raw) + '&limit=' + lim + '&offset=' + off;
+    return intelApi('/search?q=' + encodeURIComponent(raw) + '&limit=' + lim + '&offset=' + off);
   }
 
   function clustersPath(offset) {
     var off = offset == null || offset === '' ? 0 : Math.max(0, parseInt(offset, 10) || 0);
     var limRaw = parseInt(($('fCLim').value || '25').trim(), 10) || 25;
     var lim = Math.min(80, Math.max(1, limRaw));
-    return '/diag/intel/clusters?limit=' + lim + '&offset=' + off;
+    return intelApi('/clusters?limit=' + lim + '&offset=' + off);
   }
 
   document.querySelectorAll('.tabs [role="tab"]').forEach(function (tab) {
@@ -1698,7 +1758,7 @@ function explorerHtml() {
   $('btnRecs').onclick = function () {
     lastPagedFetch = null;
     lastPagination = null;
-    jget('/diag/intel/recommendations?sample=150');
+    jget(intelApi('/recommendations?sample=150'));
   };
   $('btnSearch').onclick = function () {
     var raw = ($('sq').value || '').trim();
@@ -1718,7 +1778,7 @@ function explorerHtml() {
     var tv = encodeURIComponent(($('tv').value || '').trim());
     var pf = ($('pf').value || '').trim();
     if (!bv || !tv) { alert('Baseline and target versions are required'); return; }
-    var u = '/diag/intel/regression?baseline_ver=' + bv + '&target_ver=' + tv;
+    var u = intelApi('/regression?baseline_ver=' + bv + '&target_ver=' + tv);
     if (pf) u += '&platform=' + encodeURIComponent(pf);
     jget(u);
   };
@@ -1778,7 +1838,7 @@ function explorerHtml() {
         persist_learning: !$('aiDryRun').checked && $('aiPersist').checked
       };
       if (lk) body.llm_api_key = lk;
-      var r = await fetch('/diag/intel/ai-brief', {
+      var r = await fetch(intelApi('/ai-brief'), {
         method: 'POST',
         headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
         body: JSON.stringify(body)
@@ -1976,7 +2036,7 @@ function explorerHtml() {
     var box = $('aiKnowledgeList');
     box.innerHTML = '<span class="muted">Loading…</span>';
     try {
-      var r = await fetch('/diag/intel/knowledge?limit=25', { headers: authHeaders() });
+      var r = await fetch(intelApi('/knowledge?limit=25'), { headers: authHeaders() });
       var j = await r.json();
       if (j.ok && j.entries) renderKnowledgeTable(j.entries);
       else box.innerHTML = '<p class="muted">Could not load list: ' + esc(j.error || String(r.status)) + '</p>';
@@ -1997,7 +2057,7 @@ function explorerHtml() {
     ta.style.display = 'block';
     ta.value = 'Loading…';
     try {
-      var r = await fetch('/diag/intel/knowledge?id=' + encodeURIComponent(id), { headers: authHeaders() });
+      var r = await fetch(intelApi('/knowledge?id=' + encodeURIComponent(id)), { headers: authHeaders() });
       var j = await r.json();
       if (j.ok && j.entry) ta.value = j.entry.digest_markdown || '';
       else ta.value = 'Error: ' + (j.error || String(r.status));
@@ -2015,7 +2075,7 @@ function explorerHtml() {
     }
     st.textContent = 'Saving…';
     try {
-      var r = await fetch('/diag/intel/knowledge', {
+      var r = await fetch(intelApi('/knowledge'), {
         method: 'POST',
         headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
         body: JSON.stringify({
