@@ -1,6 +1,6 @@
 /**
  * Internal HTTP API + lightweight HTML explorer for diagnostic intelligence.
- * Auth: Bearer token must match PLAYSHARE_DIAG_INTEL_SECRET and/or PLAYSHARE_DIAG_UPLOAD_SECRET (either value accepted if both are set).
+ * Auth: Bearer and/or X-PlayShare-Diag-Intel-Secret must match PLAYSHARE_DIAG_INTEL_SECRET and/or PLAYSHARE_DIAG_UPLOAD_SECRET (either value accepted if both are set).
  */
 
 const { URL } = require('url');
@@ -48,11 +48,12 @@ function diagIntelSlicePage(rows, limit) {
   return { data, hasMore, returned: data.length };
 }
 
-/** Trim, strip UTF-8 BOM, and trailing CR/LF (common when copying from Railway / .env). */
+/** Trim, strip UTF-8 BOM, NBSP, and CR (common when copying from Railway / Windows / .env). */
 function scrubDiagSecret(s) {
   let t = String(s || '').trim();
   if (t.charCodeAt(0) === 0xfeff) t = t.slice(1).trim();
-  return t.replace(/\r$/g, '').trim();
+  t = t.replace(/\u00a0/g, '').replace(/\r/g, '').trim();
+  return t;
 }
 
 /**
@@ -80,7 +81,12 @@ function json(res, status, obj) {
 }
 
 function unauthorized(res) {
-  json(res, 401, { ok: false, error: 'unauthorized' });
+  json(res, 401, {
+    ok: false,
+    error: 'unauthorized',
+    hint:
+      'The secret did not match PLAYSHARE_DIAG_INTEL_SECRET or PLAYSHARE_DIAG_UPLOAD_SECRET on this server. Paste the variable value only (no "Bearer" prefix). If you use a proxy that strips Authorization on GET, the explorer sends X-PlayShare-Diag-Intel-Secret as well.'
+  });
 }
 
 function parseBearerToken(authHeader) {
@@ -90,10 +96,30 @@ function parseBearerToken(authHeader) {
   return scrubDiagSecret(t);
 }
 
+/** Single header value (Node may join duplicates with ", "). */
+function headerOne(req, lowerName) {
+  const v = req.headers[lowerName];
+  if (v == null || v === '') return '';
+  const s = Array.isArray(v) ? v.join(',') : String(v);
+  return s.trim();
+}
+
+/**
+ * Bearer first; then custom header (some proxies strip Authorization on GET).
+ * @param {import('http').IncomingMessage} req
+ */
+function extractDiagIntelToken(req) {
+  let t = parseBearerToken(req.headers.authorization);
+  if (t) return t;
+  const alt = headerOne(req, 'x-playshare-diag-intel-secret');
+  if (!alt) return '';
+  return scrubDiagSecret(alt);
+}
+
 function checkAuth(req) {
   const accepted = getDiagIntelAcceptedSecrets();
   if (accepted.length === 0) return null;
-  const token = parseBearerToken(req.headers.authorization);
+  const token = extractDiagIntelToken(req);
   if (!token) return false;
   return accepted.some((secret) => token === secret);
 }
@@ -134,7 +160,8 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-PlayShare-Diag-AI-Key'
+      'Access-Control-Allow-Headers':
+        'Content-Type, Authorization, X-PlayShare-Diag-AI-Key, X-PlayShare-Diag-Intel-Secret'
     });
     res.end();
     return;
@@ -176,6 +203,36 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
     return;
   }
 
+  if (path === '/diag/intel/auth-check' && (req.method === 'POST' || req.method === 'GET')) {
+    if (req.method === 'POST') {
+      await new Promise((resolve) => {
+        req.resume();
+        req.on('end', () => resolve(undefined));
+        req.on('error', () => resolve(undefined));
+      });
+    }
+    json(res, 200, {
+      ok: true,
+      authenticated: true,
+      supabase_configured: Boolean(getSupabaseAdmin())
+    });
+    return;
+  }
+
+  if (path === '/diag/intel' || path === '/diag/intel/health') {
+    if (req.method !== 'GET') {
+      json(res, 405, { ok: false, error: 'method_not_allowed' });
+      return;
+    }
+    json(res, 200, {
+      ok: true,
+      service: 'playshare_diag_intel',
+      note: 'Use /diag/intel/cases, /diag/intel/explorer',
+      supabase_configured: Boolean(getSupabaseAdmin())
+    });
+    return;
+  }
+
   const supabase = getSupabaseAdmin();
   if (!supabase) {
     json(res, 503, { ok: false, error: 'supabase_not_configured' });
@@ -183,15 +240,6 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
   }
 
   try {
-    if (path === '/diag/intel' || path === '/diag/intel/health') {
-      if (req.method !== 'GET') {
-        json(res, 405, { ok: false, error: 'method_not_allowed' });
-        return;
-      }
-      json(res, 200, { ok: true, service: 'playshare_diag_intel', note: 'Use /diag/intel/cases, /diag/intel/explorer' });
-      return;
-    }
-
     if (path === '/diag/intel/search') {
       if (req.method !== 'GET') {
         json(res, 405, { ok: false, error: 'method_not_allowed' });
@@ -1007,7 +1055,7 @@ function explorerHtml() {
       <p class="gate-lead">
         <strong>Railway does not put this secret into the page for you.</strong> Open Railway → your service → <strong>Variables</strong>, copy the
         <em>value</em> of <code>PLAYSHARE_DIAG_INTEL_SECRET</code> (or upload secret), and paste it in the first box. The server compares that header to the
-        variable; they must match exactly.         Only the <strong>first field</strong> is required to open the explorer. The OpenAI field is optional: leave it blank to use the server’s <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code> for the AI tab, or paste your own key to send from the browser.
+        variable; they must match exactly. <strong>Continue</strong> uses <code>POST /diag/intel/auth-check</code> plus <code>X-PlayShare-Diag-Intel-Secret</code> so unlock works without Supabase and survives proxies that strip <code>Authorization</code> on GET. Only the <strong>first field</strong> is required to open the explorer. The OpenAI field is optional: leave it blank to use the server’s <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code> for the AI tab, or paste your own key to send from the browser.
       </p>
       <label class="lbl" for="gateBearer">1 · Paste Railway secret here (PLAYSHARE_DIAG_INTEL_SECRET value)</label>
       <input type="password" id="gateBearer" autocomplete="off" spellcheck="false" placeholder="Paste the full secret from Railway Variables" aria-describedby="gateErr" />
@@ -1175,7 +1223,7 @@ function explorerHtml() {
       </div>
     </div>
 
-    <footer>PlayShare · <code>/diag/intel/*</code> · health <code>/diag/intel/health</code></footer>
+    <footer>PlayShare · <code>/diag/intel/*</code> · unlock <code>POST /diag/intel/auth-check</code> · health <code>/diag/intel/health</code></footer>
   </div>
   </div>
 
@@ -1248,7 +1296,7 @@ function explorerHtml() {
     }
     if (t.toLowerCase().indexOf('bearer ') === 0) t = t.slice(7).trim();
     if (t.toLowerCase().indexOf('bearer ') === 0) t = t.slice(7).trim();
-    t = t.replace(/\r$/g, '').trim();
+    t = t.replace(/\r/g, '').trim();
     return t;
   }
 
@@ -1358,9 +1406,17 @@ function explorerHtml() {
     try {
       var r;
       try {
-        var fetchOpts = { headers: { Authorization: 'Bearer ' + bearer } };
+        var fetchOpts = {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer ' + bearer,
+            'X-PlayShare-Diag-Intel-Secret': bearer,
+            'Content-Type': 'application/json'
+          },
+          body: '{}'
+        };
         if (useAbort && ctrl) fetchOpts.signal = ctrl.signal;
-        r = await fetch(intelApi('/cases?limit=1'), fetchOpts);
+        r = await fetch(intelApi('/auth-check'), fetchOpts);
       } catch (eFetch) {
         var aborted = eFetch && (eFetch.name === 'AbortError' || (String(eFetch.message || '').indexOf('abort') >= 0));
         if (aborted) {
@@ -1382,8 +1438,10 @@ function explorerHtml() {
 
       if (r.status === 401) {
         highlightGateField('bearer');
+        var d401 = await readGateErrorDetail(r);
         showGateErr(
-          'Invalid or wrong Railway secret (401). Paste the exact value of PLAYSHARE_DIAG_INTEL_SECRET or PLAYSHARE_DIAG_UPLOAD_SECRET from Variables. Do not add the word Bearer, quotes, or extra spaces.'
+          d401 ||
+            'Invalid or wrong Railway secret (401). Paste the exact value of PLAYSHARE_DIAG_INTEL_SECRET or PLAYSHARE_DIAG_UPLOAD_SECRET from Variables. Do not add the word Bearer, quotes, or extra spaces.'
         );
         return;
       }
@@ -1403,7 +1461,10 @@ function explorerHtml() {
       }
       if (r.status === 503) {
         var j503t = await readGateErrorDetail(r);
-        showGateErr(j503t || 'Service unavailable (503). Supabase or another dependency may be missing — check server env and logs.');
+        showGateErr(
+          j503t ||
+            'Service unavailable (503). If this says intel_secret_not_configured, set PLAYSHARE_DIAG_INTEL_SECRET on this Railway service and redeploy.'
+        );
         return;
       }
       if (r.status >= 500) {
@@ -1423,6 +1484,8 @@ function explorerHtml() {
         );
         return;
       }
+
+      await r.text().catch(function () {});
 
       try {
         runtimeAiKey = openai;
@@ -1578,7 +1641,10 @@ function explorerHtml() {
   function authHeaders() {
     var t = getResolvedBearer();
     var h = { 'Content-Type': 'application/json' };
-    if (t) h.Authorization = 'Bearer ' + t;
+    if (t) {
+      h.Authorization = 'Bearer ' + t;
+      h['X-PlayShare-Diag-Intel-Secret'] = t;
+    }
     return attachClientAiHeaders(h);
   }
 
