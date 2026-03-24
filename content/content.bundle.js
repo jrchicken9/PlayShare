@@ -9267,8 +9267,10 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
               kind: "diag_upload"
             });
             const st = res?.status;
+            const errCode = res?.error || Array.isArray(res?.reasons) && res.reasons[0] || "";
             const u404 = st === 404 ? " Server has no POST /diag/upload (deploy latest server) or the signaling URL included a path — use host only, e.g. wss://your.railway.app" : "";
-            showToast(`Upload failed${st ? ` (${st})` : ""}.${u404}`);
+            const u503 = st === 503 && String(errCode).includes("hash_salt") ? " Set env PLAYSHARE_DIAG_HASH_SALT on the server (16+ random characters) in Railway, then redeploy." : st === 503 ? " Server misconfigured or unavailable (check Railway logs)." : "";
+            showToast(`Upload failed${st ? ` (${st})` : ""}${errCode ? `: ${errCode}` : ""}.${u404}${u503}`);
           }
         }
       );
