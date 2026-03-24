@@ -93,6 +93,9 @@ function getSyncedServerUrl() {
   return SIGNALING_SERVER_URL;
 }
 
+/** Set when the user taps “Continue as guest” so we can restore room view without a Supabase session. */
+const PLAYS_SHARE_GUEST_CONTINUE_KEY = 'playshare_guest_continue';
+
 // ── Auth UI ───────────────────────────────────────────────────────────────────
 function updateAccountBar() {
   if (!accountBar || !accountBarText || !accountBarAction) return;
@@ -259,52 +262,71 @@ async function init() {
   const auth = window.PlayShareAuth;
   const hasAuth = auth && auth.isConfigured;
 
+  const boot = await new Promise((resolve) => {
+    chrome.storage.local.get(
+      ['roomState', 'username', 'pendingJoinCode', PLAYS_SHARE_GUEST_CONTINUE_KEY],
+      resolve
+    );
+  });
+  const guestContinue = !!boot[PLAYS_SHARE_GUEST_CONTINUE_KEY];
+
   if (hasAuth) {
     const session = await auth.init();
     if (session) {
       currentUser = session.user;
       persistPlayShareSupabaseSessionForBackground(session);
+      chrome.storage.local.remove(PLAYS_SHARE_GUEST_CONTINUE_KEY);
       chrome.storage.local.set({ user: { id: session.user.id, email: session.user.email, displayName: auth.getUserDisplayName(session) } });
       if (usernameInput) usernameInput.value = auth.getUserDisplayName(session);
       showLobbyView();
+      if (boot.roomState) {
+        currentState = boot.roomState;
+        showRoomView(boot.roomState);
+      }
     } else {
       persistPlayShareSupabaseSessionForBackground(null);
-      showAuth();
+      if (boot.roomState && guestContinue) {
+        currentState = boot.roomState;
+        showRoomView(boot.roomState);
+      } else {
+        showAuth();
+      }
     }
     auth.onAuthStateChange((session) => {
       currentUser = session?.user || null;
       persistPlayShareSupabaseSessionForBackground(session || null);
       if (session) {
+        chrome.storage.local.remove(PLAYS_SHARE_GUEST_CONTINUE_KEY);
         chrome.storage.local.set({ user: { id: session.user.id, email: session.user.email, displayName: auth.getUserDisplayName(session) } });
         if (usernameInput) usernameInput.value = auth.getUserDisplayName(session);
         showLobbyView();
       } else {
         chrome.storage.local.remove('user');
+        chrome.storage.local.remove(PLAYS_SHARE_GUEST_CONTINUE_KEY);
         showAuth();
       }
     });
   } else {
     showLobbyView();
+    if (boot.roomState) {
+      currentState = boot.roomState;
+      showRoomView(boot.roomState);
+    }
   }
 
-  chrome.storage.local.get(['roomState', 'username', 'pendingJoinCode'], (data) => {
-    let hadPendingJoin = false;
-    if (data.roomState) {
-      currentState = data.roomState;
-      showRoomView(data.roomState);
-    } else if (data.pendingJoinCode) {
-      hadPendingJoin = true;
-      if (roomCodeInput) roomCodeInput.value = data.pendingJoinCode;
-      chrome.storage.local.remove('pendingJoinCode');
-    }
-    if (data.username && !currentUser && usernameInput) usernameInput.value = data.username;
-    chrome.storage.local.set({ serverUrl: SIGNALING_SERVER_URL });
+  let hadPendingJoin = false;
+  if (!boot.roomState && boot.pendingJoinCode) {
+    hadPendingJoin = true;
+    if (roomCodeInput) roomCodeInput.value = boot.pendingJoinCode;
+    chrome.storage.local.remove('pendingJoinCode');
+  }
+  if (boot.username && !currentUser && usernameInput) usernameInput.value = boot.username;
+  chrome.storage.local.set({ serverUrl: SIGNALING_SERVER_URL });
 
-    if (!data.roomState && viewLobby && !viewLobby.classList.contains('hidden')) {
-      updateLobbyChooseButtons();
-      if (hadPendingJoin) setLobbyMode('join');
-    }
-  });
+  if (!boot.roomState && viewLobby && !viewLobby.classList.contains('hidden')) {
+    updateLobbyChooseButtons();
+    if (hadPendingJoin) setLobbyMode('join');
+  }
 }
 
 init();
@@ -385,7 +407,7 @@ if (btnSignup) {
 
 if (btnGuest) {
   btnGuest.addEventListener('click', () => {
-    showLobbyView();
+    chrome.storage.local.set({ [PLAYS_SHARE_GUEST_CONTINUE_KEY]: true }, () => showLobbyView());
   });
 }
 
@@ -405,11 +427,20 @@ if (btnAuthBack) {
 // ── Connection status ─────────────────────────────────────────────────────────
 function loadPopupStateFromBackground() {
   chrome.runtime.sendMessage({ source: 'playshare', type: 'GET_DIAG' }, (res) => {
-    if (res && res.roomState) {
+    updateWsHeader(res);
+    if (!res || !res.roomState) return;
+    const a = window.PlayShareAuth;
+    const needGuestGate = a && a.isConfigured && !currentUser;
+    if (!needGuestGate) {
       currentState = res.roomState;
       showRoomView(res.roomState);
+      return;
     }
-    updateWsHeader(res);
+    chrome.storage.local.get([PLAYS_SHARE_GUEST_CONTINUE_KEY], (d) => {
+      if (!d[PLAYS_SHARE_GUEST_CONTINUE_KEY]) return;
+      currentState = res.roomState;
+      showRoomView(res.roomState);
+    });
   });
 }
 
@@ -706,6 +737,7 @@ async function handleSignOut() {
     await PlayShareAuth.signOut();
     currentUser = null;
     chrome.storage.local.remove('user');
+    chrome.storage.local.remove(PLAYS_SHARE_GUEST_CONTINUE_KEY);
     persistPlayShareSupabaseSessionForBackground(null);
     showAuth();
   }

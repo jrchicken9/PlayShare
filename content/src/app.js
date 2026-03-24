@@ -78,11 +78,9 @@ export function runPlayShareContent() {
     DEFAULT_DIAG_UPLOAD_BEARER
   } = PS_C;
   const DIAG_EVENTS = new Set(PS_C.DIAG_EVENT_NAMES);
-  /** `true` only when the content bundle is built with `npm run build:content:dev`. */
-  const DIAGNOSTICS_BUILD = PLAYSHARE_CONTENT_DIAGNOSTICS;
   /**
-   * Analytics overlay + uploads: dev build AND unpacked extension (`chrome.management` → development).
-   * Store installs never see it, even if a dev bundle were published by mistake.
+   * Diagnostics overlay + dev uploads: only when the extension is an unpacked / development install.
+   * Content scripts cannot use `chrome.management`; the service worker reports install type via message.
    */
   let diagnosticsUiEnabled = false;
   const platform = PS_C.detectPlatform(hostname);
@@ -7337,23 +7335,27 @@ export function runPlayShareContent() {
   }
 
   function runPlayShareDeveloperInstallGate() {
+    const finishGate = () => {
+      refreshPrimeDebugHudFromStorage();
+      attachPrimeDevConsole();
+    };
     try {
-      chrome.management.getSelf((info) => {
-        if (chrome.runtime.lastError || !info) {
+      chrome.runtime.sendMessage({ source: 'playshare', type: 'GET_DEV_INSTALL' }, (res) => {
+        if (chrome.runtime.lastError) {
           playShareDevelopmentInstall = false;
-        } else {
-          playShareDevelopmentInstall = info.installType === 'development';
+          diagnosticsUiEnabled = false;
+          finishGate();
+          return;
         }
-        diagnosticsUiEnabled = DIAGNOSTICS_BUILD && playShareDevelopmentInstall;
+        playShareDevelopmentInstall = !!(res && res.developmentInstall);
+        diagnosticsUiEnabled = playShareDevelopmentInstall;
         if (diagnosticsUiEnabled) mountDeveloperDiagnosticsUi();
-        refreshPrimeDebugHudFromStorage();
-        attachPrimeDevConsole();
+        finishGate();
       });
     } catch {
       playShareDevelopmentInstall = false;
       diagnosticsUiEnabled = false;
-      refreshPrimeDebugHudFromStorage();
-      attachPrimeDevConsole();
+      finishGate();
     }
   }
 

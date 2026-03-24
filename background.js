@@ -627,6 +627,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     }
 
+    case 'GET_DEV_INSTALL':
+      playShareIsDevelopmentInstall().then((developmentInstall) => {
+        sendResponse({ developmentInstall });
+      });
+      return true;
+
     case 'GET_DIAG':
       chrome.storage.local.get(['serverUrl'], (data) => {
         let serverHost = null;

@@ -4859,7 +4859,6 @@
       DEFAULT_DIAG_UPLOAD_BEARER
     } = contentConstants;
     const DIAG_EVENTS = new Set(contentConstants.DIAG_EVENT_NAMES);
-    const DIAGNOSTICS_BUILD = false;
     let diagnosticsUiEnabled = false;
     const platform = contentConstants.detectPlatform(hostname);
     const playbackProfile = getPlaybackProfile(hostname, location.pathname);
@@ -11625,23 +11624,27 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
       }
     }
     function runPlayShareDeveloperInstallGate() {
+      const finishGate = () => {
+        refreshPrimeDebugHudFromStorage();
+        attachPrimeDevConsole();
+      };
       try {
-        chrome.management.getSelf((info) => {
-          if (chrome.runtime.lastError || !info) {
+        chrome.runtime.sendMessage({ source: "playshare", type: "GET_DEV_INSTALL" }, (res) => {
+          if (chrome.runtime.lastError) {
             playShareDevelopmentInstall = false;
-          } else {
-            playShareDevelopmentInstall = info.installType === "development";
+            diagnosticsUiEnabled = false;
+            finishGate();
+            return;
           }
-          diagnosticsUiEnabled = DIAGNOSTICS_BUILD && playShareDevelopmentInstall;
+          playShareDevelopmentInstall = !!(res && res.developmentInstall);
+          diagnosticsUiEnabled = playShareDevelopmentInstall;
           if (diagnosticsUiEnabled) mountDeveloperDiagnosticsUi();
-          refreshPrimeDebugHudFromStorage();
-          attachPrimeDevConsole();
+          finishGate();
         });
       } catch {
         playShareDevelopmentInstall = false;
         diagnosticsUiEnabled = false;
-        refreshPrimeDebugHudFromStorage();
-        attachPrimeDevConsole();
+        finishGate();
       }
     }
     runPlayShareDeveloperInstallGate();

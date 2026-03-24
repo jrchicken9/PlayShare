@@ -18,6 +18,7 @@ zip -r "$OUT" \
   sidebar \
   join \
   shared/streaming-hosts.generated.js \
+  shared/supabase-client-config.js \
   shared/diag-anonymize.js \
   shared/signal-permissions.js \
   shared/brand-mark.png \
