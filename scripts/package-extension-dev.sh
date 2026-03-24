@@ -5,6 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+npm run generate:primer
 npm run sync-streaming
 npm run build:content:dev
 

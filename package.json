@@ -1,6 +1,6 @@
 {
   "name": "playshare-server",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "PlayShare WebSocket signaling server for synchronized streaming",
   "engines": {
     "node": ">=18"
@@ -9,12 +9,13 @@
   "scripts": {
     "version:extension": "node scripts/bump-extension-version.mjs",
     "bump:extension": "node scripts/bump-extension-version.mjs patch",
+    "generate:primer": "node scripts/generate-extension-primer.mjs",
     "sync-streaming": "node scripts/sync-streaming.js",
     "build:content": "esbuild content/src/entry.js --bundle --outfile=content/content.bundle.js --format=iife --platform=browser --target=chrome109 --legal-comments=none --charset=utf8 --define:PLAYSHARE_CONTENT_DIAGNOSTICS=false",
     "build:content:dev": "esbuild content/src/entry.js --bundle --outfile=content/content.bundle.js --format=iife --platform=browser --target=chrome109 --legal-comments=none --charset=utf8 --define:PLAYSHARE_CONTENT_DIAGNOSTICS=true",
     "build:content:watch": "esbuild content/src/entry.js --bundle --outfile=content/content.bundle.js --format=iife --platform=browser --target=chrome109 --legal-comments=none --charset=utf8 --define:PLAYSHARE_CONTENT_DIAGNOSTICS=true --watch",
     "package:extension": "bash scripts/package-extension.sh",
-    "prepackage:extension": "npm run sync-streaming && npm run build:content",
+    "prepackage:extension": "npm run generate:primer && npm run sync-streaming && npm run build:content",
     "package:extension:dev": "bash scripts/package-extension-dev.sh",
     "package:extension:both": "bash scripts/package-extension-both.sh",
     "start": "node server.js",

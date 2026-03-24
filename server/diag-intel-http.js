@@ -6,6 +6,9 @@
 const { URL } = require('url');
 const { getSupabaseAdmin } = require('./diag-upload');
 const { explainCase, buildRecommendationsFromCases, regressionCompare } = require('./diag-intelligence');
+const { getDiagAiConfig, gatherBriefContext, buildFallbackMarkdown, generateAssistantBrief } = require('./diag-ai-brief');
+const { EXTENSION_PRIMER_MARKDOWN } = require('./playshare-extension-primer');
+const { saveBriefAsLearning, listKnowledge, getKnowledgeOne } = require('./diag-intel-knowledge');
 
 const FEEDBACK_LABELS = new Set([
   'confirmed_root_cause',
@@ -287,6 +290,165 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
         .limit(sample);
       if (error) throw error;
       json(res, 200, { ok: true, ...buildRecommendationsFromCases(data || []) });
+      return;
+    }
+
+    if (path === '/diag/intel/knowledge') {
+      if (req.method === 'GET') {
+        const oneId = url.searchParams.get('id');
+        if (oneId && /^[0-9a-f-]{36}$/i.test(oneId)) {
+          const row = await getKnowledgeOne(supabase, oneId);
+          if (!row) {
+            json(res, 404, { ok: false, error: 'not_found' });
+            return;
+          }
+          json(res, 200, { ok: true, entry: row });
+          return;
+        }
+        const lim = Math.min(80, Math.max(1, parseInt(url.searchParams.get('limit') || '25', 10)));
+        const off = Math.min(100000, Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10)));
+        const rows = await listKnowledge(supabase, lim, off);
+        json(res, 200, { ok: true, entries: rows });
+        return;
+      }
+      if (req.method === 'POST') {
+        let body;
+        try {
+          body = await readJsonBody(req, 131072);
+        } catch {
+          json(res, 400, { ok: false, error: 'invalid_json' });
+          return;
+        }
+        const digest = String(body.digest_markdown || '').trim();
+        if (digest.length < 20) {
+          json(res, 400, { ok: false, error: 'digest_too_short', min: 20 });
+          return;
+        }
+        const fp = body.focus_platform != null ? String(body.focus_platform).trim().slice(0, 64) : null;
+        try {
+          const id = await saveBriefAsLearning(supabase, {
+            source: 'manual',
+            digest_markdown: digest,
+            focus_platform: fp || null,
+            extension_versions: [],
+            case_window: null,
+            data_snapshot_at: null
+          });
+          json(res, 200, { ok: true, learning_id: id });
+        } catch (e) {
+          console.error('[PlayShare/diag/intel/knowledge]', e);
+          json(res, 500, { ok: false, error: 'persist_failed', detail: e && e.message ? e.message : String(e) });
+        }
+        return;
+      }
+      json(res, 405, { ok: false, error: 'method_not_allowed' });
+      return;
+    }
+
+    if (path === '/diag/intel/ai-brief') {
+      if (req.method !== 'POST') {
+        json(res, 405, { ok: false, error: 'method_not_allowed' });
+        return;
+      }
+      let body = {};
+      try {
+        body = await readJsonBody(req, 65536);
+      } catch {
+        json(res, 400, { ok: false, error: 'invalid_json' });
+        return;
+      }
+      const dryRun = Boolean(body.dry_run);
+      const focusRaw = body.focus_platform != null ? String(body.focus_platform).trim().slice(0, 64) : '';
+      const focusPlatform = focusRaw || null;
+      const engineerNotes = body.engineer_notes != null ? String(body.engineer_notes).slice(0, 8000) : '';
+      const caseLimit = body.case_limit != null ? parseInt(body.case_limit, 10) : undefined;
+      const clusterLimit = body.cluster_limit != null ? parseInt(body.cluster_limit, 10) : undefined;
+      const metricsSample = body.metrics_sample != null ? parseInt(body.metrics_sample, 10) : undefined;
+      const includePriorLearnings = body.include_prior_learnings !== false;
+      const persistLearning = body.persist_learning !== false;
+      const priorLearningLimit =
+        body.prior_learning_limit != null ? parseInt(body.prior_learning_limit, 10) : undefined;
+
+      const context = await gatherBriefContext(supabase, {
+        focusPlatform,
+        caseLimit: Number.isFinite(caseLimit) ? caseLimit : undefined,
+        clusterLimit: Number.isFinite(clusterLimit) ? clusterLimit : undefined,
+        metricsSample: Number.isFinite(metricsSample) ? metricsSample : undefined,
+        includePriorLearnings,
+        priorLearningLimit: Number.isFinite(priorLearningLimit) ? priorLearningLimit : undefined
+      });
+      const fallbackMarkdown = buildFallbackMarkdown(context);
+
+      if (dryRun) {
+        json(res, 200, {
+          ok: true,
+          dry_run: true,
+          context: {
+            ...context,
+            architecture_primer_markdown: EXTENSION_PRIMER_MARKDOWN
+          },
+          fallback_markdown: fallbackMarkdown,
+          ai_configured: getDiagAiConfig().configured,
+          prior_runs_in_prompt: (context.prior_runs_from_database || []).length
+        });
+        return;
+      }
+
+      const aiCfg = getDiagAiConfig();
+      if (!aiCfg.configured) {
+        json(res, 503, {
+          ok: false,
+          error: 'ai_not_configured',
+          hint:
+            'Set PLAYSHARE_DIAG_AI_API_KEY (or OPENAI_API_KEY). Optional: PLAYSHARE_DIAG_AI_BASE_URL, PLAYSHARE_DIAG_AI_MODEL.',
+          fallback_markdown: fallbackMarkdown
+        });
+        return;
+      }
+
+      try {
+        const assistantMarkdown = await generateAssistantBrief(aiCfg, context, engineerNotes);
+        /** @type {string|null} */
+        let learningId = null;
+        /** @type {string|null} */
+        let learningPersistError = null;
+        if (persistLearning) {
+          try {
+            learningId = await saveBriefAsLearning(supabase, {
+              source: 'ai_brief',
+              model: aiCfg.model,
+              focus_platform: focusPlatform,
+              extension_versions: Object.keys(context.extension_version_counts || {}),
+              case_window: Array.isArray(context.recent_cases) ? context.recent_cases.length : null,
+              digest_markdown: assistantMarkdown,
+              data_snapshot_at: context.generated_at
+            });
+          } catch (pe) {
+            learningPersistError = pe && pe.message ? pe.message : String(pe);
+            console.error('[PlayShare/diag/intel] ai-brief persist learning', pe);
+          }
+        }
+        json(res, 200, {
+          ok: true,
+          assistant_markdown: assistantMarkdown,
+          fallback_markdown: fallbackMarkdown,
+          model: aiCfg.model,
+          used_ai: true,
+          learning_id: learningId,
+          learning_persisted: Boolean(learningId),
+          learning_persist_error: learningPersistError,
+          prior_runs_in_prompt: (context.prior_runs_from_database || []).length
+        });
+      } catch (e) {
+        const detail = e && e.message ? e.message : String(e);
+        const status = e && e.status >= 400 && e.status < 600 ? e.status : 502;
+        json(res, status, {
+          ok: false,
+          error: 'ai_request_failed',
+          detail,
+          fallback_markdown: fallbackMarkdown
+        });
+      }
       return;
     }
 
@@ -656,6 +818,30 @@ function explorerHtml() {
     }
     .pager .pager-meta { font-size: 13px; color: var(--muted); flex: 1; min-width: 140px; }
     .pager button.secondary:disabled { opacity: 0.35; cursor: not-allowed; }
+    textarea.brief-notes {
+      width: 100%;
+      min-height: 88px;
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 14px;
+      resize: vertical;
+    }
+    textarea.brief-ta {
+      width: 100%;
+      min-height: 220px;
+      background: #05070a;
+      color: #e2e8f0;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 13px;
+      line-height: 1.45;
+      font-family: ui-monospace, monospace;
+      resize: vertical;
+    }
   </style>
 </head>
 <body>
@@ -688,6 +874,7 @@ function explorerHtml() {
           <button type="button" role="tab" data-tab="insights" aria-selected="false">Insights</button>
           <button type="button" role="tab" data-tab="search" aria-selected="false">Search</button>
           <button type="button" role="tab" data-tab="regress" aria-selected="false">Compare versions</button>
+          <button type="button" role="tab" data-tab="ai" aria-selected="false">AI assistant</button>
         </nav>
 
         <div id="panel-cases" class="tab-panel active" role="tabpanel">
@@ -733,6 +920,47 @@ function explorerHtml() {
             <div class="grow"><label class="lbl" for="tv">Newer build (target)</label><input type="text" id="tv" placeholder="1.0.1" /></div>
             <div class="grow"><label class="lbl" for="pf">Platform (optional)</label><input type="text" id="pf" /></div>
             <button type="button" class="primary" id="btnReg">Run comparison</button>
+          </div>
+        </div>
+
+        <div id="panel-ai" class="tab-panel" role="tabpanel" hidden>
+          <p class="muted" style="margin:0 0 10px">
+            Uses <strong>live data</strong> from diagnostic recordings (<code>diag_cases</code> / clusters). Each successful AI run can be <strong>saved</strong> into <code>diag_intel_knowledge</code>; the next run automatically includes those excerpts so the tool <strong>accumulates context</strong> about the extension over time.
+          </p>
+          <p class="muted" style="margin:0 0 14px;font-size:12px">
+            <strong>Supabase:</strong> apply migration <code>20260330120000_diag_intel_knowledge.sql</code>. <strong>LLM:</strong> <code>PLAYSHARE_DIAG_AI_API_KEY</code> or <code>OPENAI_API_KEY</code>; optional <code>PLAYSHARE_DIAG_AI_BASE_URL</code>, <code>PLAYSHARE_DIAG_AI_MODEL</code> (default <code>gpt-4o-mini</code>). <strong>Primer:</strong> run <code>npm run generate:primer</code> to refresh <code>server/playshare-extension-primer.auto.md</code> (versions, git SHA, file inventory); that runs after <code>bump:extension</code> and before packaging. Narrative: <code>playshare-extension-primer.static.md</code>. Loader: <code>playshare-extension-primer.js</code>.
+          </p>
+          <div class="row">
+            <div class="grow"><label class="lbl" for="aiFocusPlat">Focus platform (optional)</label><input type="text" id="aiFocusPlat" placeholder="e.g. netflix, prime" /></div>
+          </div>
+          <label class="lbl" for="aiNotes">What you want prioritized (optional)</label>
+          <textarea id="aiNotes" class="brief-notes" placeholder="e.g. Investigate Prime seek lag; compare with Netflix ad path."></textarea>
+          <div class="chk" style="margin-top:10px">
+            <label><input type="checkbox" id="aiIncludePrior" checked /> Include saved prior briefs in prompt (cumulative learning)</label>
+          </div>
+          <div class="chk" style="margin-top:6px">
+            <label><input type="checkbox" id="aiPersist" checked /> After AI run, save this brief to the knowledge table</label>
+          </div>
+          <div class="chk" style="margin-top:6px">
+            <label><input type="checkbox" id="aiDryRun" /> Data pack only — no LLM (works without API key)</label>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <button type="button" class="primary" id="btnAiBrief">Generate brief</button>
+            <span id="aiBriefStatus" class="path"></span>
+          </div>
+          <div id="aiBriefResult" style="margin-top:16px"></div>
+          <h3 class="muted" style="margin:22px 0 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em">Saved learnings</h3>
+          <p class="muted" style="margin:0 0 10px;font-size:12px">Append-only history of AI and manual notes. Open loads full markdown.</p>
+          <div class="row" style="margin-bottom:10px">
+            <button type="button" class="secondary" id="btnListKnowledge">Refresh list</button>
+          </div>
+          <div id="aiKnowledgeList" class="muted" style="font-size:13px;margin-bottom:12px"></div>
+          <textarea id="aiKnowledgeViewTa" class="brief-ta" readonly style="display:none;margin-bottom:12px" placeholder="Select Open on a row…"></textarea>
+          <label class="lbl" for="aiManualMemory">Add a manual note to memory (markdown)</label>
+          <textarea id="aiManualMemory" class="brief-notes" style="min-height:72px" placeholder="e.g. Confirmed: Prime fullscreen exit breaks sync until tab refocus — see session 2025-03-30."></textarea>
+          <div class="row" style="margin-top:8px">
+            <button type="button" class="secondary" id="btnSaveManualMemory">Save manual note</button>
+            <span id="aiManualStatus" class="path"></span>
           </div>
         </div>
 
@@ -1155,6 +1383,183 @@ function explorerHtml() {
     jget(u);
   };
 
+  function extractCursorBlock(md) {
+    if (!md) return '';
+    var tick3 = String.fromCharCode(96, 96, 96);
+    var re = new RegExp(
+      '##\\\\s*COPY_PASTE_FOR_CURSOR_AI\\\\s*(?:\\\\r?\\\\n)+' +
+        tick3 +
+        '[a-z0-9]*\\\\s*([\\\\s\\\\S]*?)' +
+        tick3,
+      'im'
+    );
+    var m = md.match(re);
+    return m ? m[1].trim() : '';
+  }
+
+  function copyText(t, okEl) {
+    if (!t) {
+      alert('Nothing to copy');
+      return;
+    }
+    navigator.clipboard.writeText(t).then(function () {
+      if (okEl) {
+        okEl.textContent = 'Copied';
+        setTimeout(function () {
+          okEl.textContent = '';
+        }, 1600);
+      }
+    }).catch(function () {
+      alert('Clipboard unavailable');
+    });
+  }
+
+  $('btnAiBrief').onclick = async function () {
+    var btn = $('btnAiBrief');
+    var out = $('aiBriefResult');
+    var st = $('aiBriefStatus');
+    btn.disabled = true;
+    st.textContent = '';
+    out.innerHTML = '<div class="empty">Gathering data' + ($('aiDryRun').checked ? '…' : ' and calling the model…') + '</div>';
+    try {
+      var body = {
+        dry_run: $('aiDryRun').checked,
+        focus_platform: ($('aiFocusPlat').value || '').trim() || undefined,
+        engineer_notes: ($('aiNotes').value || '').trim() || undefined,
+        include_prior_learnings: $('aiIncludePrior').checked,
+        persist_learning: !$('aiDryRun').checked && $('aiPersist').checked
+      };
+      var r = await fetch('/diag/intel/ai-brief', {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+        body: JSON.stringify(body)
+      });
+      var raw = await r.text();
+      var j;
+      try {
+        j = JSON.parse(raw);
+      } catch (e1) {
+        j = { ok: false, error: 'bad_json', detail: raw.slice(0, 400) };
+      }
+      st.textContent = r.status + ' ' + r.statusText;
+
+      var parts = [];
+      if (!j.ok && (j.error === 'ai_not_configured' || j.error === 'ai_request_failed')) {
+        parts.push(
+          '<div class="alert warn"><strong>' +
+            esc(j.error === 'ai_not_configured' ? 'LLM not configured' : 'LLM request failed') +
+            '</strong><p class="muted" style="margin:8px 0 0">' +
+            esc(j.hint || j.detail || '') +
+            '</p><p class="muted" style="margin:8px 0 0">Use the data pack below, or enable an API key on the server and try again.</p></div>'
+        );
+      } else if (!j.ok && !j.fallback_markdown) {
+        parts.push(
+          '<div class="alert err"><strong>' + esc(j.error || 'request_failed') + '</strong><p class="muted">' + esc(j.detail || '') + '</p></div>'
+        );
+      }
+
+      if (j.fallback_markdown) {
+        parts.push(
+          '<h3 class="muted" style="margin:16px 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em">Data pack (markdown)</h3>' +
+            '<p class="muted" style="margin:0 0 8px;font-size:12px">Safe to paste into Cursor as context together with the Cursor message.</p>' +
+            '<textarea id="aiFallbackTa" class="brief-ta" readonly></textarea>' +
+            '<div class="row" style="margin-top:8px;align-items:center">' +
+            '<button type="button" class="ghost" id="btnCopyFallback">Copy data pack</button>' +
+            '<span id="copyFbHint" class="path"></span></div>'
+        );
+      }
+
+      if (j.ok && j.assistant_markdown) {
+        var cursorMsg = extractCursorBlock(j.assistant_markdown) || j.assistant_markdown;
+        window.__playshareCursorBrief = cursorMsg;
+        window.__playshareAiBriefFull = j.assistant_markdown;
+        parts.unshift(
+          '<h3 class="muted" style="margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em">AI-written brief</h3>' +
+            '<p class="muted" style="margin:0 0 8px;font-size:12px">Model: <code>' +
+            esc(j.model || '') +
+            '</code> · Use <strong>Copy Cursor message</strong> for the short paste; the section <code>COPY_PASTE_FOR_CURSOR_AI</code> in the text is the same.</p>' +
+            '<textarea id="aiMainTa" class="brief-ta" readonly></textarea>' +
+            '<div class="row" style="margin-top:8px;align-items:center;flex-wrap:wrap;gap:8px">' +
+            '<button type="button" class="primary" id="btnCopyCursor">Copy Cursor message</button> ' +
+            '<button type="button" class="ghost" id="btnCopyAiFull">Copy full AI brief</button>' +
+            '<span id="copyAiHint" class="path"></span></div>'
+        );
+        var metaBits = [];
+        if (j.prior_runs_in_prompt != null) {
+          metaBits.push('Prior briefs included in this prompt: <strong>' + esc(String(j.prior_runs_in_prompt)) + '</strong>');
+        }
+        if (j.learning_id) {
+          metaBits.push('Saved to knowledge table <code class="mono-sm">' + esc(j.learning_id) + '</code> — future runs will use it.');
+        }
+        if (j.learning_persist_error) {
+          metaBits.push('<span style="color:#fbbf24">Brief not saved: ' + esc(j.learning_persist_error) + '</span>');
+        }
+        if (metaBits.length) {
+          parts.unshift(
+            '<div style="margin-bottom:12px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);font-size:13px;line-height:1.5">' +
+              metaBits.join('<br/>') +
+              '</div>'
+          );
+        }
+      } else if (j.ok && j.dry_run) {
+        window.__playshareDryContext = j.context;
+        var pr = j.prior_runs_in_prompt != null ? esc(String(j.prior_runs_in_prompt)) : '?';
+        parts.unshift(
+          '<div class="alert ok" style="background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.35);color:#a7f3d0;padding:12px 14px;border-radius:10px;margin-bottom:12px">' +
+            '<strong>Dry run</strong> — no LLM. Prior briefs that would be injected: <strong>' +
+            pr +
+            '</strong>. JSON context: <strong>Download context.json</strong>.</div>' +
+            '<div class="row" style="margin-bottom:12px"><button type="button" class="ghost" id="btnDlContext">Download context.json</button></div>'
+        );
+      }
+
+      out.innerHTML = parts.join('');
+      var fb = $('aiFallbackTa');
+      if (fb && j.fallback_markdown) fb.value = j.fallback_markdown;
+      var main = $('aiMainTa');
+      if (main && j.assistant_markdown) main.value = j.assistant_markdown;
+
+      var dl = $('btnDlContext');
+      if (dl) {
+        dl.onclick = function () {
+          var ctx = window.__playshareDryContext;
+          if (!ctx) return;
+          var blob = new Blob([JSON.stringify(ctx, null, 2)], { type: 'application/json' });
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'playshare-diag-context.json';
+          a.click();
+          URL.revokeObjectURL(a.href);
+        };
+      }
+      var cf = $('btnCopyFallback');
+      if (cf) {
+        cf.onclick = function () {
+          var ta = $('aiFallbackTa');
+          copyText(ta && ta.value, $('copyFbHint'));
+        };
+      }
+      var cc = $('btnCopyCursor');
+      if (cc) {
+        cc.onclick = function () {
+          copyText(window.__playshareCursorBrief, $('copyAiHint'));
+        };
+      }
+      var caf = $('btnCopyAiFull');
+      if (caf) {
+        caf.onclick = function () {
+          copyText(window.__playshareAiBriefFull, $('copyAiHint'));
+        };
+      }
+    } catch (e2) {
+      st.textContent = 'Error';
+      out.innerHTML =
+        '<div class="alert err">' + esc(e2 && e2.message ? e2.message : String(e2)) + '</div>';
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
   $('btnCopy').onclick = function () {
     if (!lastText) return;
     var btn = $('btnCopy');
@@ -1173,6 +1578,101 @@ function explorerHtml() {
     a.click();
     URL.revokeObjectURL(a.href);
   };
+
+  function renderKnowledgeTable(entries) {
+    var box = $('aiKnowledgeList');
+    if (!entries || !entries.length) {
+      box.innerHTML = '<p class="muted">No rows in <code>diag_intel_knowledge</code> yet. Run a successful AI brief with save enabled, or add a manual note.</p>';
+      return;
+    }
+    var h =
+      '<div style="overflow:auto"><table class="data-table"><thead><tr><th>When</th><th>Source</th><th>Platform</th><th>Model</th><th>Cases</th><th></th></tr></thead><tbody>';
+    entries.forEach(function (e) {
+      h +=
+        '<tr><td>' +
+        fmtWhen(e.created_at) +
+        '</td><td>' +
+        esc(e.source || '') +
+        '</td><td>' +
+        esc(e.focus_platform || '—') +
+        '</td><td class="mono-sm">' +
+        esc(e.model || '—') +
+        '</td><td>' +
+        esc(e.case_window != null ? String(e.case_window) : '—') +
+        '</td><td><button type="button" class="linkish" data-kview="' +
+        esc(e.id) +
+        '">Open</button></td></tr>';
+    });
+    h += '</tbody></table></div>';
+    box.innerHTML = h;
+  }
+
+  async function refreshKnowledgeList() {
+    var box = $('aiKnowledgeList');
+    box.innerHTML = '<span class="muted">Loading…</span>';
+    try {
+      var r = await fetch('/diag/intel/knowledge?limit=25', { headers: authHeaders() });
+      var j = await r.json();
+      if (j.ok && j.entries) renderKnowledgeTable(j.entries);
+      else box.innerHTML = '<p class="muted">Could not load list: ' + esc(j.error || String(r.status)) + '</p>';
+    } catch (x) {
+      box.innerHTML = '<p class="muted">Network error</p>';
+    }
+  }
+
+  $('btnListKnowledge').onclick = function () {
+    refreshKnowledgeList();
+  };
+
+  $('aiKnowledgeList').addEventListener('click', async function (e) {
+    var b = e.target.closest('[data-kview]');
+    if (!b) return;
+    var id = b.getAttribute('data-kview');
+    var ta = $('aiKnowledgeViewTa');
+    ta.style.display = 'block';
+    ta.value = 'Loading…';
+    try {
+      var r = await fetch('/diag/intel/knowledge?id=' + encodeURIComponent(id), { headers: authHeaders() });
+      var j = await r.json();
+      if (j.ok && j.entry) ta.value = j.entry.digest_markdown || '';
+      else ta.value = 'Error: ' + (j.error || String(r.status));
+    } catch (x) {
+      ta.value = 'Network error';
+    }
+  });
+
+  $('btnSaveManualMemory').onclick = async function () {
+    var t = ($('aiManualMemory').value || '').trim();
+    var st = $('aiManualStatus');
+    if (t.length < 20) {
+      st.textContent = 'Enter at least 20 characters';
+      return;
+    }
+    st.textContent = 'Saving…';
+    try {
+      var r = await fetch('/diag/intel/knowledge', {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+        body: JSON.stringify({
+          digest_markdown: t,
+          focus_platform: ($('aiFocusPlat').value || '').trim() || undefined
+        })
+      });
+      var j = await r.json();
+      if (j.ok && j.learning_id) {
+        st.textContent = 'Saved';
+        $('aiManualMemory').value = '';
+        refreshKnowledgeList();
+      } else st.textContent = j.detail || j.error || String(r.status);
+    } catch (x) {
+      st.textContent = 'Network error';
+    }
+  };
+
+  $('aiDryRun').addEventListener('change', function () {
+    $('aiPersist').disabled = $('aiDryRun').checked;
+    if ($('aiDryRun').checked) $('aiPersist').checked = false;
+  });
 
   var tokEl = $('tok');
   var remEl = $('rememberTok');

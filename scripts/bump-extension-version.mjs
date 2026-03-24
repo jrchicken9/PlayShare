@@ -12,6 +12,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execSync } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
@@ -53,4 +54,11 @@ if (updated === raw) {
 }
 fs.writeFileSync(manifestPath, updated, 'utf8');
 console.log(`manifest.json version: ${current} → ${next}`);
+
+try {
+  execSync('node scripts/generate-extension-primer.mjs', { cwd: root, stdio: 'inherit' });
+} catch (e) {
+  console.warn('[bump-extension-version] generate-extension-primer failed — run: npm run generate:primer');
+}
+
 console.log('Run: npm run build:content && npm run package:extension (before store upload).');

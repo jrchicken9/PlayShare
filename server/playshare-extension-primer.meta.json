@@ -1,0 +1,9 @@
+{
+  "generatedAt": "2026-03-24T19:28:07.315Z",
+  "extensionVersion": "1.1.1",
+  "serverPackageVersion": "1.0.1",
+  "serverPackageName": "playshare-server",
+  "gitSha": "41e4428",
+  "contentSrcFileCount": 17,
+  "serverModuleCount": 8
+}
