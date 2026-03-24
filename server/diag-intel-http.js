@@ -969,7 +969,8 @@ function explorerHtml() {
       margin-top: 14px;
     }
     #gateErr {
-      margin-top: 14px;
+      margin-top: 0;
+      margin-bottom: 14px;
     }
     #gateErr[role='alert'] {
       outline: none;
@@ -1006,19 +1007,19 @@ function explorerHtml() {
       <p class="gate-lead">
         <strong>Railway does not put this secret into the page for you.</strong> Open Railway → your service → <strong>Variables</strong>, copy the
         <em>value</em> of <code>PLAYSHARE_DIAG_INTEL_SECRET</code> (or upload secret), and paste it in the first box. The server compares that header to the
-        variable; they must match exactly. For the AI assistant, paste an OpenAI key below <em>or</em> leave it empty when this server has <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code> in Railway (the host will use that key).
+        variable; they must match exactly.         Only the <strong>first field</strong> is required to open the explorer. The OpenAI field is optional: leave it blank to use the server’s <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code> for the AI tab, or paste your own key to send from the browser.
       </p>
       <label class="lbl" for="gateBearer">1 · Paste Railway secret here (PLAYSHARE_DIAG_INTEL_SECRET value)</label>
       <input type="password" id="gateBearer" autocomplete="off" spellcheck="false" placeholder="Paste the full secret from Railway Variables" aria-describedby="gateErr" />
-      <label class="lbl" for="gateOpenAi">2 · OpenAI API key (optional if the server already has an LLM key in env)</label>
-      <input type="password" id="gateOpenAi" autocomplete="off" spellcheck="false" placeholder="sk-… (leave empty only when Railway has PLAYSHARE_DIAG_AI_API_KEY or OPENAI_API_KEY)" aria-describedby="gateErr" />
+      <label class="lbl" for="gateOpenAi">2 · OpenAI API key (optional)</label>
+      <input type="password" id="gateOpenAi" autocomplete="off" spellcheck="false" placeholder="sk-… — optional; server env key used if empty" aria-describedby="gateErr" />
       <p id="gateServerLlmHint" class="muted" style="display: none; margin-top: 10px; font-size: 13px; line-height: 1.5">
-        This host reports an LLM key in its environment — you may leave the OpenAI field empty and the AI assistant will use the server’s key.
+        This host reports an LLM key in its environment — you may leave the OpenAI field empty for AI assistant calls.
       </p>
       <p class="muted" style="margin-top: 12px; font-size: 12px; line-height: 1.45">Secrets are kept in this tab only until you close it or refresh; they are not written to sessionStorage.</p>
+      <div id="gateErr" class="alert err" style="display: none" tabindex="-1"></div>
       <button type="button" id="gateSubmit">Continue</button>
       <p id="gateWorking" class="muted" style="display: none; margin-top: 12px; font-size: 13px; line-height: 1.45" aria-live="polite"></p>
-      <div id="gateErr" class="alert err" style="display: none; margin-top: 14px" tabindex="-1"></div>
     </div>
   </div>
 
@@ -1186,8 +1187,6 @@ function explorerHtml() {
   var runtimeAiKey = '';
   /** Bearer from unlock gate (used when hidden #tok is empty until filled). */
   var runtimeDiagBearer = '';
-  /** Set from <code>/diag/intel/public-meta</code> — true when process.env has an LLM key (OpenAI field optional at unlock). */
-  var serverLlmConfigured = false;
   var lastText = '';
   var lastPath = '';
   var lastPagedFetch = null;
@@ -1222,8 +1221,12 @@ function explorerHtml() {
   function enterExplorerApp() {
     var g = $('gateRoot');
     var a = $('playshareExplorerApp');
-    if (g) g.hidden = true;
-    if (a) a.hidden = false;
+    if (g) {
+      g.setAttribute('hidden', '');
+    }
+    if (a) {
+      a.removeAttribute('hidden');
+    }
   }
 
   function getClientLlmKeyForBrief() {
@@ -1279,6 +1282,7 @@ function explorerHtml() {
     if (!el) return;
     el.textContent = '';
     el.style.display = 'none';
+    el.style.visibility = '';
     el.removeAttribute('role');
   }
 
@@ -1287,10 +1291,11 @@ function explorerHtml() {
     if (!el) return;
     el.textContent = msg;
     el.style.display = 'block';
+    el.style.visibility = 'visible';
     el.setAttribute('role', 'alert');
     try {
-      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      el.focus();
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      el.focus({ preventScroll: true });
     } catch (e) {}
   }
 
@@ -1329,13 +1334,6 @@ function explorerHtml() {
       showGateErr('Paste the Railway diagnostic secret (PLAYSHARE_DIAG_INTEL_SECRET or upload secret). It cannot be empty.');
       return;
     }
-    if (!openai && !serverLlmConfigured) {
-      highlightGateField('openai');
-      showGateErr(
-        'Paste an OpenAI API key here, or set PLAYSHARE_DIAG_AI_API_KEY (or OPENAI_API_KEY) on this server. If this page could not detect a server key (network blip), try again in a moment or paste a key anyway.'
-      );
-      return;
-    }
     if (openai && openai.length < 12) {
       highlightGateField('openai');
       showGateErr('That OpenAI key looks too short. Copy the full key from OpenAI (usually starts with sk- or similar).');
@@ -1347,20 +1345,22 @@ function explorerHtml() {
       working.style.display = 'block';
       working.textContent = 'Checking credentials with the server…';
     }
-    var ctrl = new AbortController();
+    var useAbort = typeof AbortController !== 'undefined';
+    var ctrl = useAbort ? new AbortController() : null;
     var timeoutMs = 25000;
-    var to = setTimeout(function () {
-      try {
-        ctrl.abort();
-      } catch (eAb) {}
-    }, timeoutMs);
+    var to = useAbort
+      ? setTimeout(function () {
+          try {
+            if (ctrl) ctrl.abort();
+          } catch (eAb) {}
+        }, timeoutMs)
+      : 0;
     try {
       var r;
       try {
-        r = await fetch(intelApi('/cases?limit=1'), {
-          signal: ctrl.signal,
-          headers: { Authorization: 'Bearer ' + bearer }
-        });
+        var fetchOpts = { headers: { Authorization: 'Bearer ' + bearer } };
+        if (useAbort && ctrl) fetchOpts.signal = ctrl.signal;
+        r = await fetch(intelApi('/cases?limit=1'), fetchOpts);
       } catch (eFetch) {
         var aborted = eFetch && (eFetch.name === 'AbortError' || (String(eFetch.message || '').indexOf('abort') >= 0));
         if (aborted) {
@@ -1377,7 +1377,7 @@ function explorerHtml() {
         }
         return;
       } finally {
-        clearTimeout(to);
+        if (to) clearTimeout(to);
       }
 
       if (r.status === 401) {
@@ -1440,7 +1440,7 @@ function explorerHtml() {
         showGateErr('Unlocked locally but something failed in the page: ' + (eDone && eDone.message ? eDone.message : String(eDone)));
       }
     } finally {
-      clearTimeout(to);
+      if (to) clearTimeout(to);
       if (working) working.style.display = 'none';
       if (btn) btn.disabled = false;
     }
@@ -1448,31 +1448,47 @@ function explorerHtml() {
 
   fetch(intelApi('/public-meta'))
     .then(function (r) {
-      return r.json();
+      return r.text();
     })
-    .then(function (j) {
-      if (j && j.ok && j.server_llm_configured) {
-        serverLlmConfigured = true;
-        var gh = $('gateServerLlmHint');
-        if (gh) gh.style.display = 'block';
-      }
+    .then(function (t) {
+      try {
+        var j = JSON.parse(t || '{}');
+        if (j && j.ok && j.server_llm_configured) {
+          var gh = $('gateServerLlmHint');
+          if (gh) gh.style.display = 'block';
+        }
+      } catch (eParse) {}
     })
     .catch(function () {});
 
   var gateBtn = $('gateSubmit');
   if (gateBtn) {
     gateBtn.onclick = function () {
-      validateAndEnterFromGate().catch(function (eUnhandled) {
-        showGateErr('Unexpected error: ' + (eUnhandled && eUnhandled.message ? eUnhandled.message : String(eUnhandled)));
-      });
+      try {
+        var pr = validateAndEnterFromGate();
+        if (pr && typeof pr.catch === 'function') {
+          pr.catch(function (eUnhandled) {
+            showGateErr('Unexpected error: ' + (eUnhandled && eUnhandled.message ? eUnhandled.message : String(eUnhandled)));
+          });
+        }
+      } catch (eSync) {
+        showGateErr('Unexpected error: ' + (eSync && eSync.message ? eSync.message : String(eSync)));
+      }
     };
   }
   function gateMaybeSubmit(e) {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    validateAndEnterFromGate().catch(function (eUnhandled) {
-      showGateErr('Unexpected error: ' + (eUnhandled && eUnhandled.message ? eUnhandled.message : String(eUnhandled)));
-    });
+    try {
+      var pr = validateAndEnterFromGate();
+      if (pr && typeof pr.catch === 'function') {
+        pr.catch(function (eUnhandled) {
+          showGateErr('Unexpected error: ' + (eUnhandled && eUnhandled.message ? eUnhandled.message : String(eUnhandled)));
+        });
+      }
+    } catch (eSync) {
+      showGateErr('Unexpected error: ' + (eSync && eSync.message ? eSync.message : String(eSync)));
+    }
   }
   var gb = $('gateBearer');
   if (gb) gb.addEventListener('keydown', gateMaybeSubmit);
@@ -1494,8 +1510,8 @@ function explorerHtml() {
       if ($('gateOpenAi')) $('gateOpenAi').value = '';
       var gr = $('gateRoot');
       var ap = $('playshareExplorerApp');
-      if (ap) ap.hidden = true;
-      if (gr) gr.hidden = false;
+      if (ap) ap.setAttribute('hidden', '');
+      if (gr) gr.removeAttribute('hidden');
     };
   }
 
