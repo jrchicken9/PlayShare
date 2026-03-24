@@ -1,6 +1,6 @@
 /**
  * Internal HTTP API + lightweight HTML explorer for diagnostic intelligence.
- * Auth: Bearer PLAYSHARE_DIAG_INTEL_SECRET or PLAYSHARE_DIAG_UPLOAD_SECRET (if set).
+ * Auth: Bearer token must match PLAYSHARE_DIAG_INTEL_SECRET and/or PLAYSHARE_DIAG_UPLOAD_SECRET (either value accepted if both are set).
  */
 
 const { URL } = require('url');
@@ -48,8 +48,24 @@ function diagIntelSlicePage(rows, limit) {
   return { data, hasMore, returned: data.length };
 }
 
+/**
+ * Unique non-empty secrets that authorize /diag/intel/*.
+ * If both PLAYSHARE_DIAG_INTEL_SECRET and PLAYSHARE_DIAG_UPLOAD_SECRET are set, either value is accepted
+ * (extension uploads often use UPLOAD only; explorer docs mention INTEL — mismatch caused 401).
+ */
+function getDiagIntelAcceptedSecrets() {
+  const intel = String(process.env.PLAYSHARE_DIAG_INTEL_SECRET || '').trim();
+  const upload = String(process.env.PLAYSHARE_DIAG_UPLOAD_SECRET || '').trim();
+  const out = [];
+  if (intel) out.push(intel);
+  if (upload && upload !== intel) out.push(upload);
+  return out;
+}
+
+/** @deprecated Use getDiagIntelAcceptedSecrets; kept for module export compatibility (first configured secret). */
 function getIntelSecret() {
-  return String(process.env.PLAYSHARE_DIAG_INTEL_SECRET || process.env.PLAYSHARE_DIAG_UPLOAD_SECRET || '').trim();
+  const a = getDiagIntelAcceptedSecrets();
+  return a[0] || '';
 }
 
 function json(res, status, obj) {
@@ -61,12 +77,19 @@ function unauthorized(res) {
   json(res, 401, { ok: false, error: 'unauthorized' });
 }
 
+function parseBearerToken(authHeader) {
+  let t = String(authHeader || '').trim();
+  if (t.toLowerCase().startsWith('bearer ')) t = t.slice(7).trim();
+  if (t.toLowerCase().startsWith('bearer ')) t = t.slice(7).trim();
+  return t;
+}
+
 function checkAuth(req) {
-  const secret = getIntelSecret();
-  if (!secret) return null;
-  const auth = String(req.headers.authorization || '');
-  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-  return token === secret;
+  const accepted = getDiagIntelAcceptedSecrets();
+  if (accepted.length === 0) return null;
+  const token = parseBearerToken(req.headers.authorization);
+  if (!token) return false;
+  return accepted.some((secret) => token === secret);
 }
 
 async function readJsonBody(req, maxBytes = 65536) {
@@ -137,7 +160,8 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
     json(res, 503, {
       ok: false,
       error: 'intel_secret_not_configured',
-      hint: 'Set PLAYSHARE_DIAG_INTEL_SECRET or PLAYSHARE_DIAG_UPLOAD_SECRET'
+      hint:
+        'Set PLAYSHARE_DIAG_INTEL_SECRET and/or PLAYSHARE_DIAG_UPLOAD_SECRET. If both are set, the explorer accepts either value in Authorization: Bearer.'
     });
     return;
   }
@@ -1001,7 +1025,7 @@ function explorerHtml() {
 
       <div class="main-col">
         <div class="access-panel" id="accessPanel">
-          <label class="lbl" for="tok">Bearer secret — paste value of <code>PLAYSHARE_DIAG_INTEL_SECRET</code> (Railway Variables)</label>
+          <label class="lbl" for="tok">Bearer secret — paste the <em>value</em> of <code>PLAYSHARE_DIAG_INTEL_SECRET</code> <strong>or</strong> <code>PLAYSHARE_DIAG_UPLOAD_SECRET</code> (whichever you use; if both exist in Railway, they may differ — either is accepted)</label>
           <input type="password" id="tok" placeholder="Required on every visit unless Remember is checked" autocomplete="off" spellcheck="false" />
           <div class="chk"><label><input type="checkbox" id="rememberTok" /> Remember for this tab (sessionStorage)</label></div>
           <p class="access-panel-hint">
@@ -1185,8 +1209,19 @@ function explorerHtml() {
     return h;
   }
 
+  /** Strip wrapping quotes and accidental leading "Bearer " from pasted secrets. */
+  function normalizeTokInput(raw) {
+    var t = String(raw || '').trim();
+    if ((t.charAt(0) === '"' && t.charAt(t.length - 1) === '"') || (t.charAt(0) === "'" && t.charAt(t.length - 1) === "'")) {
+      t = t.slice(1, -1).trim();
+    }
+    if (t.toLowerCase().indexOf('bearer ') === 0) t = t.slice(7).trim();
+    if (t.toLowerCase().indexOf('bearer ') === 0) t = t.slice(7).trim();
+    return t;
+  }
+
   async function validateAndEnterFromGate() {
-    var bearer = ($('gateBearer') && $('gateBearer').value.trim()) || '';
+    var bearer = normalizeTokInput($('gateBearer') && $('gateBearer').value) || '';
     var openai = ($('gateOpenAi') && $('gateOpenAi').value.trim()) || '';
     var skipAi = $('gateSkipOpenAi') && $('gateSkipOpenAi').checked;
     var remember = $('gateRemember') && $('gateRemember').checked;
@@ -1216,7 +1251,8 @@ function explorerHtml() {
       var r = await fetch('/diag/intel/cases?limit=1', { headers: { Authorization: 'Bearer ' + bearer } });
       if (r.status === 401 || r.status === 403) {
         if (err) {
-          err.textContent = 'Invalid server secret (401). Check Railway PLAYSHARE_DIAG_INTEL_SECRET or UPLOAD secret.';
+          err.textContent =
+            'Invalid server secret (401). Paste the exact value of PLAYSHARE_DIAG_INTEL_SECRET or PLAYSHARE_DIAG_UPLOAD_SECRET (if both are set in Railway, use either — not a mix). Remove quotes and do not type the word Bearer.';
           err.style.display = 'block';
         }
         return;
@@ -1287,7 +1323,8 @@ function explorerHtml() {
 
   (function tryAutoUnlockFromStorage() {
     try {
-      var bearer = sessionStorage.getItem(TOK_KEY);
+      var rawBearer = sessionStorage.getItem(TOK_KEY);
+      var bearer = normalizeTokInput(rawBearer);
       var skip = sessionStorage.getItem(SKIP_LLM_STORAGE) === '1';
       var ai = sessionStorage.getItem(AI_KEY_STORAGE) || '';
       if (!bearer || (!skip && !ai)) return;
@@ -1358,7 +1395,7 @@ function explorerHtml() {
   }
 
   function authHeaders() {
-    var t = $('tok').value.trim();
+    var t = normalizeTokInput($('tok').value);
     var h = { 'Content-Type': 'application/json' };
     if (t) h.Authorization = 'Bearer ' + t;
     return attachClientAiHeaders(h);
@@ -1713,7 +1750,7 @@ function explorerHtml() {
     var btn = $('btnAiBrief');
     var out = $('aiBriefResult');
     var st = $('aiBriefStatus');
-    if (!$('tok').value.trim()) {
+    if (!normalizeTokInput($('tok').value)) {
       st.textContent = '';
       out.innerHTML =
         '<div class="alert err"><strong>Missing server secret</strong>' +
@@ -2004,13 +2041,14 @@ function explorerHtml() {
     var gr = $('gateRoot');
     var gateBlocking = gr && !gr.hidden;
     if (saved && !gateBlocking) {
-      tokEl.value = saved;
+      tokEl.value = normalizeTokInput(saved) || saved;
       remEl.checked = true;
     }
   } catch (e) {}
   function persistTok() {
     try {
-      if (remEl.checked && tokEl.value.trim()) sessionStorage.setItem(TOK_KEY, tokEl.value.trim());
+      var nt = normalizeTokInput(tokEl.value);
+      if (remEl.checked && nt) sessionStorage.setItem(TOK_KEY, nt);
       else sessionStorage.removeItem(TOK_KEY);
     } catch (e) {}
   }
