@@ -5,9 +5,15 @@
  * Each room tracks members and the current playback state.
  */
 
+const path = require('path');
+try {
+  require('dotenv').config({ path: path.join(__dirname, '.env') });
+} catch (_) {
+  /* dotenv is a normal dependency; catch only if module resolution fails */
+}
+
 const http = require('http');
 const fs = require('fs');
-const path = require('path');
 const os = require('os');
 const { WebSocketServer, WebSocket } = require('ws');
 const { v4: uuidv4 } = require('uuid');

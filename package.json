@@ -27,8 +27,9 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
-    "ws": "^8.16.0",
-    "uuid": "^9.0.0"
+    "dotenv": "^17.3.1",
+    "uuid": "^9.0.0",
+    "ws": "^8.16.0"
   },
   "devDependencies": {
     "esbuild": "^0.24.0",

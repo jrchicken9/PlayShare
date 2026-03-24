@@ -111,6 +111,21 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
     return;
   }
 
+  if (path === '/diag/intel/public-meta' && req.method === 'GET') {
+    const cfg = getDiagAiConfig();
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store'
+    });
+    res.end(
+      JSON.stringify({
+        ok: true,
+        server_llm_configured: Boolean(cfg && cfg.configured)
+      })
+    );
+    return;
+  }
+
   if (path === '/diag/intel/explorer' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(explorerHtml());
@@ -921,8 +936,11 @@ function explorerHtml() {
       <label class="lbl" for="gateOpenAi">2 · OpenAI API key</label>
       <input type="password" id="gateOpenAi" autocomplete="off" spellcheck="false" placeholder="sk-…" />
       <div class="chk" style="margin-top: 12px">
-        <label><input type="checkbox" id="gateSkipOpenAi" /> Use server LLM only (<code>PLAYSHARE_DIAG_AI_API_KEY</code> on Railway — skip key above)</label>
+        <label><input type="checkbox" id="gateSkipOpenAi" /> Use server LLM only (<code>PLAYSHARE_DIAG_AI_API_KEY</code> or <code>OPENAI_API_KEY</code> on the host — skip key above)</label>
       </div>
+      <p id="gateServerLlmHint" class="muted" style="display: none; margin-top: 10px; font-size: 13px; line-height: 1.5">
+        This host reports an LLM key in its environment (Railway variables or a local <code>.env</code> file). You can leave the OpenAI field empty and keep “Use server LLM only” checked.
+      </p>
       <div class="chk"><label><input type="checkbox" id="gateRemember" checked /> Remember on this browser tab (sessionStorage)</label></div>
       <button type="button" id="gateSubmit">Continue</button>
       <div id="gateErr" class="alert err" style="display: none; margin-top: 14px"></div>
@@ -1083,6 +1101,8 @@ function explorerHtml() {
   var SKIP_LLM_STORAGE = 'playshare_diag_explorer_skip_llm_v1';
   var runtimeAiKey = '';
   var runtimeSkipServerLlm = false;
+  /** Set from <code>/diag/intel/public-meta</code> — true when process.env has an LLM key (no browser paste needed). */
+  var serverLlmConfigured = false;
   var lastText = '';
   var lastPath = '';
   var lastPagedFetch = null;
@@ -1144,9 +1164,10 @@ function explorerHtml() {
       }
       return;
     }
-    if (!skipAi && !openai) {
+    if (!skipAi && !openai && !serverLlmConfigured) {
       if (err) {
-        err.textContent = 'OpenAI API key is required, or enable “Use server LLM only”.';
+        err.textContent =
+          'OpenAI API key is required, or enable “Use server LLM only” after setting PLAYSHARE_DIAG_AI_API_KEY (or OPENAI_API_KEY) on the server / in .env.';
         err.style.display = 'block';
       }
       return;
@@ -1202,6 +1223,21 @@ function explorerHtml() {
       if (btn) btn.disabled = false;
     }
   }
+
+  fetch('/diag/intel/public-meta')
+    .then(function (r) {
+      return r.json();
+    })
+    .then(function (j) {
+      if (j && j.ok && j.server_llm_configured) {
+        serverLlmConfigured = true;
+        var gs = $('gateSkipOpenAi');
+        if (gs) gs.checked = true;
+        var gh = $('gateServerLlmHint');
+        if (gh) gh.style.display = 'block';
+      }
+    })
+    .catch(function () {});
 
   var gateBtn = $('gateSubmit');
   if (gateBtn) {
