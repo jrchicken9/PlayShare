@@ -5,11 +5,19 @@
  * Designed for extended runs (tens of minutes to hours): periodic snapshots + throttled media events are stored in
  * ring buffers (oldest rows drop after maxSnapshots / maxEvents) while the extension keeps working.
  * Export is JSON-serializable; URLs and attributes truncated — no credentials.
+ *
+ * v4: derived timeline events, decision hooks (`recordDecisionEvent`), per-snapshot `deltaSummary`,
+ * session `progressionQuality` rollup — observer-only; no sync control logic here.
  */
 
 /** @typedef {{ t: number, type: string, [k: string]: unknown }} ProfilerEvent */
 
-const PROFILER_SCHEMA = 'playshare.videoPlayerProfiler.v3';
+const PROFILER_SCHEMA = 'playshare.videoPlayerProfiler.v4';
+
+/** Jumps larger than this (seconds) while not seeking count as discontinuities (not micro-drift). */
+const LARGE_DISCONTINUITY_SEC = 3.5;
+/** Debounce derived `video_frozen_but_not_paused` (ms). */
+const DERIVED_FROZEN_DEBOUNCE_MS = 4200;
 
 const MEDIA_ERROR_NAMES = {
   1: 'MEDIA_ERR_ABORTED',
@@ -37,6 +45,109 @@ function perfNowMs() {
     /* ignore */
   }
   return null;
+}
+
+/**
+ * @param {Record<string, unknown>|null|undefined} d
+ */
+function sanitizeDecisionDetail(d) {
+  if (!d || typeof d !== 'object') return {};
+  /** @type {Record<string, unknown>} */
+  const out = {};
+  const keys = [
+    'reason',
+    'driftSec',
+    'correctionReason',
+    'handlerKey',
+    'syncKind',
+    'remoteKind',
+    'kind',
+    'rate',
+    'absDrift',
+    'driftSigned',
+    'ok',
+    'deltaSeek',
+    'note',
+    'durationMs',
+    'correlationId',
+    'branch',
+    'snapshotAt'
+  ];
+  for (const k of keys) {
+    if (!(k in d)) continue;
+    const v = /** @type {Record<string, unknown>} */ (d)[k];
+    if (v == null) continue;
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      out[k] = Math.abs(v) > 1e5 ? v : +v.toFixed(Number.isInteger(v) ? 0 : 4);
+    } else if (typeof v === 'boolean') {
+      out[k] = v;
+    } else if (typeof v === 'string') {
+      out[k] = truncUrl(v, 96);
+    }
+  }
+  return out;
+}
+
+/**
+ * @param {Record<string, unknown>|null|undefined} prev
+ * @param {Record<string, unknown>|null|undefined} cur
+ */
+function computeDeltaSummary(prev, cur) {
+  if (!prev || !cur) return null;
+  /** @type {Record<string, unknown>} */
+  const d = {};
+  if (prev.videoPresent !== cur.videoPresent) d.videoPresentChanged = true;
+  const pct = prev.currentTime;
+  const cct = cur.currentTime;
+  if (typeof pct === 'number' && typeof cct === 'number' && Number.isFinite(pct) && Number.isFinite(cct)) {
+    const dt = cct - pct;
+    if (Math.abs(dt) > 1e-4) d.currentTimeDelta = +dt.toFixed(3);
+  }
+  const pb = prev.bufferAheadSec;
+  const cb = cur.bufferAheadSec;
+  if (typeof pb === 'number' && typeof cb === 'number' && Number.isFinite(pb) && Number.isFinite(cb)) {
+    const db = cb - pb;
+    if (Math.abs(db) > 0.02) d.bufferAheadDelta = +db.toFixed(2);
+  }
+  if (prev.playbackRate !== cur.playbackRate && typeof cur.playbackRate === 'number') d.playbackRateChanged = true;
+  if (prev.readyState !== cur.readyState) d.readyStateChanged = [prev.readyState, cur.readyState];
+  if (prev.paused !== cur.paused) d.pausedChanged = true;
+  if (prev.seeking !== cur.seeking) d.seekingChanged = true;
+  const ps = typeof prev.currentSrc === 'string' ? prev.currentSrc : '';
+  const cs = typeof cur.currentSrc === 'string' ? cur.currentSrc : '';
+  if (ps !== cs && (ps || cs)) d.srcChanged = true;
+  if (prev.documentVisibility !== cur.documentVisibility) d.visibilityChanged = true;
+  return Object.keys(d).length ? d : null;
+}
+
+/**
+ * Best-effort “ad-like” visibility from enriched snapshot (playShare / Prime / Netflix blocks).
+ * @param {Record<string, unknown>|null|undefined} snap
+ */
+function adModeVisibleFromSnapshot(snap) {
+  if (!snap || typeof snap !== 'object') return false;
+  try {
+    const ps = snap.playShare;
+    if (ps && typeof ps === 'object' && /** @type {Record<string, unknown>} */ (ps).localAdBreakActive === true) {
+      return true;
+    }
+    const nf = snap.netflixAd;
+    if (nf && typeof nf === 'object' && /** @type {Record<string, unknown>} */ (nf).extensionHeuristicAd === true) {
+      return true;
+    }
+    const pr = snap.primePlayer;
+    if (pr && typeof pr === 'object') {
+      const o = /** @type {Record<string, unknown>} */ (pr);
+      if (o.adLikely === true || o.adStrong === true) return true;
+    }
+    const pt = snap.primeTelemetry;
+    if (pt && typeof pt === 'object' && /** @type {Record<string, unknown>} */ (pt).extensionLocalAd === true) {
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
 }
 
 /**
@@ -142,12 +253,17 @@ function computeSessionRollup(snaps, evs) {
   let rebounds = 0;
   let srcChanges = 0;
   let longTaskEvents = 0;
+  let decisionEvents = 0;
+  let derivedTimelineEvents = 0;
   for (const e of evs) {
-    const et = e && typeof e === 'object' ? /** @type {ProfilerEvent} */ (e).type : '';
+    const row = e && typeof e === 'object' ? /** @type {Record<string, unknown>} */ (e) : null;
+    const et = row ? String(row.type || '') : '';
     if (et === 'user_marker') userMarkers++;
     if (et === 'video_element_rebound') rebounds++;
     if (et === 'current_src_changed') srcChanges++;
     if (et === 'performance_longtask') longTaskEvents++;
+    if (row && row.decision === true) decisionEvents++;
+    if (row && row.derived === true) derivedTimelineEvents++;
   }
   return {
     snapshotsWithVideo: present,
@@ -164,7 +280,9 @@ function computeSessionRollup(snaps, evs) {
     userMarkers,
     videoElementRebounds: rebounds,
     currentSrcChanges: srcChanges,
-    performanceLongTaskEvents: longTaskEvents
+    performanceLongTaskEvents: longTaskEvents,
+    decisionEvents,
+    derivedTimelineEvents
   };
 }
 
@@ -753,9 +871,89 @@ function captureVideoSnapshot(v) {
  * @param {number} [opts.stallCheckIntervalMs]
  * @param {number} [opts.timeupdateLogMinIntervalMs]
  * @param {number} [opts.progressLogMinIntervalMs]
- * @param {(snap: Record<string, unknown>, v: HTMLVideoElement|null) => void} [opts.enrichSnapshot]
+ * @param {(snap: Record<string, unknown>, v: HTMLVideoElement|null, ctx?: { userMarker?: boolean, seq?: number, note?: string }|null|undefined) => void} [opts.enrichSnapshot]
  * @param {() => Record<string, unknown>|null|undefined} [opts.getExportExtras]
  */
+function createProgressionTracker() {
+  let lastTuWall = 0;
+  let lastTuCt = /** @type {number|null} */ (null);
+  let sumGap = 0;
+  let gapCount = 0;
+  let maxGap = 0;
+  let zeroAdvanceWhilePlayingCount = 0;
+  let largeDiscontinuityCount = 0;
+  let expectedAdvanceSec = 0;
+  let actualAdvanceSec = 0;
+  let frozenWhilePlayingCount = 0;
+
+  return {
+    reset() {
+      lastTuWall = 0;
+      lastTuCt = null;
+      sumGap = 0;
+      gapCount = 0;
+      maxGap = 0;
+      zeroAdvanceWhilePlayingCount = 0;
+      largeDiscontinuityCount = 0;
+      expectedAdvanceSec = 0;
+      actualAdvanceSec = 0;
+      frozenWhilePlayingCount = 0;
+    },
+    /**
+     * @param {HTMLVideoElement} v
+     * @param {number} wallMs
+     */
+    onTimeupdate(v, wallMs) {
+      const ct = typeof v.currentTime === 'number' && Number.isFinite(v.currentTime) ? v.currentTime : null;
+      const paused = !!v.paused;
+      const seeking = !!v.seeking;
+      const rate = typeof v.playbackRate === 'number' && v.playbackRate > 0 ? v.playbackRate : 1;
+      if (lastTuWall > 0 && wallMs > lastTuWall && wallMs - lastTuWall < 120000) {
+        const gap = wallMs - lastTuWall;
+        sumGap += gap;
+        gapCount += 1;
+        if (gap > maxGap) maxGap = gap;
+      }
+      if (typeof ct === 'number' && lastTuCt != null && !seeking) {
+        const dct = ct - lastTuCt;
+        if (!paused && Math.abs(dct) > LARGE_DISCONTINUITY_SEC) largeDiscontinuityCount += 1;
+      }
+      if (!paused && !seeking && typeof ct === 'number' && lastTuCt != null && lastTuWall > 0) {
+        const wallSec = (wallMs - lastTuWall) / 1000;
+        if (wallSec > 0 && wallSec < 60) {
+          const dct = ct - lastTuCt;
+          if (Math.abs(dct) < LARGE_DISCONTINUITY_SEC) {
+            expectedAdvanceSec += wallSec * rate;
+            actualAdvanceSec += dct;
+          }
+        }
+      }
+      lastTuWall = wallMs;
+      lastTuCt = ct;
+    },
+    onFrozenHeuristic() {
+      frozenWhilePlayingCount += 1;
+      zeroAdvanceWhilePlayingCount += 1;
+    },
+    getSummary() {
+      const averageTimeupdateGapMs = gapCount ? +(sumGap / gapCount).toFixed(1) : null;
+      const expectedVsActualAdvanceRatio =
+        expectedAdvanceSec > 0.25 && Number.isFinite(actualAdvanceSec)
+          ? +(actualAdvanceSec / expectedAdvanceSec).toFixed(3)
+          : null;
+      return {
+        averageTimeupdateGapMs,
+        maxTimeupdateGapMs: maxGap > 0 ? maxGap : null,
+        timeupdateGapSampleCount: gapCount,
+        zeroAdvanceWhilePlayingCount,
+        largeDiscontinuityCount,
+        expectedVsActualAdvanceRatio,
+        frozenWhilePlayingCount
+      };
+    }
+  };
+}
+
 export function createVideoPlayerProfiler(opts) {
   const getVideo = opts.getVideo;
   const enrichSnapshot = typeof opts.enrichSnapshot === 'function' ? opts.enrichSnapshot : null;
@@ -777,6 +975,9 @@ export function createVideoPlayerProfiler(opts) {
   let recording = false;
   let startedAtMs = /** @type {number|null} */ (null);
   let endedAtMs = /** @type {number|null} */ (null);
+
+  /** Passed to `enrichSnapshot` for the extra snapshot taken after **Mark moment** (then cleared). */
+  let snapshotEnrichContext = /** @type {{ userMarker?: boolean, seq?: number, note?: string }|null} */ (null);
 
   /** @type {ReturnType<typeof setInterval>|null} */
   let snapshotTimerId = null;
@@ -805,8 +1006,126 @@ export function createVideoPlayerProfiler(opts) {
   let lastSrcFinger = '';
   let userMarkerSeq = 0;
 
+  const progression = createProgressionTracker();
+
+  let bufferRecoveryActive = false;
+  let bufferRecoveryStartAt = 0;
+  let lastDerivedFrozenAt = 0;
+  /** @type {boolean|null} */
+  let lastAdModeVisible = null;
+  /** @type {Record<string, unknown>|null} */
+  let lastSnapshotBrief = null;
+  let playbackRateNudgeActive = false;
+
   /** @type {(() => void)|null} */
   let pageHideHandler = null;
+
+  function pushDerived(type, /** @type {Record<string, unknown>} */ detail = {}) {
+    if (!recording) return;
+    const row = { type: String(type).slice(0, 72), derived: true, ...detail };
+    pushEvent(row);
+  }
+
+  function endBufferRecovery(reason) {
+    if (!bufferRecoveryActive) return;
+    const now = Date.now();
+    pushDerived('buffer_recovery_end', {
+      durationMs: Math.min(600000, now - bufferRecoveryStartAt),
+      reason: truncUrl(String(reason || ''), 48)
+    });
+    bufferRecoveryActive = false;
+  }
+
+  /**
+   * @param {string} type
+   * @param {HTMLVideoElement} v
+   */
+  function considerDerivedFromMediaEvent(type, v) {
+    if (!recording || !v || !(v instanceof HTMLVideoElement)) return;
+    if (type === 'waiting' || type === 'stalled') {
+      if (!v.paused && !v.ended && !bufferRecoveryActive) {
+        bufferRecoveryActive = true;
+        bufferRecoveryStartAt = Date.now();
+        pushDerived('buffer_recovery_start', {
+          from: type,
+          currentTime: typeof v.currentTime === 'number' ? +v.currentTime.toFixed(3) : null,
+          readyState: v.readyState,
+          playbackRate: v.playbackRate
+        });
+      }
+      return;
+    }
+    if (
+      bufferRecoveryActive &&
+      (type === 'playing' ||
+        type === 'canplaythrough' ||
+        type === 'seeked' ||
+        type === 'pause' ||
+        type === 'emptied' ||
+        type === 'abort')
+    ) {
+      endBufferRecovery(type);
+    }
+  }
+
+  /**
+   * @param {Record<string, unknown>} snap
+   */
+  function snapshotBriefFromSnap(snap) {
+    return {
+      currentTime: snap.currentTime,
+      bufferAheadSec: snap.bufferAheadSec,
+      playbackRate: snap.playbackRate,
+      readyState: snap.readyState,
+      paused: snap.paused,
+      seeking: snap.seeking,
+      currentSrc: snap.currentSrc,
+      documentVisibility: snap.documentVisibility,
+      videoPresent: snap.videoPresent
+    };
+  }
+
+  /**
+   * Sync decision / reconcile outcomes (from app.js). Lightweight, capped strings/numbers only.
+   * @param {string} type
+   * @param {Record<string, unknown>|null|undefined} [detail]
+   */
+  function recordDecisionEvent(type, detail) {
+    if (!recording) return;
+    const t = String(type || 'unknown').slice(0, 72);
+    const base = sanitizeDecisionDetail(detail);
+    pushEvent({ type: t, decision: true, ...base });
+  }
+
+  /**
+   * @param {'start'|'end'} phase
+   * @param {Record<string, unknown>|null|undefined} [detail]
+   */
+  function recordRemoteSyncApplyPhase(phase, detail) {
+    if (!recording) return;
+    const p = phase === 'end' ? 'end' : 'start';
+    const base = sanitizeDecisionDetail(detail);
+    pushDerived(p === 'start' ? 'remote_sync_apply_start' : 'remote_sync_apply_end', base);
+  }
+
+  /**
+   * Soft drift playbackRate nudges from sync (app.js); not user UI rate changes.
+   * @param {'start'|'end'} phase
+   * @param {Record<string, unknown>|null|undefined} [detail]
+   */
+  function recordPlaybackRateNudgePhase(phase, detail) {
+    if (!recording) return;
+    const p = phase === 'end' ? 'end' : 'start';
+    const base = sanitizeDecisionDetail(detail);
+    if (p === 'start') {
+      playbackRateNudgeActive = true;
+      pushDerived('playback_rate_nudge_start', base);
+    } else {
+      if (!playbackRateNudgeActive) return;
+      playbackRateNudgeActive = false;
+      pushDerived('playback_rate_nudge_end', base);
+    }
+  }
 
   function pushEvent(ev) {
     const t = typeof ev.t === 'number' ? ev.t : Date.now();
@@ -954,16 +1273,41 @@ export function createVideoPlayerProfiler(opts) {
           from: truncUrl(lastSrcFinger, 72),
           to: truncUrl(finger, 72)
         });
+        pushDerived('src_swap_detected', {
+          from: truncUrl(lastSrcFinger, 72),
+          to: truncUrl(finger, 72)
+        });
       }
       if (finger) lastSrcFinger = finger;
     }
+    const enrichCtx = snapshotEnrichContext;
+    snapshotEnrichContext = null;
     if (enrichSnapshot) {
       try {
-        enrichSnapshot(snap, v);
+        enrichSnapshot(snap, v, enrichCtx);
       } catch {
         /* ignore */
       }
     }
+    try {
+      const vis = adModeVisibleFromSnapshot(/** @type {Record<string, unknown>} */ (snap));
+      if (lastAdModeVisible === null) {
+        lastAdModeVisible = vis;
+      } else if (lastAdModeVisible !== vis) {
+        if (vis) pushDerived('ad_mode_visible_start', { snapshotAt: snap.at });
+        else pushDerived('ad_mode_visible_end', { snapshotAt: snap.at });
+        lastAdModeVisible = vis;
+      }
+    } catch {
+      /* ignore */
+    }
+    const brief = snapshotBriefFromSnap(/** @type {Record<string, unknown>} */ (snap));
+    const deltaSummary = computeDeltaSummary(lastSnapshotBrief, brief);
+    if (deltaSummary) {
+      /** @type {Record<string, unknown>} */ (snap).deltaSummary = deltaSummary;
+    }
+    lastSnapshotBrief = brief;
+
     snapshots.push(snap);
     while (snapshots.length > maxSnapshots) snapshots.shift();
   }
@@ -1080,18 +1424,24 @@ export function createVideoPlayerProfiler(opts) {
   /** @param {Event} e */
   function onVideoGeneric(e) {
     const type = e.type;
+    const v = /** @type {HTMLVideoElement} */ (e.target);
+    const now = Date.now();
     if (type === 'timeupdate') {
-      const now = Date.now();
+      try {
+        progression.onTimeupdate(v, now);
+      } catch {
+        /* ignore */
+      }
       if (now - lastTimeupdateLogAt < timeupdateLogMinIntervalMs) return;
       lastTimeupdateLogAt = now;
     }
     if (type === 'progress') {
-      const now = Date.now();
       if (now - lastProgressLogAt < progressLogMinIntervalMs) return;
       lastProgressLogAt = now;
     }
-    const v = /** @type {HTMLVideoElement} */ (e.target);
+    considerDerivedFromMediaEvent(type, v);
     pushEvent({
+      t: now,
       type,
       currentTime: typeof v.currentTime === 'number' ? +v.currentTime.toFixed(3) : null,
       paused: v.paused,
@@ -1296,6 +1646,21 @@ export function createVideoPlayerProfiler(opts) {
         playbackRate: v.playbackRate,
         readyState: v.readyState
       });
+      try {
+        progression.onFrozenHeuristic();
+      } catch {
+        /* ignore */
+      }
+      if (now - lastDerivedFrozenAt >= DERIVED_FROZEN_DEBOUNCE_MS) {
+        lastDerivedFrozenAt = now;
+        pushDerived('video_frozen_but_not_paused', {
+          wallSec: +wallSec.toFixed(3),
+          deltaCurrentTime: +deltaCt.toFixed(4),
+          expectedAdvance: +expected.toFixed(4),
+          playbackRate: v.playbackRate,
+          readyState: v.readyState
+        });
+      }
     }
     stallPrev = { t: now, ct };
   }
@@ -1321,6 +1686,13 @@ export function createVideoPlayerProfiler(opts) {
       lastPlaybackQualitySample = null;
       lastSrcFinger = '';
       userMarkerSeq = 0;
+      progression.reset();
+      bufferRecoveryActive = false;
+      bufferRecoveryStartAt = 0;
+      lastDerivedFrozenAt = 0;
+      lastAdModeVisible = null;
+      lastSnapshotBrief = null;
+      playbackRateNudgeActive = false;
       sessionMonoOrigin = perfNowMs();
       endedAtMs = null;
       startedAtMs = Date.now();
@@ -1375,6 +1747,7 @@ export function createVideoPlayerProfiler(opts) {
       userMarkerSeq += 1;
       const label = note != null && String(note).trim() !== '' ? truncUrl(String(note).trim(), 140) : `marker_${userMarkerSeq}`;
       pushEvent({ type: 'user_marker', seq: userMarkerSeq, note: label });
+      snapshotEnrichContext = { userMarker: true, seq: userMarkerSeq, note: label };
       pushSnapshot();
       return true;
     },
@@ -1407,7 +1780,8 @@ export function createVideoPlayerProfiler(opts) {
               name: MEDIA_ERROR_NAMES[/** @type {1|2|3|4} */ (lastMediaError.code)] || `UNKNOWN_${lastMediaError.code}`,
               message: lastMediaError.message ? truncUrl(lastMediaError.message, 120) : ''
             }
-          : null
+          : null,
+        progressionQuality: progression.getSummary()
       };
     },
 
@@ -1463,7 +1837,8 @@ export function createVideoPlayerProfiler(opts) {
             eventCount: events.length,
             eventTypeCounts: { ...eventTypeCounts },
             playheadStallMarkers: st.playheadStallMarkers,
-            lastMediaError: st.lastMediaError
+            lastMediaError: st.lastMediaError,
+            progressionQuality: progression.getSummary()
           },
           timelineCapacity: {
             snapshotIntervalMs,
@@ -1514,9 +1889,26 @@ export function createVideoPlayerProfiler(opts) {
       sessionMonoOrigin = null;
       userMarkerSeq = 0;
       lastVideoFrameCallbackSample = null;
+      progression.reset();
+      bufferRecoveryActive = false;
+      bufferRecoveryStartAt = 0;
+      lastDerivedFrozenAt = 0;
+      lastAdModeVisible = null;
+      lastSnapshotBrief = null;
+      playbackRateNudgeActive = false;
       disconnectIntersectionObserver();
       disconnectLongTaskObserver();
       unbindVideo();
+    },
+
+    recordDecisionEvent,
+    /** @param {'start'|'end'} phase @param {Record<string, unknown>|null|undefined} [detail] */
+    recordRemoteSyncApply(phase, detail) {
+      recordRemoteSyncApplyPhase(phase, detail);
+    },
+    /** @param {'start'|'end'} phase @param {Record<string, unknown>|null|undefined} [detail] */
+    recordPlaybackRateNudge(phase, detail) {
+      recordPlaybackRateNudgePhase(phase, detail);
     }
   };
 }

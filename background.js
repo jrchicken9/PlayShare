@@ -1,5 +1,6 @@
 importScripts('server-config.js');
 importScripts('shared/streaming-hosts.generated.js');
+importScripts('shared/diag-anonymize.js');
 
 /**
  * PlayShare — Background Service Worker
@@ -542,6 +543,46 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: true });
       break;
 
+    case 'DIAG_UPLOAD_UNIFIED': {
+      (async () => {
+        try {
+          const data = await chrome.storage.local.get(['serverUrl']);
+          const raw = (data.serverUrl && String(data.serverUrl).trim()) || DEFAULT_SERVER_URL;
+          const normalized = /^wss?:\/\//i.test(raw) ? raw : `wss://${raw.replace(/^\/\//, '')}`;
+          const httpBase = normalized.replace(/^wss/i, 'https').replace(/^ws/i, 'http').replace(/\/$/, '');
+          const anon = await self.diagAnonymizePlayShareUnifiedExport(msg.payload, msg.hashSecrets || {});
+          if (msg.enrichment && typeof msg.enrichment === 'object') {
+            anon.enrichment = msg.enrichment;
+          }
+          const envelope = {
+            schema: 'playshare.diagUploadEnvelope.v1',
+            reportKind: 'unified_anonymized',
+            extensionVersion: String(msg.extensionVersion || '').slice(0, 32),
+            platformHandlerKey: String(msg.platformHandlerKey || '').slice(0, 48),
+            diagnosticReportSchema: String(msg.diagnosticReportSchema || '').slice(0, 16),
+            testRunId: msg.testRunId ? String(msg.testRunId).slice(0, 64) : null,
+            payload: anon
+          };
+          const extraTok = await chrome.storage.local.get(['playshare_diag_upload_bearer']);
+          const bearer =
+            (extraTok.playshare_diag_upload_bearer && String(extraTok.playshare_diag_upload_bearer).trim()) || '';
+          /** @type {Record<string, string>} */
+          const headers = { 'Content-Type': 'application/json' };
+          if (bearer) headers.Authorization = `Bearer ${bearer}`;
+          const r = await fetch(`${httpBase}/diag/upload`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(envelope)
+          });
+          const j = await r.json().catch(() => ({}));
+          sendResponse({ ok: r.ok, status: r.status, ...j });
+        } catch (e) {
+          sendResponse({ ok: false, error: e && e.message ? e.message : String(e) });
+        }
+      })();
+      return true;
+    }
+
     case 'GET_DIAG':
       chrome.storage.local.get(['serverUrl'], (data) => {
         let serverHost = null;
@@ -650,4 +691,17 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'complete' || !tab?.url || !roomState) return;
   if (!isStreamingTab(tab.url)) return;
   chrome.tabs.sendMessage(tabId, { source: 'playshare-bg', type: 'ROOM_JOINED', ...roomState }).catch(() => {});
+});
+
+/** Fallback when Netflix (etc.) auto ad-detect misses — user can rebind in chrome://extensions/shortcuts */
+chrome.commands.onCommand.addListener((command) => {
+  if (command !== 'manual_ad_break_start' && command !== 'manual_ad_break_end') return;
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const tab = tabs[0];
+    if (!tab?.id || !tab.url || tab.url.startsWith('chrome://')) return;
+    if (!isStreamingTab(tab.url)) return;
+    const type =
+      command === 'manual_ad_break_start' ? 'COMMAND_MANUAL_AD_START' : 'COMMAND_MANUAL_AD_END';
+    chrome.tabs.sendMessage(tab.id, { source: 'playshare-bg', type, viaShortcut: true }).catch(() => {});
+  });
 });

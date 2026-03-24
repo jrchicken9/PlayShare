@@ -19,7 +19,8 @@
     "package:extension:both": "bash scripts/package-extension-both.sh",
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "node test-sync.js",
+    "test": "node test/diag-privacy.test.js && node test/diag-intelligence.test.js",
+    "test:sync": "node test-sync.js",
     "icons": "node scripts/build-extension-icons.mjs",
     "postinstall": "mkdir -p lib && cp node_modules/@supabase/supabase-js/dist/umd/supabase.js lib/supabase.min.js 2>/dev/null || true"
   },

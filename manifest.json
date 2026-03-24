@@ -100,5 +100,21 @@
     "https://*/*",
     "ws://*/*",
     "wss://*/*"
-  ]
+  ],
+  "commands": {
+    "manual_ad_break_start": {
+      "suggested_key": {
+        "default": "Alt+Shift+A",
+        "mac": "Alt+Shift+A"
+      },
+      "description": "PlayShare: mark ad break started (manual)"
+    },
+    "manual_ad_break_end": {
+      "suggested_key": {
+        "default": "Alt+Shift+E",
+        "mac": "Alt+Shift+E"
+      },
+      "description": "PlayShare: mark ad break ended (manual)"
+    }
+  }
 }

@@ -48,20 +48,36 @@ function summarizeLatencies(msList) {
  * Match server `DIAG_ROOM_TRACE` rows to local timeline `*_recv` entries by `correlationId`.
  * Both `trace.t` (server) and `recvAt` (content) use epoch ms; difference ≈ delivery skew if clocks agree.
  */
+function ingestRecvForCorrelation(byCorr, e) {
+  const recvKinds = new Set(['play_recv', 'pause_recv', 'seek_recv']);
+  const kind = e.kind || e.type;
+  if (!recvKinds.has(kind)) return;
+  const id = e.correlationId;
+  if (!id || typeof id !== 'string') return;
+  const recvAt =
+    typeof e.recvAt === 'number' && Number.isFinite(e.recvAt)
+      ? e.recvAt
+      : typeof e.t === 'number' && Number.isFinite(e.t)
+        ? e.t
+        : null;
+  if (recvAt == null) return;
+  const prev = byCorr.get(id);
+  if (!prev || recvAt < prev.recvAt) {
+    byCorr.set(id, { recvAt, kind });
+  }
+}
+
 export function computeCorrelationTraceDelivery(diag) {
   const trace = diag.serverRoomTrace || [];
   const timeline = diag.timing?.timeline || [];
-  const recvKinds = new Set(['play_recv', 'pause_recv', 'seek_recv']);
   /** @type {Map<string, { recvAt: number, kind: string }>} */
   const byCorr = new Map();
   for (const e of timeline) {
-    const id = e.correlationId;
-    if (!id || typeof id !== 'string' || !recvKinds.has(e.kind)) continue;
-    if (typeof e.recvAt !== 'number' || !Number.isFinite(e.recvAt)) continue;
-    const prev = byCorr.get(id);
-    if (!prev || e.recvAt < prev.recvAt) {
-      byCorr.set(id, { recvAt: e.recvAt, kind: e.kind });
-    }
+    ingestRecvForCorrelation(byCorr, e);
+  }
+  // Timeline is short (ring); sync.events keeps more recv rows with the same correlationIds.
+  for (const e of diag.sync?.events || []) {
+    ingestRecvForCorrelation(byCorr, e);
   }
   const samples = [];
   let traceConsider = 0;
@@ -108,6 +124,9 @@ export function computeSyncAnalytics(diag, reportSession, roomMeta = null) {
   const timeline = diag.timing?.timeline || [];
   const fv = diag.findVideo || {};
   const jumps = diag.timeupdateJumps || [];
+  const significantTimeupdateJumps = jumps.filter(
+    (j) => j && typeof j.deltaSec === 'number' && Number.isFinite(j.deltaSec) && j.deltaSec > 3.5
+  );
 
   const recvDrifts = events.map((e) => e.drift).filter((x) => typeof x === 'number' && Number.isFinite(x));
   const recvDriftStats = (() => {
@@ -159,7 +178,7 @@ export function computeSyncAnalytics(diag, reportSession, roomMeta = null) {
   if ((diag.timing?.driftEwmSec ?? 0) > 0.75) flags.push('high_drift_ewm_after_apply');
   if (recvDriftStats.max != null && recvDriftStats.max > 2) flags.push('large_pre_apply_recv_drift_observed');
   if ((fv.invalidations || 0) > 12) flags.push('frequent_findVideo_cache_invalidation');
-  if (jumps.length > 6) flags.push('many_large_timeupdate_jumps');
+  if (significantTimeupdateJumps.length > 6) flags.push('many_large_timeupdate_jumps');
   if (diag.tabHidden) flags.push('tab_hidden_at_export');
   if (!diag.videoAttached) flags.push('no_video_attached_at_export');
   if (isSoloSession) flags.push('solo_session_expected_gaps_in_remote_metrics');
@@ -273,7 +292,10 @@ export function computeSyncAnalytics(diag, reportSession, roomMeta = null) {
       invalidations: fv.invalidations ?? 0,
       videoAttachCount: fv.videoAttachCount ?? 0
     },
-    timeupdateLargeJumps: jumps.length,
+    timeupdateJumpsLogged: jumps.length,
+    timeupdateSignificantJumps: significantTimeupdateJumps.length,
+    /** Count of jumps with delta > 3.5s (sparse timeupdate playback steps are excluded). */
+    timeupdateLargeJumps: significantTimeupdateJumps.length,
     eventTypeCounts,
     timelineKindCounts,
     flags,
@@ -311,7 +333,9 @@ function buildAnalystHints({
     }
   }
   if (flags.includes('many_large_timeupdate_jumps')) {
-    hints.push('Large timeupdate jumps may indicate seeks/adaptive stream — may interact badly with sync thresholds.');
+    hints.push(
+      'Many timeupdate discontinuities >3.5s — usually real seeks or stream jumps (not sparse ~2s player sampling); may interact badly with sync thresholds.'
+    );
   }
   if (flags.includes('joiner_deferred_sync_state_often')) {
     hints.push(
@@ -455,7 +479,7 @@ export function buildNarrativeSummary(payload) {
     const c = eb.contentScript;
     lines.push('--- Extension bridge (this tab) ---');
     lines.push(
-      `SYNC_STATE: in ${c.syncStateInbound ?? 0} · applied ${c.syncStateApplied ?? 0} · deferred(no video) ${c.syncStateDeferredNoVideo ?? 0} · deferred(stale) ${c.syncStateDeferredStaleOrMissing ?? 0} · flushed ${c.syncStateFlushedOnVideoAttach ?? 0}`
+      `SYNC_STATE: in ${c.syncStateInbound ?? 0} · applied ${c.syncStateApplied ?? 0} · skip(redundant) ${c.syncStateSkippedRedundant ?? 0} · deferred(no video) ${c.syncStateDeferredNoVideo ?? 0} · deferred(stale) ${c.syncStateDeferredStaleOrMissing ?? 0} · flushed ${c.syncStateFlushedOnVideoAttach ?? 0}`
     );
     lines.push(
       `SYNC_STATE denied: syncLock ${c.syncStateDeniedSyncLock ?? 0} · Netflix debounce ${c.syncStateDeniedNetflixDebounce ?? 0}`
@@ -536,7 +560,9 @@ export function buildNarrativeSummary(payload) {
   lines.push('--- Video / DOM ---');
   const vf = a.videoFinder || {};
   lines.push(`findVideo: hits ${vf.cacheReturns} scans ${vf.fullScans} invalidations ${vf.invalidations} attaches ${vf.videoAttachCount}`);
-  lines.push(`Large timeupdate jumps logged: ${a.timeupdateLargeJumps ?? 0}`);
+  lines.push(
+    `Timeupdate jumps: significant (>3.5s) ${a.timeupdateSignificantJumps ?? a.timeupdateLargeJumps ?? 0} · raw ring ${a.timeupdateJumpsLogged ?? a.timeupdateLargeJumps ?? 0}`
+  );
   lines.push('');
   if (a.flags?.length) {
     lines.push('--- Flags ---');

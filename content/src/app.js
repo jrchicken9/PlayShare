@@ -13,6 +13,7 @@ import { formatTime } from "./format-time.js";
 import {
   buildDiagnosticExport,
   computeCorrelationTraceDelivery,
+  DIAGNOSTIC_REPORT_SCHEMA,
   pushDiagTimeline,
   updateDriftEwm
 } from "./diagnostics/helpers.js";
@@ -29,9 +30,17 @@ import {
   PRIME_SYNC_DEBUG_STORAGE_KEY,
   tryCapturePrimeVideoFramePng
 } from "./sites/prime-video-sync.js";
+import {
+  applyNetflixDrmViewerOneShot,
+  captureNetflixAdProfilerHints,
+  detectNetflixAdPlaying,
+  isNetflixHostname
+} from "./sites/netflix-sync.js";
+import { createNetflixAdStateMachine } from "./sites/netflix-ad-state-machine.js";
 import { createDrmSyncPromptHost } from "./drm-sync-prompt.js";
 import { createAdBreakMonitor } from "./ad-detection.js";
 import { wsUrlToHttpBase } from "./join-link-helpers.js";
+import { createSyncDecisionEngine } from "./sync-decision-engine.js";
 
 export function runPlayShareContent() {
   "use strict";
@@ -56,6 +65,7 @@ export function runPlayShareContent() {
     SOFT_SYNC_RATE_AHEAD,
     SOFT_SYNC_RATE_BEHIND,
     SOFT_SYNC_RESET_MS,
+    VIEWER_SOFT_DRIFT_RESET_MS,
     POSITION_REPORT_INTERVAL_MS,
     CLUSTER_SYNC_SPREAD_SEC,
     COUNTDOWN_SECONDS,
@@ -63,6 +73,7 @@ export function runPlayShareContent() {
     DIAG_PEER_DEV_SHARE_MS,
     TIME_JUMP_THRESHOLD,
     PLAYBACK_ECHO_SUPPRESS_MS,
+    PAUSE_SEEK_OUTBOUND_PLAY_SUPPRESS_MS,
     SIDEBAR_WIDTH
   } = PS_C;
   const DIAG_EVENTS = new Set(PS_C.DIAG_EVENT_NAMES);
@@ -71,6 +82,12 @@ export function runPlayShareContent() {
   const platform = PS_C.detectPlatform(hostname);
   const playbackProfile = getPlaybackProfile(hostname, location.pathname);
   const siteSync = getSiteSyncAdapter(hostname, location.pathname);
+  const syncDecision = createSyncDecisionEngine({
+    getSiteSyncAdapter: () => siteSync,
+    getHandlerKey: () => playbackProfile.handlerKey,
+    getRoomSyncPolicy: () => diag.lastRoomSyncPolicy,
+    getDrmPassive: () => !!playbackProfile.drmPassive
+  });
 
   /**
    * Browsers only paint DOM inside `document.fullscreenElement` while fullscreen. Used for mounting
@@ -95,6 +112,8 @@ export function runPlayShareContent() {
   let syncLock = false;       // prevent echo loops
   /** Wall time until which play/pause/seeked handlers ignore synthetic events from remote apply (see PLAYBACK_ECHO_SUPPRESS_MS). */
   let suppressPlaybackEchoUntil = 0;
+  /** Blocks outbound PLAY when room state is paused but &lt;video&gt; went playing (seek autoplay). */
+  let suppressOutboundPlayWhileRoomPausedUntil = 0;
   let lastSentTime = -1;
   /**
    * Last PLAY/PAUSE/SEEK we sent or applied remotely. Used so `onVideoPlay` time-dedupe does not
@@ -130,6 +149,8 @@ export function runPlayShareContent() {
   let hostAuthoritativeRef = null;
   /** @type {ReturnType<typeof createAdBreakMonitor>|null} */
   let adBreakMonitor = null;
+  /** @type {ReturnType<typeof createNetflixAdStateMachine>|null} */
+  let netflixAdStateMachine = null;
   /** Peers currently in an ad (clientId → username). */
   const peersInAdBreak = new Map();
   /** We reported AD_BREAK_START and have not yet sent END. */
@@ -172,6 +193,11 @@ export function runPlayShareContent() {
     suppressPlaybackEchoUntil = Math.max(suppressPlaybackEchoUntil, until);
   }
 
+  function armPauseSeekAutoplayPlaySuppress() {
+    const ms = playbackProfile.pauseSeekOutboundPlaySuppressMs ?? PAUSE_SEEK_OUTBOUND_PLAY_SUPPRESS_MS;
+    suppressOutboundPlayWhileRoomPausedUntil = Math.max(suppressOutboundPlayWhileRoomPausedUntil, Date.now() + ms);
+  }
+
   function isPlaybackEchoSuppressed() {
     return Date.now() < suppressPlaybackEchoUntil;
   }
@@ -182,8 +208,12 @@ export function runPlayShareContent() {
    * @param {boolean} isPlayEvent
    */
   function shouldSuppressPlaybackOutboundEcho(isPlayEvent) {
-    if (!isPlaybackEchoSuppressed()) return false;
     const v = findVideo() || video;
+    if (isPlayEvent && v && !v.paused && !lastAppliedState.playing) {
+      // Independent of PLAYBACK_ECHO_SUPPRESS_MS: Prime often play()s on seeked after a pause-align seek.
+      if (Date.now() < suppressOutboundPlayWhileRoomPausedUntil) return true;
+    }
+    if (!isPlaybackEchoSuppressed()) return false;
     if (!v) return true;
     if (isPlayEvent) {
       if (!v.paused && !lastAppliedState.playing) return false;
@@ -289,7 +319,18 @@ export function runPlayShareContent() {
       remoteApplyIgnoredLocalAd: 0,
       syncStateIgnoredLocalAd: 0,
       /** Outbound play/pause/seek not sent during local ad (avoids pausing a peer who is also in an ad). */
-      playbackOutboundSuppressedLocalAd: 0
+      playbackOutboundSuppressedLocalAd: 0,
+      /** Viewer: SYNC_STATE dropped — already within sync threshold and play state matches. */
+      syncStateSkippedRedundant: 0,
+      remoteSeekSuppressedDecision: 0,
+      remoteSeekSuppressedVideoSeeking: 0,
+      syncDecisionRejectedReconnectSettle: 0,
+      syncDecisionRejectedCooldown: 0,
+      syncDecisionRejectedServerAdMode: 0,
+      syncDecisionRejectedConverging: 0,
+      syncDecisionNetflixSafetyNoop: 0,
+      softDriftPlaybackStarts: 0,
+      softDriftPlaybackResets: 0
     },
     /** Latest GET_DIAG.transport from the service worker (WebSocket lifecycle). */
     serviceWorkerTransport: null,
@@ -314,6 +355,10 @@ export function runPlayShareContent() {
      * @type {null | { spreadSec: number|null, synced: boolean|null, playingMismatch: boolean, freshMemberCount: number, staleCount: number, roomMemberCount: number, label: string, wallMs: number }}
      */
     clusterSync: null,
+    /** Last `roomSyncPolicy` from server POSITION_SNAPSHOT (adMode, settle, etc.). */
+    lastRoomSyncPolicy: /** @type {null | Record<string, unknown>} */ (null),
+    /** Edge-detect server adMode for one-shot client logs. */
+    _wasServerAdMode: false,
     /** Dev: last “missed ad” capture from diagnostics CTA. */
     lastPrimeMissedAdCapture: /** @type {null | { at: number, clipboardOk: boolean }} */ (null),
     /**
@@ -867,8 +912,9 @@ export function runPlayShareContent() {
    * Per-snapshot sync + site context for video profiler exports (v3).
    * @param {Record<string, unknown>} snap
    * @param {HTMLVideoElement|null} v
+   * @param {{ userMarker?: boolean, seq?: number, note?: string }|null|undefined} [ctx]
    */
-  function enrichVideoProfilerSnapshot(snap, v) {
+  function enrichVideoProfilerSnapshot(snap, v, ctx) {
     try {
       snap.playShare = {
         siteAdapterKey: siteSync.key,
@@ -979,6 +1025,22 @@ export function runPlayShareContent() {
         snap.primePlayer = { readError: true };
       }
     }
+
+    if (siteSync.key === 'netflix' && v) {
+      try {
+        snap.netflixAd = {
+          extensionHeuristicAd: detectNetflixAdPlaying(v),
+          adStateMachine: netflixAdStateMachine ? netflixAdStateMachine.getDebugSnapshot() : null
+        };
+        if (ctx?.userMarker) {
+          snap.netflixAd.userMarkerSeq = ctx.seq;
+          snap.netflixAd.userMarkerNote = ctx.note;
+          snap.netflixAd.domHints = captureNetflixAdProfilerHints(v);
+        }
+      } catch {
+        snap.netflixAd = { readError: true };
+      }
+    }
   }
 
   function buildVideoProfilerExportExtras() {
@@ -1054,6 +1116,47 @@ export function runPlayShareContent() {
       });
     }
     return videoProfilerController;
+  }
+
+  function profilerIfRecording(fn) {
+    try {
+      const p = getVideoProfiler();
+      if (p.isRecording()) fn(p);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function profilerMapSyncDecisionReject(reason) {
+    const m = {
+      apply_cooldown: 'correction_rejected_cooldown',
+      already_converging: 'correction_rejected_converging',
+      server_ad_mode: 'correction_rejected_ad_mode',
+      reconnect_settle: 'correction_rejected_reconnect_settle',
+      netflix_safety_noop: 'correction_rejected_netflix_safety'
+    };
+    return m[reason] || 'remote_correction_rejected';
+  }
+
+  function profilerEmitDecision(type, detail) {
+    profilerIfRecording((p) => p.recordDecisionEvent(type, detail));
+  }
+
+  function profilerEmitRemoteSync(phase, detail) {
+    profilerIfRecording((p) => p.recordRemoteSyncApply(phase, detail));
+  }
+
+  function profilerEmitRateNudge(phase, detail) {
+    profilerIfRecording((p) => p.recordPlaybackRateNudge(phase, detail));
+  }
+
+  function profilerEmitSyncRejection(remoteKind, dec, extra) {
+    if (!dec || dec.ok) return;
+    profilerEmitDecision(profilerMapSyncDecisionReject(dec.reason), {
+      remoteKind,
+      reason: dec.reason,
+      ...(extra && typeof extra === 'object' ? extra : {})
+    });
   }
 
   /** Compact, JSON-safe blob for `DIAG_SYNC_REPORT.devDiag` (dev builds only). */
@@ -1238,6 +1341,16 @@ export function runPlayShareContent() {
     });
   }
 
+  /** After our ad ends, stay paused if any peer still reports an ad (mirrors ingestPeerAdBreakStart). */
+  function pausePlaybackIfPeersStillInAd() {
+    const v = findVideo() || video;
+    if (peersInAdBreak.size > 0 && v && !isVideoStale(v)) {
+      forcePause(v, playbackProfile.aggressiveRemoteSync);
+      stopViewerReconcileLoop();
+      resetVideoPlaybackRate(v);
+    }
+  }
+
   function ingestPeerAdBreakStart(fromClientId, fromUsername) {
     if (!roomState || fromClientId === roomState.clientId) return;
     peersInAdBreak.set(fromClientId, fromUsername || 'Someone');
@@ -1254,7 +1367,7 @@ export function runPlayShareContent() {
   function ingestPeerAdBreakEnd(fromClientId) {
     peersInAdBreak.delete(fromClientId);
     if (peersInAdBreak.size === 0 && !localAdBreakActive && roomState) {
-      sendBg({ source: 'playshare', type: 'SYNC_REQUEST' });
+      if (!roomState.isHost) sendBg({ source: 'playshare', type: 'SYNC_REQUEST' });
       if (!roomState.isHost) startViewerReconcileLoop();
     }
     syncAdBreakSidebar();
@@ -1265,11 +1378,41 @@ export function runPlayShareContent() {
       adBreakMonitor.stop();
       adBreakMonitor = null;
     }
+    if (netflixAdStateMachine) {
+      netflixAdStateMachine.stop();
+      netflixAdStateMachine = null;
+    }
   }
 
   function startAdBreakMonitorIfNeeded() {
     stopAdBreakMonitor();
     if (!roomState) return;
+
+    const onAdEnter = () => {
+      if (localAdBreakActive) return;
+      localAdBreakActive = true;
+      sendBg({ source: 'playshare', type: 'AD_BREAK_START' });
+      syncAdBreakSidebar();
+    };
+    const onAdExit = () => {
+      if (!localAdBreakActive) return;
+      localAdBreakActive = false;
+      sendBg({ source: 'playshare', type: 'AD_BREAK_END' });
+      syncAdBreakSidebar();
+      pausePlaybackIfPeersStillInAd();
+    };
+
+    if (isNetflixHostname(hostname)) {
+      netflixAdStateMachine = createNetflixAdStateMachine({
+        getVideo: () => findVideo() || video,
+        onEnterAd: onAdEnter,
+        onExitAd: onAdExit,
+        log: (d) => platformPlaybackLog('NETFLIX_AD_STATE', d)
+      });
+      netflixAdStateMachine.start();
+      return;
+    }
+
     const adMonitorOpts = isPrimeVideoHostname(hostname)
       ? {
           ...PRIME_AD_BREAK_MONITOR_OPTIONS,
@@ -1280,22 +1423,33 @@ export function runPlayShareContent() {
       hostname,
       () => findVideo() || video,
       {
-        onEnter: () => {
-          if (localAdBreakActive) return;
-          localAdBreakActive = true;
-          sendBg({ source: 'playshare', type: 'AD_BREAK_START' });
-          syncAdBreakSidebar();
-        },
-        onExit: () => {
-          if (!localAdBreakActive) return;
-          localAdBreakActive = false;
-          sendBg({ source: 'playshare', type: 'AD_BREAK_END' });
-          syncAdBreakSidebar();
-        }
+        onEnter: onAdEnter,
+        onExit: onAdExit
       },
       adMonitorOpts
     );
     adBreakMonitor.start();
+  }
+
+  /** Sidebar buttons + optional keyboard shortcut — same behavior. */
+  function applyManualAdBreakStart(fromShortcut) {
+    if (!roomState || localAdBreakActive) return;
+    stopAdBreakMonitor();
+    localAdBreakActive = true;
+    sendBg({ source: 'playshare', type: 'AD_BREAK_START' });
+    syncAdBreakSidebar();
+    if (fromShortcut) showToast('📺 Ad break started — room notified');
+  }
+
+  function applyManualAdBreakEnd(fromShortcut) {
+    if (!roomState || !localAdBreakActive) return;
+    localAdBreakActive = false;
+    sendBg({ source: 'playshare', type: 'AD_BREAK_END' });
+    stopAdBreakMonitor();
+    startAdBreakMonitorIfNeeded();
+    syncAdBreakSidebar();
+    pausePlaybackIfPeersStillInAd();
+    if (fromShortcut) showToast('✓ Ad break ended — room notified');
   }
 
   function stopViewerReconcileLoop() {
@@ -1314,13 +1468,15 @@ export function runPlayShareContent() {
     safeVideoOp(() => { v.playbackRate = 1; });
   }
 
-  function schedulePlaybackRateReset(v) {
+  function schedulePlaybackRateReset(v, delayMs) {
+    const delay = typeof delayMs === 'number' ? delayMs : SOFT_SYNC_RESET_MS;
     if (softPlaybackRateResetTimer) clearTimeout(softPlaybackRateResetTimer);
     softPlaybackRateResetTimer = setTimeout(() => {
       softPlaybackRateResetTimer = null;
       const el = findVideo() || v;
+      profilerEmitRateNudge('end', { reason: 'scheduled_reset' });
       resetVideoPlaybackRate(el);
-    }, SOFT_SYNC_RESET_MS);
+    }, delay);
   }
 
   function runViewerReconcileTick() {
@@ -1337,8 +1493,12 @@ export function runPlayShareContent() {
       : ref.currentTime;
     const drift = v.currentTime - target;
     const adrift = Math.abs(drift);
+    syncDecision.recordDriftSample(adrift);
     if (diag.primeSync) diag.primeSync.viewerDriftSec = drift;
-    const driftHard = playbackProfile.playbackSlackSec ?? SYNC_DRIFT_HARD_SEC;
+    const vb = diag.videoBuffering;
+    const viewerBufferCalm =
+      (!vb.lastWaitingAt || now - vb.lastWaitingAt > 2000) &&
+      (!vb.lastStalledAt || now - vb.lastStalledAt > 2000);
 
     if (playbackProfile.drmPassive) {
       platformPlaybackLog('VIEWER_RECONCILE_POLL', { adriftSec: +adrift.toFixed(2), hostPlaying: ref.playing });
@@ -1346,8 +1506,8 @@ export function runPlayShareContent() {
         diag.extensionOps.drmSyncPromptsShown++;
         drmSyncPrompt.offer({
           headline: 'Sync to host?',
-          detail: `About ${adrift.toFixed(1)}s off the room. Tap once to realign (low-frequency DRM-safe sync).`,
-          minIntervalMs: 8000,
+          detail: `About ${adrift.toFixed(1)}s off the room. Tap once to realign (low-frequency DRM-safe sync).${drmSyncPromptNetflixNote()}`,
+          minIntervalMs: drmSyncPromptMinInterval('reconcile'),
           onConfirm: () => {
             diag.extensionOps.drmSyncConfirmed++;
             syncLock = true;
@@ -1360,8 +1520,29 @@ export function runPlayShareContent() {
       return;
     }
 
+    // Room thinks we're playing but <video> stayed paused (e.g. after ads / Prime quirks) — seek-only nudges never fix that.
+    if (ref.playing && v.paused) {
+      armPlaybackEchoSuppress();
+      forcePlay(v, playbackProfile.aggressiveRemoteSync);
+      if (roomState?.isHost) startHostPositionHeartbeat();
+      else startViewerSyncInterval();
+    }
+
+    const thDr = syncDecision.getDriftThresholds();
+    const tier = syncDecision.classifyDriftTier(adrift);
+
     if (!ref.playing) {
-      if (adrift > driftHard) {
+      if (!v.paused) {
+        armPlaybackEchoSuppress();
+        forcePause(v, playbackProfile.aggressiveRemoteSync);
+        stopViewerSyncInterval();
+      }
+      if (tier === 'hard' && viewerBufferCalm && adrift >= thDr.hardAbove - 1e-6) {
+        profilerEmitDecision('hard_correction_selected', {
+          driftSec: adrift,
+          handlerKey: playbackProfile.handlerKey,
+          branch: 'paused_host'
+        });
         armPlaybackEchoSuppress();
         safeVideoOp(() => { v.currentTime = target; lastTimeUpdatePos = target; });
       }
@@ -1369,7 +1550,17 @@ export function runPlayShareContent() {
       return;
     }
 
-    if (adrift > driftHard) {
+    if (tier === 'hard' && viewerBufferCalm) {
+      if (softPlaybackRateResetTimer) {
+        clearTimeout(softPlaybackRateResetTimer);
+        softPlaybackRateResetTimer = null;
+      }
+      resetVideoPlaybackRate(v);
+      profilerEmitDecision('hard_correction_selected', {
+        driftSec: adrift,
+        handlerKey: playbackProfile.handlerKey,
+        branch: 'playing_host'
+      });
       armPlaybackEchoSuppress();
       safeVideoOp(() => {
         v.currentTime = target;
@@ -1379,18 +1570,59 @@ export function runPlayShareContent() {
       return;
     }
 
-    if (adrift < SYNC_DRIFT_SOFT_MIN_SEC) {
-      if (Math.abs(v.playbackRate - 1) > 0.02) {
+    if (!viewerBufferCalm) return;
+
+    if (tier === 'ignore') {
+      const sd0 = syncDecision.tickSoftDriftPlaybackRate({
+        driftSigned: drift,
+        hostPlaying: ref.playing,
+        videoPaused: v.paused
+      });
+      if (sd0.action === 'reset') {
+        profilerEmitRateNudge('end', { reason: sd0.log || 'tier_ignore_reset' });
         resetVideoPlaybackRate(v);
+        diag.extensionOps.softDriftPlaybackResets++;
+        platformPlaybackLog('SOFT_DRIFT_RESET', { reason: sd0.log, absDrift: sd0.absDrift });
       }
       return;
     }
 
-    const want = drift > 0 ? SOFT_SYNC_RATE_AHEAD : SOFT_SYNC_RATE_BEHIND;
-    if (Math.abs(v.playbackRate - want) > 0.02) {
-      safeVideoOp(() => { v.playbackRate = want; });
+    const sd = syncDecision.tickSoftDriftPlaybackRate({
+      driftSigned: drift,
+      hostPlaying: ref.playing,
+      videoPaused: v.paused
+    });
+    if (sd.action === 'reset') {
+      profilerEmitRateNudge('end', { reason: sd.log || 'soft_reset' });
+      resetVideoPlaybackRate(v);
+      diag.extensionOps.softDriftPlaybackResets++;
+      platformPlaybackLog('SOFT_DRIFT_RESET', { reason: sd.log, absDrift: sd.absDrift });
+      return;
     }
-    schedulePlaybackRateReset(v);
+    if (sd.action === 'start') {
+      diag.extensionOps.softDriftPlaybackStarts++;
+      profilerEmitDecision('soft_drift_selected', {
+        absDrift: sd.absDrift,
+        rate: sd.rate,
+        handlerKey: playbackProfile.handlerKey
+      });
+      profilerEmitRateNudge('start', { rate: sd.rate, absDrift: sd.absDrift, driftSigned: drift });
+      platformPlaybackLog('SOFT_DRIFT_START', { rate: sd.rate, absDrift: sd.absDrift, driftSigned: drift });
+      safeVideoOp(() => {
+        v.playbackRate = sd.rate;
+      });
+      schedulePlaybackRateReset(v, VIEWER_SOFT_DRIFT_RESET_MS);
+      return;
+    }
+    if (sd.action === 'hold' && typeof sd.rate === 'number') {
+      if (Math.abs(v.playbackRate - sd.rate) > 0.02) {
+        platformPlaybackLog('SOFT_DRIFT_HOLD', { rate: sd.rate, absDrift: sd.absDrift });
+        safeVideoOp(() => {
+          v.playbackRate = sd.rate;
+        });
+      }
+      schedulePlaybackRateReset(v, VIEWER_SOFT_DRIFT_RESET_MS);
+    }
   }
 
   function startViewerReconcileLoop() {
@@ -1402,11 +1634,20 @@ export function runPlayShareContent() {
   function sendPositionReportOnce() {
     if (!roomState || !video || isVideoStale(video)) return;
     if (document.hidden) return;
+    let confidence = 'MEDIUM';
+    try {
+      confidence = siteSync.getPlaybackConfidence
+        ? siteSync.getPlaybackConfidence({ video })
+        : 'MEDIUM';
+    } catch {
+      confidence = 'MEDIUM';
+    }
     sendBg({
       source: 'playshare',
       type: 'POSITION_REPORT',
       currentTime: video.currentTime,
-      playing: !video.paused
+      playing: !video.paused,
+      confidence
     });
   }
 
@@ -1429,6 +1670,7 @@ export function runPlayShareContent() {
     return m.playing ? m.currentTime + dt : m.currentTime;
   }
 
+  /** Cluster spread uses only non-stale `members` rows (matches server fresh-report window). */
   function evaluateClusterPositionSnapshot(msg) {
     const wallMs = typeof msg.wallMs === 'number' ? msg.wallMs : Date.now();
     const members = Array.isArray(msg.members) ? msg.members : [];
@@ -1549,7 +1791,44 @@ export function runPlayShareContent() {
 
   function ingestPositionSnapshot(msg) {
     if (!roomState || msg.roomCode !== roomState.roomCode) return;
+    if (msg.roomSyncPolicy && typeof msg.roomSyncPolicy === 'object') {
+      diag.lastRoomSyncPolicy = { ...msg.roomSyncPolicy, wallMs: msg.wallMs };
+      const am = !!msg.roomSyncPolicy.adMode;
+      if (am && !diag._wasServerAdMode) {
+        platformPlaybackLog('SERVER_AD_MODE_ENTER', {
+          reason: msg.roomSyncPolicy.adModeReason,
+          startedAt: msg.roomSyncPolicy.adModeStartedAt,
+          wallMs: msg.wallMs
+        });
+      }
+      if (!am && diag._wasServerAdMode) {
+        platformPlaybackLog('SERVER_AD_MODE_CLEARED', { wallMs: msg.wallMs });
+      }
+      diag._wasServerAdMode = am;
+    }
     diag.clusterSync = evaluateClusterPositionSnapshot(msg);
+    if (msg.laggardAnchor?.adModeExit) {
+      platformPlaybackLog('SERVER_AD_MODE_EXIT_CORRECTION', {
+        spreadSec: msg.laggardAnchor.spreadSec,
+        anchorTime: msg.laggardAnchor.anchorTime
+      });
+    }
+    if (msg.laggardAnchor?.applied && diag.clusterSync) {
+      const sp = msg.laggardAnchor.spreadSec;
+      diag.clusterSync = {
+        ...diag.clusterSync,
+        label:
+          typeof sp === 'number'
+            ? `Cluster: aligned to slowest (was ~${sp.toFixed(1)}s apart)`
+            : 'Cluster: aligned to slowest playhead',
+        laggardAnchorApplied: true
+      };
+      platformPlaybackLog('LAGGARD_ANCHOR', {
+        spreadSec: msg.laggardAnchor.spreadSec,
+        anchorTime: msg.laggardAnchor.anchorTime,
+        anchorPlaying: msg.laggardAnchor.anchorPlaying
+      });
+    }
     diag.extensionOps.positionSnapshotInbound++;
     const c = diag.clusterSync;
     const sidebarKey = c ? `${c.label}|${c.synced}|${c.spreadSec}|${c.playingMismatch}` : '';
@@ -1615,6 +1894,7 @@ export function runPlayShareContent() {
   function flushLocalPlaybackWireToRoom() {
     playbackOutboundCoalesceTimer = null;
     if (!roomState || syncLock || countdownInProgress) return;
+    if (syncDecision.shouldSuppressLocalPlaybackOutbound()) return;
     const v = findVideo() || video;
     if (!v) return;
     lastLocalPlaybackWireAt = Date.now();
@@ -1722,6 +2002,7 @@ export function runPlayShareContent() {
       hostTimeupdateSeekSuppressUntil = Date.now() + playbackProfile.hostSeekSuppressAfterPlayMs;
     }
     if (syncLock || !roomState) return;
+    if (syncDecision.shouldSuppressLocalPlaybackOutbound()) return;
     if (shouldSuppressPlaybackOutboundEcho(true)) return;
     if (localAdBreakActive) {
       diag.extensionOps.playbackOutboundSuppressedLocalAd++;
@@ -1748,8 +2029,8 @@ export function runPlayShareContent() {
       } else {
         drmSyncPrompt.offer({
           headline: 'Sync to host?',
-          detail: 'Match the room once instead of starting playback yourself.',
-          minIntervalMs: 10000,
+          detail: `Match the room once instead of starting playback yourself.${drmSyncPromptNetflixNote()}`,
+          minIntervalMs: drmSyncPromptMinInterval('host_only'),
           onConfirm: () => {
             if (!hostAuthoritativeRef) return;
             const v = findVideo() || video;
@@ -1796,6 +2077,7 @@ export function runPlayShareContent() {
 
   function onVideoPause() {
     if (syncLock || !roomState || countdownInProgress) return;
+    if (syncDecision.shouldSuppressLocalPlaybackOutbound()) return;
     if (shouldSuppressPlaybackOutboundEcho(false)) return;
     if (localAdBreakActive) {
       diag.extensionOps.playbackOutboundSuppressedLocalAd++;
@@ -1814,8 +2096,8 @@ export function runPlayShareContent() {
       } else {
         drmSyncPrompt.offer({
           headline: 'Sync to host?',
-          detail: 'Match the room once instead of pausing yourself.',
-          minIntervalMs: 10000,
+          detail: `Match the room once instead of pausing yourself.${drmSyncPromptNetflixNote()}`,
+          minIntervalMs: drmSyncPromptMinInterval('host_only'),
           onConfirm: () => {
             if (!hostAuthoritativeRef) return;
             const v = findVideo() || video;
@@ -1869,6 +2151,7 @@ export function runPlayShareContent() {
     }
     if (syncLock || !roomState) return;
     if (isPlaybackEchoSuppressed()) return;
+    if (syncDecision.shouldSuppressLocalPlaybackOutbound()) return;
     if (localAdBreakActive) {
       diag.extensionOps.playbackOutboundSuppressedLocalAd++;
       return;
@@ -1907,9 +2190,16 @@ export function runPlayShareContent() {
       if (nowJ - diag._lastTuDiagAt >= 350) {
         const prev = diag._lastTuDiagPos;
         const tj = video.currentTime;
+        const lastWall = diag._lastTuDiagAt;
         diag._lastTuDiagAt = nowJ;
         const tuJump = playbackProfile.timeJumpThresholdSec ?? TIME_JUMP_THRESHOLD;
-        if (typeof prev === 'number' && prev >= 0 && Math.abs(tj - prev) > tuJump) {
+        // Prime (and some players) emit timeupdate sparsely (~2s). Scale threshold by wall-clock
+        // gap so normal playback is not logged as a “large jump”.
+        const dtWallSec = typeof lastWall === 'number' && lastWall > 0 ? (nowJ - lastWall) / 1000 : 0;
+        const rate = video.playbackRate || 1;
+        const expectedAdvance = video.paused ? 0 : dtWallSec * rate;
+        const dynamicTuThreshold = Math.max(tuJump, expectedAdvance + 0.5);
+        if (typeof prev === 'number' && prev >= 0 && Math.abs(tj - prev) > dynamicTuThreshold) {
           diag.timeupdateJumps.unshift({ t: nowJ, from: prev, to: tj, deltaSec: +(tj - prev).toFixed(2) });
           if (diag.timeupdateJumps.length > 20) diag.timeupdateJumps.pop();
         }
@@ -1917,6 +2207,7 @@ export function runPlayShareContent() {
       }
     }
     if (!video || syncLock || !roomState?.isHost || !canControlPlayback()) return;
+    if (localAdBreakActive) return;
     const now = Date.now();
     if (now - lastTimeUpdateCheckAt < 500) return;  // throttle to ~2 checks/sec
     lastTimeUpdateCheckAt = now;
@@ -1944,6 +2235,14 @@ export function runPlayShareContent() {
   function applyDrmViewerOneShot(v, targetTime, wantPlaying) {
     if (!v || v.tagName !== 'VIDEO') return;
     armPlaybackEchoSuppress();
+    if (playbackProfile.handlerKey === 'netflix') {
+      platformPlaybackLog('NETFLIX_USER_SYNC_APPLY', { targetTime, wantPlaying });
+      applyNetflixDrmViewerOneShot(v, targetTime, wantPlaying);
+      if (typeof targetTime === 'number' && Number.isFinite(targetTime) && targetTime >= 0) {
+        lastTimeUpdatePos = targetTime;
+      }
+      return;
+    }
     platformPlaybackLog('DRM_USER_SYNC_APPLY', { targetTime, wantPlaying });
     safeVideoOp(() => {
       if (typeof targetTime === 'number' && !isNaN(targetTime) && targetTime >= 0) {
@@ -2047,6 +2346,30 @@ export function runPlayShareContent() {
     return SYNC_THRESHOLD;
   }
 
+  /** DRM prompt cadence — Netflix patch supplies longer intervals (Cadmium / M7375). */
+  function drmSyncPromptMinInterval(kind) {
+    const p = playbackProfile;
+    const fallbacks = { play: 6000, pause: 6000, seek: 6000, sync_state: 8000, reconcile: 8000, host_only: 10000 };
+    const profileKey =
+      kind === 'play'
+        ? 'drmPromptPlayMinIntervalMs'
+        : kind === 'pause' || kind === 'seek'
+          ? 'drmPromptPauseSeekMinIntervalMs'
+          : kind === 'sync_state'
+            ? 'drmPromptSyncStateMinIntervalMs'
+            : kind === 'reconcile'
+              ? 'drmReconcilePromptMinIntervalMs'
+              : null;
+    if (profileKey && typeof p[profileKey] === 'number' && p[profileKey] > 0) return p[profileKey];
+    return fallbacks[kind] ?? 8000;
+  }
+
+  function drmSyncPromptNetflixNote() {
+    return playbackProfile.handlerKey === 'netflix'
+      ? ' Netflix may show error M7375 if extensions automate playback too often — only tap Sync when you want to align.'
+      : '';
+  }
+
   /**
    * Gate for applying remote PLAY/PAUSE/SEEK/SYNC_STATE. Count denials in extensionOps.
    */
@@ -2128,6 +2451,37 @@ export function runPlayShareContent() {
       diagLog('PLAY', { currentTime: targetTime, fromUsername, source: 'remote', adHold: true });
       return;
     }
+    profilerEmitDecision('remote_correction_received', {
+      remoteKind: 'PLAY',
+      driftSec: Math.abs(video.currentTime - targetTime),
+      handlerKey: playbackProfile.handlerKey
+    });
+    {
+      const driftSec = Math.abs(video.currentTime - targetTime);
+      syncDecision.recordDriftSample(driftSec);
+      const dec = syncDecision.shouldApplyRemoteState({
+        kind: 'PLAY',
+        syncKind: 'playback_event',
+        correctionReason: null,
+        driftSec,
+        isRedundantWithLocal: !video.paused && driftSec < 2,
+        playMatches: !video.paused
+      });
+      if (!dec.ok) {
+        if (dec.reason === 'reconnect_settle') diag.extensionOps.syncDecisionRejectedReconnectSettle++;
+        else if (dec.reason === 'apply_cooldown') diag.extensionOps.syncDecisionRejectedCooldown++;
+        else if (dec.reason === 'server_ad_mode') diag.extensionOps.syncDecisionRejectedServerAdMode++;
+        else if (dec.reason === 'already_converging') diag.extensionOps.syncDecisionRejectedConverging++;
+        else if (dec.reason === 'netflix_safety_noop') diag.extensionOps.syncDecisionNetflixSafetyNoop++;
+        platformPlaybackLog('SYNC_DECISION_REJECT', { remoteKind: 'PLAY', reason: dec.reason, driftSec });
+        if (playbackProfile.handlerKey === 'netflix') {
+          platformPlaybackLog('NETFLIX_SYNC_SAFETY', { kind: 'PLAY', reason: dec.reason, driftSec });
+        }
+        profilerEmitSyncRejection('PLAY', dec, { driftSec });
+        diagLog('PLAY', { currentTime: targetTime, fromUsername, source: 'remote', skipped: true, syncDecision: dec.reason });
+        return;
+      }
+    }
     clearRemotePlaybackDebouncedQueue();
     pushDiagTimeline(diag.timing.timeline, {
       kind: 'play_recv',
@@ -2149,13 +2503,14 @@ export function runPlayShareContent() {
       platformPlaybackLog('DRM_SYNC_OFFER', { kind: 'remote_play', targetTime, fromUsername });
       drmSyncPrompt.offer({
         headline: 'Sync to host?',
-        detail: `${fromUsername || 'Host'} started playback. Tap once to jump to their time and play — avoids DRM playback errors.`,
-        minIntervalMs: 6000,
+        detail: `${fromUsername || 'Host'} started playback. Tap once to jump to their time and play — avoids DRM playback errors.${drmSyncPromptNetflixNote()}`,
+        minIntervalMs: drmSyncPromptMinInterval('play'),
         onConfirm: () => {
           diag.extensionOps.drmSyncConfirmed++;
           const v = findVideo() || video;
           if (!v || isVideoStale(v)) return;
           syncLock = true;
+          syncDecision.noteRemoteApply({ serverTime, sentAt });
           applyDrmViewerOneShot(v, targetTime, true);
           postSidebar({ type: 'SYNC_QUALITY', drift: Math.abs(v.currentTime - targetTime) });
           setTimeout(() => { syncLock = false; }, 700);
@@ -2172,10 +2527,13 @@ export function runPlayShareContent() {
     }
     const driftBefore = Math.abs(video.currentTime - targetTime);
     const delay = getApplyDelayMs(lastRtt, playbackProfile);
+    const playApplyT0 = Date.now();
     const doApply = () => {
       if (isVideoStale(video)) { syncLock = false; return; }
       const v = findVideo() || video;
       if (!v) { syncLock = false; return; }
+      profilerEmitRemoteSync('start', { remoteKind: 'PLAY', driftSec: driftBefore });
+      syncDecision.noteRemoteApply({ serverTime, sentAt });
       armPlaybackEchoSuppress();
       applyPlayWhenReady(v, targetTime, () => {
         postSidebar({ type: 'SYNC_QUALITY', drift: driftBefore });
@@ -2192,6 +2550,18 @@ export function runPlayShareContent() {
             driftSec: driftAfter,
             latencyMs: latency
           });
+          profilerEmitRemoteSync('end', {
+            remoteKind: 'PLAY',
+            ok,
+            durationMs: Date.now() - playApplyT0,
+            driftSec: driftAfter
+          });
+          if (ok) {
+            profilerEmitDecision('remote_correction_applied', {
+              remoteKind: 'PLAY',
+              driftSec: driftAfter
+            });
+          }
           syncDiagRecord({ type: ok ? 'play_ok' : 'play_fail', currentTime: targetTime, fromUsername, latency, correlationId });
           if (fromClientId) sendDiagApplyResult(fromClientId, 'play', ok, latency, correlationId);
         }, 600);
@@ -2246,6 +2616,37 @@ export function runPlayShareContent() {
       diag.timing.lastRttMs = lastRtt;
       diag.timing.lastRttSource = 'playback';
     }
+    profilerEmitDecision('remote_correction_received', {
+      remoteKind: 'PAUSE',
+      driftSec: Math.abs(video.currentTime - currentTime),
+      handlerKey: playbackProfile.handlerKey
+    });
+    {
+      const driftSec = Math.abs(video.currentTime - currentTime);
+      syncDecision.recordDriftSample(driftSec);
+      const dec = syncDecision.shouldApplyRemoteState({
+        kind: 'PAUSE',
+        syncKind: 'playback_event',
+        correctionReason: null,
+        driftSec,
+        isRedundantWithLocal: video.paused && driftSec < 2,
+        playMatches: video.paused
+      });
+      if (!dec.ok) {
+        if (dec.reason === 'reconnect_settle') diag.extensionOps.syncDecisionRejectedReconnectSettle++;
+        else if (dec.reason === 'apply_cooldown') diag.extensionOps.syncDecisionRejectedCooldown++;
+        else if (dec.reason === 'server_ad_mode') diag.extensionOps.syncDecisionRejectedServerAdMode++;
+        else if (dec.reason === 'already_converging') diag.extensionOps.syncDecisionRejectedConverging++;
+        else if (dec.reason === 'netflix_safety_noop') diag.extensionOps.syncDecisionNetflixSafetyNoop++;
+        platformPlaybackLog('SYNC_DECISION_REJECT', { remoteKind: 'PAUSE', reason: dec.reason, driftSec });
+        if (playbackProfile.handlerKey === 'netflix') {
+          platformPlaybackLog('NETFLIX_SYNC_SAFETY', { kind: 'PAUSE', reason: dec.reason, driftSec });
+        }
+        profilerEmitSyncRejection('PAUSE', dec, { driftSec });
+        diagLog('PAUSE', { currentTime, fromUsername, source: 'remote', skipped: true, syncDecision: dec.reason });
+        return;
+      }
+    }
     clearRemotePlaybackDebouncedQueue();
     pushDiagTimeline(diag.timing.timeline, { kind: 'pause_recv', correlationId: correlationId || null, currentTime, serverTime, recvAt, rttMs: lastRtt });
     syncDiagRecord({ type: 'pause_recv', currentTime, fromUsername, drift: Math.abs(video.currentTime - currentTime), correlationId });
@@ -2261,13 +2662,14 @@ export function runPlayShareContent() {
       platformPlaybackLog('DRM_SYNC_OFFER', { kind: 'remote_pause', currentTime, fromUsername });
       drmSyncPrompt.offer({
         headline: 'Sync to host?',
-        detail: `${fromUsername || 'Host'} paused. Tap once to align and pause — avoids DRM playback errors.`,
-        minIntervalMs: 6000,
+        detail: `${fromUsername || 'Host'} paused. Tap once to align and pause — avoids DRM playback errors.${drmSyncPromptNetflixNote()}`,
+        minIntervalMs: drmSyncPromptMinInterval('pause'),
         onConfirm: () => {
           diag.extensionOps.drmSyncConfirmed++;
           const v = findVideo() || video;
           if (!v || isVideoStale(v)) return;
           syncLock = true;
+          syncDecision.noteRemoteApply({ serverTime, sentAt });
           applyDrmViewerOneShot(v, currentTime, false);
           postSidebar({ type: 'SYNC_QUALITY', drift: Math.abs(v.currentTime - currentTime) });
           setTimeout(() => { syncLock = false; }, 600);
@@ -2280,11 +2682,15 @@ export function runPlayShareContent() {
     syncLock = true;
     const driftBefore = Math.abs(video.currentTime - currentTime);
     const delay = getApplyDelayMs(lastRtt, playbackProfile);
+    const pauseApplyT0 = Date.now();
     const doApply = () => {
       if (isVideoStale(video)) { syncLock = false; return; }
       const v = findVideo() || video;
       if (!v) { syncLock = false; return; }
+      profilerEmitRemoteSync('start', { remoteKind: 'PAUSE', driftSec: driftBefore });
+      syncDecision.noteRemoteApply({ serverTime, sentAt });
       armPlaybackEchoSuppress();
+      armPauseSeekAutoplayPlaySuppress();
       safeVideoOp(() => {
         v.currentTime = currentTime;
         lastTimeUpdatePos = currentTime;
@@ -2304,6 +2710,18 @@ export function runPlayShareContent() {
           driftSec: driftAfter,
           latencyMs: latency
         });
+        profilerEmitRemoteSync('end', {
+          remoteKind: 'PAUSE',
+          ok,
+          durationMs: Date.now() - pauseApplyT0,
+          driftSec: driftAfter
+        });
+        if (ok) {
+          profilerEmitDecision('remote_correction_applied', {
+            remoteKind: 'PAUSE',
+            driftSec: driftAfter
+          });
+        }
         syncDiagRecord({ type: ok ? 'pause_ok' : 'pause_fail', currentTime, fromUsername, latency, correlationId });
         if (fromClientId) sendDiagApplyResult(fromClientId, 'pause', ok, latency, correlationId);
       }, 600);
@@ -2348,11 +2766,37 @@ export function runPlayShareContent() {
       diagLog('SEEK', { currentTime, fromUsername, source: 'remote', skipped: true, reason: 'local_ad' });
       return;
     }
+    const vPre = findVideo() || video;
+    if (syncDecision.shouldSkipSeekWhileVideoSeeking(vPre)) {
+      diag.extensionOps.remoteSeekSuppressedVideoSeeking++;
+      diagLog('SEEK', { currentTime, fromUsername, source: 'remote', skipped: true, reason: 'video_seeking' });
+      return;
+    }
+    const deltaSeek = vPre && !isVideoStale(vPre) ? vPre.currentTime - currentTime : 0;
+    const seekDec = syncDecision.shouldApplyRemoteSeek(deltaSeek);
+    if (!seekDec.ok) {
+      diag.extensionOps.remoteSeekSuppressedDecision++;
+      if (playbackProfile.handlerKey === 'netflix') {
+        platformPlaybackLog('NETFLIX_SYNC_SAFETY', { kind: 'SEEK', reason: seekDec.reason, deltaSeek });
+      }
+      profilerEmitDecision('remote_correction_rejected', {
+        remoteKind: 'SEEK',
+        reason: seekDec.reason,
+        deltaSeek
+      });
+      diagLog('SEEK', { currentTime, fromUsername, source: 'remote', skipped: true, reason: seekDec.reason });
+      return;
+    }
     const recvAt = Date.now();
     if (typeof lastRtt === 'number' && lastRtt > 0) {
       diag.timing.lastRttMs = lastRtt;
       diag.timing.lastRttSource = 'playback';
     }
+    profilerEmitDecision('remote_correction_received', {
+      remoteKind: 'SEEK',
+      driftSec: Math.abs(video.currentTime - currentTime),
+      handlerKey: playbackProfile.handlerKey
+    });
     pushDiagTimeline(diag.timing.timeline, { kind: 'seek_recv', correlationId: correlationId || null, currentTime, serverTime, recvAt, rttMs: lastRtt });
     syncDiagRecord({ type: 'seek_recv', currentTime, fromUsername, drift: Math.abs(video.currentTime - currentTime), correlationId });
     if (!roomState?.isHost) {
@@ -2369,6 +2813,30 @@ export function runPlayShareContent() {
     lastSentTime = currentTime;
     lastPlaybackOutboundKind = 'SEEK';
     const driftBefore = Math.abs(video.currentTime - currentTime);
+    syncDecision.recordDriftSample(driftBefore);
+    {
+      const decSt = syncDecision.shouldApplyRemoteState({
+        kind: 'SEEK',
+        syncKind: 'playback_event',
+        correctionReason: null,
+        driftSec: driftBefore,
+        playMatches: !!lastAppliedState.playing === !video.paused
+      });
+      if (!decSt.ok) {
+        if (decSt.reason === 'reconnect_settle') diag.extensionOps.syncDecisionRejectedReconnectSettle++;
+        else if (decSt.reason === 'apply_cooldown') diag.extensionOps.syncDecisionRejectedCooldown++;
+        else if (decSt.reason === 'server_ad_mode') diag.extensionOps.syncDecisionRejectedServerAdMode++;
+        else if (decSt.reason === 'already_converging') diag.extensionOps.syncDecisionRejectedConverging++;
+        else if (decSt.reason === 'netflix_safety_noop') diag.extensionOps.syncDecisionNetflixSafetyNoop++;
+        platformPlaybackLog('SYNC_DECISION_REJECT', { remoteKind: 'SEEK', reason: decSt.reason, driftSec: driftBefore });
+        if (playbackProfile.handlerKey === 'netflix') {
+          platformPlaybackLog('NETFLIX_SYNC_SAFETY', { kind: 'SEEK', reason: decSt.reason, driftSec: driftBefore });
+        }
+        profilerEmitSyncRejection('SEEK', decSt, { driftSec: driftBefore });
+        diagLog('SEEK', { currentTime, fromUsername, source: 'remote', skipped: true, syncDecision: decSt.reason });
+        return;
+      }
+    }
 
     if (playbackProfile.drmPassive && !roomState?.isHost) {
       if (driftBefore <= playbackProfile.drmDesyncThresholdSec) {
@@ -2383,13 +2851,15 @@ export function runPlayShareContent() {
       platformPlaybackLog('DRM_SYNC_OFFER', { kind: 'remote_seek', currentTime, driftBefore, fromUsername });
       drmSyncPrompt.offer({
         headline: 'Sync to host?',
-        detail: `${fromUsername || 'Host'} jumped ~${driftBefore.toFixed(1)}s. Tap once to seek — avoids DRM playback errors.`,
-        minIntervalMs: 6000,
+        detail: `${fromUsername || 'Host'} jumped ~${driftBefore.toFixed(1)}s. Tap once to seek — avoids DRM playback errors.${drmSyncPromptNetflixNote()}`,
+        minIntervalMs: drmSyncPromptMinInterval('seek'),
         onConfirm: () => {
           diag.extensionOps.drmSyncConfirmed++;
           const v = findVideo() || video;
           if (!v || isVideoStale(v)) return;
           syncLock = true;
+          syncDecision.noteRemoteApply({ serverTime });
+          syncDecision.recordRemoteSeekCommitted();
           applyDrmViewerOneShot(v, currentTime, wantPlaying);
           postSidebar({ type: 'SYNC_QUALITY', drift: driftBefore });
           setTimeout(() => { syncLock = false; }, 600);
@@ -2401,13 +2871,17 @@ export function runPlayShareContent() {
 
     syncLock = true;
     const delay = getApplyDelayMs(lastRtt, playbackProfile);
+    const seekApplyT0 = Date.now();
     const doApply = () => {
       if (isVideoStale(video)) { syncLock = false; return; }
       const v = findVideo() || video;
+      profilerEmitRemoteSync('start', { remoteKind: 'SEEK', driftSec: driftBefore });
+      syncDecision.noteRemoteApply({ serverTime });
       if (v) {
         armPlaybackEchoSuppress();
         safeVideoOp(() => { v.currentTime = currentTime; });
         lastTimeUpdatePos = currentTime;  // avoid false jump from onVideoTimeUpdate
+        syncDecision.recordRemoteSeekCommitted();
       }
       postSidebar({ type: 'SYNC_QUALITY', drift: driftBefore });
       setTimeout(() => { syncLock = false; }, 500);
@@ -2423,6 +2897,18 @@ export function runPlayShareContent() {
           driftSec: driftAfter,
           latencyMs: latency
         });
+        profilerEmitRemoteSync('end', {
+          remoteKind: 'SEEK',
+          ok,
+          durationMs: Date.now() - seekApplyT0,
+          driftSec: driftAfter
+        });
+        if (ok) {
+          profilerEmitDecision('remote_correction_applied', {
+            remoteKind: 'SEEK',
+            driftSec: driftAfter
+          });
+        }
         syncDiagRecord({ type: ok ? 'seek_ok' : 'seek_fail', currentTime, fromUsername, latency, correlationId });
         if (fromClientId) sendDiagApplyResult(fromClientId, 'seek', ok, latency, correlationId);
       }, 400);
@@ -2456,10 +2942,17 @@ export function runPlayShareContent() {
 
   function applySyncState(state) {
     if (!state) return;
+    const syncKind = state.syncKind === 'soft' ? 'soft' : 'hard';
     if (localAdBreakActive) {
       diag.extensionOps.syncStateIgnoredLocalAd++;
       return;
     }
+    profilerEmitDecision('remote_correction_received', {
+      remoteKind: 'SYNC_STATE',
+      syncKind,
+      correctionReason: state.correctionReason != null ? String(state.correctionReason).slice(0, 64) : null,
+      handlerKey: playbackProfile.handlerKey
+    });
     const refMs = state.sentAt != null ? state.sentAt : state.computedAt;
     const viewerSyncBaseTime = Date.now();
     const lrSync =
@@ -2495,6 +2988,95 @@ export function runPlayShareContent() {
       else if (syncGate.reason === 'playback_debounce') diag.extensionOps.syncStateDeniedPlaybackDebounce++;
       return;
     }
+    const localPlayingPre = !video.paused;
+    const playMismatchPre = state.playing !== localPlayingPre;
+    {
+      const driftPre = Math.abs(video.currentTime - targetTime);
+      syncDecision.recordDriftSample(driftPre);
+      const syncDec = syncDecision.shouldApplyRemoteState({
+        kind: 'SYNC_STATE',
+        syncKind,
+        correctionReason: state.correctionReason,
+        driftSec: driftPre,
+        fromRoomJoin: state.correctionReason === syncDecision.CORRECTION_REASONS.JOIN,
+        playMatches: !playMismatchPre,
+        hostAnchorSoft: state.correctionReason === syncDecision.CORRECTION_REASONS.HOST_ANCHOR_SOFT
+      });
+      if (!syncDec.ok) {
+        if (syncDec.reason === 'reconnect_settle') diag.extensionOps.syncDecisionRejectedReconnectSettle++;
+        else if (syncDec.reason === 'apply_cooldown') diag.extensionOps.syncDecisionRejectedCooldown++;
+        else if (syncDec.reason === 'server_ad_mode') diag.extensionOps.syncDecisionRejectedServerAdMode++;
+        else if (syncDec.reason === 'already_converging') diag.extensionOps.syncDecisionRejectedConverging++;
+        else if (syncDec.reason === 'netflix_safety_noop') diag.extensionOps.syncDecisionNetflixSafetyNoop++;
+        platformPlaybackLog('SYNC_DECISION_REJECT', {
+          remoteKind: 'SYNC_STATE',
+          reason: syncDec.reason,
+          syncKind,
+          correctionReason: state.correctionReason,
+          driftSec: driftPre
+        });
+        if (playbackProfile.handlerKey === 'netflix') {
+          platformPlaybackLog('NETFLIX_SYNC_SAFETY', { kind: 'SYNC_STATE', reason: syncDec.reason, driftSec: driftPre });
+        }
+        profilerEmitSyncRejection('SYNC_STATE', syncDec, {
+          driftSec: driftPre,
+          syncKind,
+          correctionReason: state.correctionReason
+        });
+        diagLog('SYNC_STATE', {
+          playing: state.playing,
+          currentTime: targetTime,
+          skipped: true,
+          syncDecision: syncDec.reason
+        });
+        return;
+      }
+    }
+    if (
+      syncDecision.isHardPriorityRemote({
+        syncKind,
+        correctionReason: state.correctionReason,
+        fromRoomJoin: state.correctionReason === syncDecision.CORRECTION_REASONS.JOIN
+      })
+    ) {
+      platformPlaybackLog('SYNC_DECISION_ALLOW', {
+        kind: 'SYNC_STATE',
+        syncKind,
+        correctionReason: state.correctionReason
+      });
+    }
+    const localPlaying = localPlayingPre;
+    const playMismatch = playMismatchPre;
+    if (playbackProfile.drmPassive && !roomState?.isHost && syncKind === 'soft') {
+      lastAppliedState = { currentTime: targetTime, playing: !!state.playing };
+      lastSentTime = targetTime;
+      lastPlaybackOutboundKind = state.playing ? 'PLAY' : 'PAUSE';
+      lastLocalWirePlayingSent = !!state.playing;
+      lastSyncAt = Date.now();
+      syncDecision.noteRemoteApply({ sentAt: state.sentAt ?? state.computedAt, serverTime: state.sentAt });
+      if (state.playing) startViewerSyncInterval();
+      else stopViewerSyncInterval();
+      const driftW = Math.abs(video.currentTime - targetTime);
+      updateDriftEwm(diag.timing, driftW);
+      postSidebar({ type: 'SYNC_QUALITY', drift: driftW });
+      diag.extensionOps.syncStateApplied++;
+      profilerEmitDecision('remote_correction_applied', {
+        remoteKind: 'SYNC_STATE',
+        syncKind,
+        correctionReason: state.correctionReason,
+        driftSec: driftW,
+        note: 'soft_ref_only'
+      });
+      diagLog('SYNC_STATE', {
+        playing: state.playing,
+        currentTime: targetTime,
+        computedAt: state.computedAt,
+        sentAt: state.sentAt,
+        drmPassive: true,
+        note: 'soft_ref_only'
+      });
+      return;
+    }
     lastAppliedState = { currentTime: targetTime, playing: !!state.playing };
     lastSentTime = targetTime;  // prevent echo when seek/play fires after apply
     lastPlaybackOutboundKind = state.playing ? 'PLAY' : 'PAUSE';
@@ -2504,12 +3086,33 @@ export function runPlayShareContent() {
     }
     lastSyncAt = Date.now();
     const threshold = getSyncThreshold();
+    const effectiveSyncThreshold = syncKind === 'soft' ? Math.max(threshold, 3.5) : threshold;
     const driftBefore = Math.abs(video.currentTime - targetTime);
-    const localPlaying = !video.paused;
-    const playMismatch = state.playing !== localPlaying;
+
+    if (!playbackProfile.drmPassive && !roomState?.isHost && !playMismatch && driftBefore <= effectiveSyncThreshold) {
+      if (state.playing) startViewerSyncInterval();
+      else stopViewerSyncInterval();
+      updateDriftEwm(diag.timing, driftBefore);
+      postSidebar({ type: 'SYNC_QUALITY', drift: driftBefore });
+      diag.extensionOps.syncStateSkippedRedundant++;
+      profilerEmitDecision('no_op_selected', {
+        remoteKind: 'SYNC_STATE',
+        syncKind,
+        reason: 'skip_redundant',
+        driftSec: driftBefore
+      });
+      diagLog('SYNC_STATE', {
+        playing: state.playing,
+        currentTime: targetTime,
+        computedAt: state.computedAt,
+        sentAt: state.sentAt,
+        note: 'skip_redundant'
+      });
+      return;
+    }
 
     if (playbackProfile.drmPassive && !roomState?.isHost) {
-      if (!playMismatch && driftBefore <= threshold) {
+      if (!playMismatch && driftBefore <= effectiveSyncThreshold) {
         if (state.playing) startViewerSyncInterval();
         else stopViewerSyncInterval();
         updateDriftEwm(diag.timing, driftBefore);
@@ -2524,16 +3127,23 @@ export function runPlayShareContent() {
         postSidebar({ type: 'SYNC_QUALITY', drift: driftBefore });
         diagLog('SYNC_STATE', { playing: state.playing, currentTime: targetTime, computedAt: state.computedAt, sentAt: state.sentAt, drmPassive: true, note: 'within_threshold' });
         diag.extensionOps.syncStateApplied++;
+        profilerEmitDecision('no_op_selected', {
+          remoteKind: 'SYNC_STATE',
+          syncKind,
+          reason: 'within_threshold_drm',
+          driftSec: driftBefore
+        });
         return;
       }
       diag.extensionOps.drmSyncPromptsShown++;
       platformPlaybackLog('DRM_SYNC_OFFER', { kind: 'sync_state', driftBefore, playMismatch });
       drmSyncPrompt.offer({
         headline: 'Sync to host?',
-        detail: playMismatch
-          ? 'Play/pause does not match the room. Tap once to align (avoids DRM errors).'
-          : `About ${driftBefore.toFixed(1)}s off.`,
-        minIntervalMs: 8000,
+        detail:
+          (playMismatch
+            ? 'Play/pause does not match the room. Tap once to align (avoids DRM errors).'
+            : `About ${driftBefore.toFixed(1)}s off.`) + drmSyncPromptNetflixNote(),
+        minIntervalMs: drmSyncPromptMinInterval('sync_state'),
         onConfirm: () => {
           diag.extensionOps.drmSyncConfirmed++;
           const v = findVideo() || video;
@@ -2543,6 +3153,7 @@ export function runPlayShareContent() {
             ? targetTime + (applyNow - viewerSyncBaseTime) / 1000
             : state.currentTime;
           syncLock = true;
+          syncDecision.noteRemoteApply({ sentAt: state.sentAt ?? state.computedAt, serverTime: state.sentAt });
           applyDrmViewerOneShot(v, applyTarget, !!state.playing);
           lastAppliedState = { currentTime: applyTarget, playing: !!state.playing };
           lastLocalWirePlayingSent = !!state.playing;
@@ -2572,10 +3183,36 @@ export function runPlayShareContent() {
 
     syncLock = true;
     const delay = playbackProfile.syncStateApplyDelayMs;
+    const syncStateApplyT0 = Date.now();
+    profilerEmitRemoteSync('start', {
+      remoteKind: 'SYNC_STATE',
+      syncKind,
+      correctionReason: state.correctionReason,
+      driftSec: driftBefore
+    });
     setTimeout(() => {
-      if (isVideoStale(video)) { syncLock = false; return; }
+      if (isVideoStale(video)) {
+        syncLock = false;
+        profilerEmitRemoteSync('end', {
+          remoteKind: 'SYNC_STATE',
+          ok: false,
+          durationMs: Date.now() - syncStateApplyT0,
+          reason: 'stale_video'
+        });
+        return;
+      }
       const v = findVideo() || video;
-      if (!v) { syncLock = false; return; }
+      if (!v) {
+        syncLock = false;
+        profilerEmitRemoteSync('end', {
+          remoteKind: 'SYNC_STATE',
+          ok: false,
+          durationMs: Date.now() - syncStateApplyT0,
+          reason: 'no_video'
+        });
+        return;
+      }
+      syncDecision.noteRemoteApply({ sentAt: state.sentAt ?? state.computedAt, serverTime: state.sentAt });
       armPlaybackEchoSuppress();
       const applyNow = Date.now();
       const applyTarget = state.playing
@@ -2583,9 +3220,15 @@ export function runPlayShareContent() {
         : state.currentTime;
       safeVideoOp(() => {
         const diff = Math.abs(v.currentTime - applyTarget);
-        if (diff > threshold) { v.currentTime = applyTarget; lastTimeUpdatePos = applyTarget; }
+        let didSeek = false;
+        if (diff > effectiveSyncThreshold) {
+          v.currentTime = applyTarget;
+          lastTimeUpdatePos = applyTarget;
+          didSeek = true;
+        }
         lastAppliedState = { currentTime: applyTarget, playing: !!state.playing };
         lastLocalWirePlayingSent = !!state.playing;
+        if (!state.playing && didSeek) armPauseSeekAutoplayPlaySuppress();
         if (state.playing && v.paused) {
           forcePlay(v, playbackProfile.aggressiveRemoteSync);
           if (roomState?.isHost) startHostPositionHeartbeat();
@@ -2610,6 +3253,18 @@ export function runPlayShareContent() {
       postSidebar({ type: 'SYNC_QUALITY', drift: driftBefore });
       diagLog('SYNC_STATE', { playing: state.playing, currentTime: applyTarget, computedAt: state.computedAt, sentAt: state.sentAt });
       diag.extensionOps.syncStateApplied++;
+      profilerEmitRemoteSync('end', {
+        remoteKind: 'SYNC_STATE',
+        ok: true,
+        durationMs: Date.now() - syncStateApplyT0,
+        driftSec: postDrift
+      });
+      profilerEmitDecision('remote_correction_applied', {
+        remoteKind: 'SYNC_STATE',
+        syncKind,
+        correctionReason: state.correctionReason,
+        driftSec: postDrift
+      });
       setTimeout(() => { syncLock = false; }, 600);
     }, delay);
   }
@@ -2637,6 +3292,16 @@ export function runPlayShareContent() {
   }
 
   chrome.runtime.onMessage.addListener((msg) => {
+    if (msg?.source === 'playshare-bg') {
+      if (msg.type === 'COMMAND_MANUAL_AD_START') {
+        applyManualAdBreakStart(!!msg.viaShortcut);
+        return;
+      }
+      if (msg.type === 'COMMAND_MANUAL_AD_END') {
+        applyManualAdBreakEnd(!!msg.viaShortcut);
+        return;
+      }
+    }
     if (msg.source !== 'playshare-bg') return;
 
     switch (msg.type) {
@@ -2661,6 +3326,11 @@ export function runPlayShareContent() {
         }
 
         const finalizeRoomJoined = () => {
+          syncDecision.resetSession();
+          if (reconnectResync) {
+            syncDecision.beginReconnectSettle(5000);
+            platformPlaybackLog('CLIENT_RECONNECT_SETTLE', { ms: 5000 });
+          }
           lastLocalPlaybackWireAt = 0;
           lastLocalWirePlayingSent = null;
           clearPlaybackOutboundCoalesce();
@@ -2685,7 +3355,7 @@ export function runPlayShareContent() {
             } else if (!msg.isHost) {
               setTimeout(() => sendBg({ source: 'playshare', type: 'SYNC_REQUEST' }), syncDelay);
             }
-          } else {
+          } else if (!msg.isHost) {
             setTimeout(() => sendBg({ source: 'playshare', type: 'SYNC_REQUEST' }), syncDelay);
           }
           postSidebarRoomState();
@@ -2720,6 +3390,7 @@ export function runPlayShareContent() {
       }
 
       case 'ROOM_LEFT': {
+        syncDecision.resetSession();
         stopPeerRecordingSampleLoop();
         const leavingCollectorId = roomState?.clientId;
         if (diagnosticsUiEnabled && leavingCollectorId && getVideoProfiler().isRecording()) {
@@ -2737,6 +3408,7 @@ export function runPlayShareContent() {
         diag.profilerPeerCollection.remoteCollectorClientId = null;
         roomState = null;
         suppressPlaybackEchoUntil = 0;
+        suppressOutboundPlayWhileRoomPausedUntil = 0;
         clearPlaybackOutboundCoalesce();
         clearRemotePlaybackDebouncedQueue();
         lastLocalPlaybackWireAt = 0;
@@ -2753,6 +3425,8 @@ export function runPlayShareContent() {
         stopViewerReconcileLoop();
         stopPositionReportInterval();
         diag.clusterSync = null;
+        diag.lastRoomSyncPolicy = null;
+        diag._wasServerAdMode = false;
         lastClusterSidebarKey = null;
         hideClusterSyncBadge();
         diagLog('ROOM_LEFT', {});
@@ -2808,6 +3482,7 @@ export function runPlayShareContent() {
           roomState &&
           !roomState.isHost &&
           !localAdBreakActive &&
+          syncDecision.shouldAcceptRoomSyncTick(msg) &&
           typeof msg.currentTime === 'number' &&
           Number.isFinite(msg.currentTime) &&
           (msg.state === 'playing' || msg.state === 'paused')
@@ -3101,18 +3776,10 @@ export function runPlayShareContent() {
         postSidebarRoomState();
         break;
       case 'AD_BREAK_MANUAL_START':
-        if (!roomState || localAdBreakActive) break;
-        localAdBreakActive = true;
-        sendBg({ source: 'playshare', type: 'AD_BREAK_START' });
-        syncAdBreakSidebar();
+        applyManualAdBreakStart(false);
         break;
       case 'AD_BREAK_MANUAL_END':
-        if (!roomState || !localAdBreakActive) break;
-        localAdBreakActive = false;
-        sendBg({ source: 'playshare', type: 'AD_BREAK_END' });
-        stopAdBreakMonitor();
-        startAdBreakMonitorIfNeeded();
-        syncAdBreakSidebar();
+        applyManualAdBreakEnd(false);
         break;
       case 'COPY_INVITE_LINK':
         chrome.runtime.sendMessage({ source: 'playshare', type: 'GET_ROOM_LINK_DATA' }, (linkData) => {
@@ -3618,10 +4285,10 @@ export function runPlayShareContent() {
     if (tips.length > 0 && siteSync.extraDiagTips) {
       for (const t of siteSync.extraDiagTips()) tips.push(t);
     }
-    if ((playbackProfile.handlerKey === 'netflix' || playbackProfile.handlerKey === 'disney') && tips.length > 0) {
+    if (playbackProfile.handlerKey === 'disney' && tips.length > 0) {
       tips.push({
         level: 'info',
-        text: `${playbackProfile.label}: passive DRM-safe sync — use “Sync to host” when prompted; avoids player errors (e.g. M7375).`
+        text: 'Disney+: passive DRM-safe sync — use “Sync to host” when prompted.'
       });
     }
     if (Object.keys(diag.sync.peerReports).length > 0) {
@@ -4028,6 +4695,84 @@ export function runPlayShareContent() {
     diagLog('DIAG_EXPORT', { downloaded: true, unified: true });
   }
 
+  function mergeEnrichmentForDiagUpload(payload) {
+    try {
+      const th = syncDecision.getDriftThresholds();
+      payload.enrichment = {
+        syncConfigSnapshot: {
+          handlerKey: playbackProfile.handlerKey,
+          drmPassive: !!playbackProfile.drmPassive,
+          aggressiveRemoteSync: !!playbackProfile.aggressiveRemoteSync,
+          viewerReconcileIntervalMs: playbackProfile.viewerReconcileIntervalMs,
+          drmDesyncThresholdSec: playbackProfile.drmDesyncThresholdSec,
+          syncStateApplyDelayMs: playbackProfile.syncStateApplyDelayMs,
+          positionReportIntervalMs: POSITION_REPORT_INTERVAL_MS,
+          driftThresholds: th && typeof th === 'object' ? { ...th } : null
+        }
+      };
+    } catch {
+      payload.enrichment = { syncConfigSnapshot: { handlerKey: playbackProfile.handlerKey } };
+    }
+  }
+
+  async function uploadAnonymizedDiagnosticExport() {
+    const opt = await new Promise((r) => chrome.storage.local.get(['playshare_diag_upload_opt_in'], r));
+    if (!opt.playshare_diag_upload_opt_in) {
+      diagLog('ERROR', { message: 'Diagnostic upload: enable opt-in checkbox first', kind: 'diag_upload' });
+      showToast('Enable “Share anonymized diagnostics” below, then try again.');
+      return;
+    }
+    await prepareDiagnosticSnapshotForExport();
+    const payload = await getUnifiedPlayShareExportPayload({ compactProfiler: true });
+    mergeEnrichmentForDiagUpload(payload);
+    let ver = '1.0.0';
+    try {
+      ver = chrome.runtime.getManifest()?.version || ver;
+    } catch {
+      /* ignore */
+    }
+    const tr = await new Promise((r) => chrome.storage.local.get(['playshare_diag_test_run_id'], r));
+    chrome.runtime.sendMessage(
+      {
+        source: 'playshare',
+        type: 'DIAG_UPLOAD_UNIFIED',
+        payload,
+        hashSecrets: {
+          roomCode: roomState?.roomCode ?? null,
+          clientId: roomState?.clientId ?? null,
+          username: roomState?.username ?? null
+        },
+        extensionVersion: ver,
+        platformHandlerKey: playbackProfile.handlerKey,
+        diagnosticReportSchema: DIAGNOSTIC_REPORT_SCHEMA,
+        testRunId: tr.playshare_diag_test_run_id || null
+      },
+      (res) => {
+        const le = chrome.runtime.lastError;
+        if (le) {
+          diagLog('ERROR', { message: le.message || 'Upload failed', kind: 'diag_upload' });
+          showToast('Upload failed (extension bridge).');
+          return;
+        }
+        if (res && res.ok && res.reportId) {
+          diagLog('DIAG_UPLOAD', { ok: true, reportId: res.reportId, persisted: res.persisted });
+          showToast(
+            res.persisted
+              ? `Anonymized report uploaded · ${String(res.reportId).slice(0, 8)}…`
+              : `Report accepted · ${String(res.reportId).slice(0, 8)}… (server storage not configured)`
+          );
+        } else {
+          diagLog('ERROR', {
+            message: res?.error || res?.detail || 'Upload rejected',
+            status: res?.status,
+            kind: 'diag_upload'
+          });
+          showToast(`Upload failed${res?.status ? ` (${res.status})` : ''}`);
+        }
+      }
+    );
+  }
+
   function buildVideoProfilerPageMeta() {
     let ver = '1.0.0';
     try {
@@ -4335,6 +5080,21 @@ export function runPlayShareContent() {
 
   function updateDiagnosticOverlay() {
     if (!diagPanel || !diagVisible) return;
+
+    const uploadOpt = diagPanel.querySelector('#diagUploadOptIn');
+    if (uploadOpt && !uploadOpt.dataset.bound) {
+      uploadOpt.dataset.bound = '1';
+      try {
+        chrome.storage.local.get(['playshare_diag_upload_opt_in'], (r) => {
+          uploadOpt.checked = !!r.playshare_diag_upload_opt_in;
+        });
+        uploadOpt.addEventListener('change', () => {
+          chrome.storage.local.set({ playshare_diag_upload_opt_in: !!uploadOpt.checked });
+        });
+      } catch {
+        /* ignore */
+      }
+    }
 
     const syncTips = getSyncSuggestions();
     const catIssues = computeDiagCategoryIssues(syncTips);
@@ -4731,7 +5491,9 @@ export function runPlayShareContent() {
           ? `SW WS opens ${sw.wsOpenCount} / closes ${sw.wsCloseCount} · send failures ${sw.wsSendFailures ?? 0} · ${sw.serverHost || '?'}`
           : 'SW transport: open overlay / export to refresh';
         extensionBridgeEl.innerHTML = `
-          <div class="ws-diag-row">SYNC_STATE in <strong>${eo.syncStateInbound}</strong> · applied <strong>${eo.syncStateApplied}</strong> · deferred (no &lt;video&gt;) <strong>${eo.syncStateDeferredNoVideo}</strong> · deferred (stale) <strong>${eo.syncStateDeferredStaleOrMissing}</strong></div>
+          <div class="ws-diag-row">SYNC_STATE in <strong>${eo.syncStateInbound}</strong> · applied <strong>${eo.syncStateApplied}</strong> · skip (redundant) <strong>${eo.syncStateSkippedRedundant ?? 0}</strong> · deferred (no &lt;video&gt;) <strong>${eo.syncStateDeferredNoVideo}</strong> · deferred (stale) <strong>${eo.syncStateDeferredStaleOrMissing}</strong></div>
+          <div class="ws-diag-row">Remote SEEK skipped (decision engine) <strong>${eo.remoteSeekSuppressedDecision ?? 0}</strong> · while &lt;video&gt;.seeking <strong>${eo.remoteSeekSuppressedVideoSeeking ?? 0}</strong></div>
+          <div class="ws-diag-row">SyncDecisionEngine reject: reconnect settle <strong>${eo.syncDecisionRejectedReconnectSettle ?? 0}</strong> · apply cooldown <strong>${eo.syncDecisionRejectedCooldown ?? 0}</strong></div>
           <div class="ws-diag-row">SYNC_STATE denied: syncLock <strong>${eo.syncStateDeniedSyncLock}</strong> · playback debounce <strong>${eo.syncStateDeniedPlaybackDebounce}</strong> · flushed <strong>${eo.syncStateFlushedOnVideoAttach}</strong> · pending <strong>${diag.pendingSyncStateQueued ? 'yes' : 'no'}</strong></div>
           <div class="ws-diag-row">Remote PLAY/PAUSE/SEEK denied: syncLock <strong>${eo.remoteApplyDeniedSyncLock}</strong> · playback debounce <strong>${eo.remoteApplyDeniedPlaybackDebounce}</strong> · deferred (tab hidden path) <strong>${eo.remoteApplyDeferredTabHidden}</strong></div>
           <div class="ws-diag-row ws-diag-muted">DRM UI: prompts <strong>${eo.drmSyncPromptsShown}</strong> · confirmed <strong>${eo.drmSyncConfirmed}</strong> · seek skipped (&lt;thr) <strong>${eo.drmSeekSkippedUnderThreshold}</strong> · handler <strong>${playbackProfile.handlerKey}</strong></div>
@@ -4994,7 +5756,7 @@ export function runPlayShareContent() {
                 <div class="ws-diag-step-actions-row">
                   <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerStart">Start recording</button>
                   <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerStop">Stop</button>
-                  <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerMarker" title="Add a labeled point in the JSON timeline">Mark moment</button>
+                  <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerMarker" title="Add a labeled point in the JSON timeline. On Netflix, the extra snapshot includes domHints (data-uia, aria, shell class) for ad-debug — use during a missed ad.">Mark moment</button>
                   <button type="button" class="ws-diag-btn ws-diag-btn-ghost ws-diag-btn-sm" id="diagVideoProfilerClear" title="Discard captured snapshots and events">Clear session</button>
                 </div>
               </div>
@@ -5033,6 +5795,15 @@ export function runPlayShareContent() {
                   </details>
                 </div>
               </div>
+            </div>
+          </div>
+          <div class="ws-diag-upload-panel" style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(148,163,184,0.22)">
+            <label class="ws-diag-row" style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:11px;line-height:1.45;color:var(--ws-diag-muted)">
+              <input type="checkbox" id="diagUploadOptIn" style="margin-top:2px;flex-shrink:0" />
+              <span>Opt in: upload <strong>anonymized</strong> report to your configured PlayShare server (<code style="font-size:10px">/diag/upload</code>). Same bundle as export (compact profiler); room/username hashed; narrative omitted. Requires Supabase on the server for persistence.</span>
+            </label>
+            <div class="ws-diag-step-export-row" style="margin-top:10px">
+              <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagUploadAnonymized" title="POST anonymized JSON to the server">Upload anonymized report</button>
             </div>
           </div>
         </div>
@@ -5379,6 +6150,11 @@ export function runPlayShareContent() {
     });
     diagPanel.querySelector('#diagExportDownload')?.addEventListener('click', () => {
       downloadDiagExport().catch(() => diagLog('ERROR', { message: 'Export failed' }));
+    });
+    diagPanel.querySelector('#diagUploadAnonymized')?.addEventListener('click', () => {
+      uploadAnonymizedDiagnosticExport().catch((e) =>
+        diagLog('ERROR', { message: e && e.message ? e.message : String(e), kind: 'diag_upload' })
+      );
     });
     diagPanel.querySelector('#diagExportCopyCompactProfiler')?.addEventListener('click', () => {
       copyUnifiedExportCompactProfiler().catch(() => diagLog('ERROR', { message: 'Export failed' }));
@@ -6237,7 +7013,9 @@ export function runPlayShareContent() {
       showSidebarToggle();
       openSidebar();
       const syncDelay = playbackProfile.syncRequestDelayMs;
-      setTimeout(() => sendBg({ source: 'playshare', type: 'SYNC_REQUEST' }), syncDelay);
+      if (!newState.isHost) {
+        setTimeout(() => sendBg({ source: 'playshare', type: 'SYNC_REQUEST' }), syncDelay);
+      }
       diagLog('ROOM_JOINED', { roomCode: newState.roomCode, source: 'storage' });
       if (video) startPositionReportInterval();
       postSidebarRoomState();
@@ -6304,6 +7082,7 @@ export function runPlayShareContent() {
       diag.profilerPeerCollection.remoteCollectorClientId = null;
       roomState = null;
       suppressPlaybackEchoUntil = 0;
+      suppressOutboundPlayWhileRoomPausedUntil = 0;
       clearPlaybackOutboundCoalesce();
       clearRemotePlaybackDebouncedQueue();
       lastLocalPlaybackWireAt = 0;

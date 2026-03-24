@@ -40,6 +40,29 @@ After `seeked`, the **`findVideo` cache is only invalidated** if the current `<v
 
 The host can **auto-send SEEK** when `timeupdate` sees a **>1s jump** in `currentTime` (abr / keyframe alignment after **resume** looks like a scrub). After **`play`**, a short suppress window skips that detector on Prime (~4.2s) and other sites (~1.6s) so chat does not show a fake “seeked to …” right after you only pressed play.
 
+### Netflix Cadmium (`sites/netflix-sync.js`)
+
+Netflix uses a **dedicated** profile + site adapter (not “generic drmPassive + Disney”). **`getNetflixPlaybackProfilePatch()`** keeps **`drmPassive: true`** for the same *prompted* viewer flow, but **`aggressiveRemoteSync: false`** so we never run multi-retry **`forcePlay`/`forcePause`** storms on Cadmium. User-confirmed applies go through **`applyNetflixDrmViewerOneShot`**: one **`currentTime`** write, then **Netflix UI** play/pause (`data-uia` / aria fallbacks), then a **single** `play()`/`pause()` fallback. **M7375** is widely associated with extension interference on Netflix; prompts use **longer `minIntervalMs`** on Netflix (`drmPrompt*MinIntervalMs` in the patch) to reduce automation frequency.
+
+**Host must not send `SYNC_REQUEST`.** The server answers with extrapolated **`SYNC_STATE`**; applying that on the host can force large corrective seeks against Cadmium and correlate with **M7375**. **Solo-host** rooms (no viewers) were still affected: the old client scheduled **`SYNC_REQUEST`** on join and storage restore regardless of member count, so the same tab could fight its own extrapolated timeline. The host is the timeline authority: **`PLAYBACK_POSITION`** and normal room **PLAY/PAUSE/SEEK** only. When editing **`app.js`**, keep **`SYNC_REQUEST`** **viewer-only** on join, storage restore, and post–ad-break resync (`finalizeRoomJoined`, `applyRoomState` → `continueRestore`, `ingestPeerAdBreakEnd`). Server-pushed **`SYNC_STATE`** (e.g. laggard **`broadcastAll`**) may still reach the host by design.
+
+**You cannot fully “guarantee” Netflix** — their client may refuse playback for DRM, Widevine, network, or anti-tamper reasons. What we *do* is reduce extension-shaped failure modes (rapid programmatic control, competing extensions).
+
+**QA / “does it work on Netflix?”**
+
+1. **Clean profile test**: Chrome profile with **only PlayShare** (no ad blockers, VPN extensions, “video enhancers”, Teleparty-style tools on the same tab). If M7375 disappears, another extension was involved.
+2. **Watch URL**: Open a title on **`/watch/…`** (not only browse). Content script gates on **`isVideoPage()`**.
+3. **Viewer flow**: Non-host should see **“Sync to host?”** for remote play/pause/seek and large drift — tap **Sync** sparingly; each apply is one seek + UI click + single API fallback (see `netflix-sync.js`).
+4. **Host flow**: Host uses normal **PLAY/PAUSE/SEEK** to the room; Netflix still uses **debounced** applies (`SYNC_DEBOUNCE_MS`) to avoid message pile-ups.
+5. **After Netflix UI changes**: If play/pause never responds, Cadmium may have renamed **`data-uia`** — update selectors in **`tryNetflixPlaybackUi`** and retest.
+6. **Diagnostics**: Dev overlay (**Ctrl+Shift+D**) → confirm **`findVideo`** hits / attaches, **`drmSyncPromptsShown` / `drmSyncConfirmed`**, and export JSON if reporting a bug.
+
+**If users still see M7375 (or similar)**
+
+- Pause co-watch, **reload the tab**, try again with **fewer extensions**.
+- **Update Chrome** and ensure **Widevine** is intact (`chrome://components` → Widevine).
+- Netflix Help Center codes (**M7361**, **M7353**, etc.) are often **browser / network** — not always PlayShare-specific; correlate with “only when PlayShare is on” before blaming sync.
+
 ### Local `play` vs `pause` counts (Prime / SYNC_STATE)
 
 Frequent **`SYNC_STATE`** updates set **`lastSentTime`** to the current media time. The content script used to drop **`play`** events when the time matched within 0.3s (echo suppression), which could hide **real resumes** after a pause (many **`pause_sent`**, few **`play_sent`**). **`lastPlaybackOutboundKind`** fixes that: after a **`PAUSE`** or **`SEEK`**, the next **`play`** is allowed even at the same timestamp.
@@ -55,6 +78,8 @@ Sidebar **`postMessage` queue**: messages to the chat iframe (including **`SYSTE
 All peers in a room periodically send **`POSITION_REPORT`** (`currentTime`, `playing`) as **telemetry only**; canonical playback state stays **host-driven** (**`PLAYBACK_POSITION`**, **`PLAY`/`PAUSE`/`SEEK`**). The server merges last reports and **rate-limited** broadcasts **`POSITION_SNAPSHOT`** so each client can compute **spread** (extrapolated timelines) and show a **Sync: ✓ / ~Xs / play-pause** pill on the **page**, plus a **connection state** pill in the **sidebar header** (text matches colour: **Connected** / **Syncing..** / **Warning** / **Mismatch** / **No room** / **Reconnecting**; hover for full detail). When **not** Connected, the pill is **clickable** and opens a short detail flyout plus **Open Sync Status (Members)**. **Members → Sync Status** still shows the text line.
 
 Tunables: **`constants.js`** (`POSITION_REPORT_INTERVAL_MS`, `CLUSTER_SYNC_SPREAD_SEC`); server env **`PLAYSHARE_POSITION_SNAPSHOT_MS`**, **`PLAYSHARE_POSITION_STALE_MS`**.
+
+When fresh member extrapolated playheads differ by at least **`PLAYSHARE_LAGGARD_ANCHOR_SPREAD_SEC`** (default **6**), the server sets canonical state to the **slowest** member (min timeline), broadcasts **`SYNC_STATE`**, then **`POSITION_SNAPSHOT`** (with **`laggardAnchor`** metadata). Cooldown **`PLAYSHARE_LAGGARD_ANCHOR_MIN_MS`** (default **12000**) limits repeats. Set spread to **0** to disable.
 
 #### Reports for analysis (`reportSchemaVersion` **2.4**)
 

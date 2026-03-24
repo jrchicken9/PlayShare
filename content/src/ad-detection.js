@@ -1,4 +1,5 @@
 import { detectPrimeVideoAd, isPrimeVideoHostname } from './sites/prime-video-sync.js';
+import { detectNetflixAdPlaying, isNetflixHostname } from './sites/netflix-sync.js';
 
 /**
  * Best-effort ad-break detection (DOM heuristics). Platforms change often — pair with manual controls.
@@ -9,6 +10,7 @@ export function detectAdPlaying(hostname, video) {
   const h = (hostname || '').toLowerCase();
   try {
     if (isPrimeVideoHostname(h)) return detectPrimeVideoAd(video);
+    if (isNetflixHostname(h)) return detectNetflixAdPlaying(video);
     if (/youtube\.com|youtu\.be/.test(h)) return detectYouTubeAd();
     if (/hulu\.com/.test(h)) return detectHuluAd();
     if (/crave\.ca/.test(h)) return detectCraveAd();

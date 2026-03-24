@@ -11,6 +11,8 @@ const path = require('path');
 const os = require('os');
 const { WebSocketServer, WebSocket } = require('ws');
 const { v4: uuidv4 } = require('uuid');
+const { handleDiagUpload } = require('./server/diag-upload');
+const { handleDiagIntel } = require('./server/diag-intel-http');
 
 const rawPort = String(process.env.PORT ?? '').trim();
 const parsedPort = Number.parseInt(rawPort, 10);
@@ -112,6 +114,7 @@ function broadcastAll(roomCode, message) {
 function ensureRoomPositionMaps(room) {
   if (!room.positionReports) room.positionReports = new Map();
   if (room.lastPositionSnapshotBroadcastAt == null) room.lastPositionSnapshotBroadcastAt = 0;
+  if (room.lastLaggardAnchorAt == null) room.lastLaggardAnchorAt = 0;
 }
 
 const positionSnapshotTimers = new Map(); // roomCode → timeoutId
@@ -119,7 +122,72 @@ const POSITION_SNAPSHOT_MIN_INTERVAL_MS = parseInt(
   process.env.PLAYSHARE_POSITION_SNAPSHOT_MS || '1800',
   10
 );
+/** Faster snapshot floor during adMode / elevated spread (bounded; keep Railway-friendly). */
+const POSITION_SNAPSHOT_FAST_MS = parseInt(process.env.PLAYSHARE_POSITION_SNAPSHOT_FAST_MS || '1100', 10);
+const POSITION_SNAPSHOT_SPREAD_BOOST_SEC = parseFloat(
+  process.env.PLAYSHARE_POSITION_SNAPSHOT_SPREAD_BOOST_SEC || '4'
+);
 const POSITION_REPORT_STALE_MS = parseInt(process.env.PLAYSHARE_POSITION_STALE_MS || '12000', 10);
+
+/**
+ * Standard hard SYNC_STATE `correctionReason` values (keep aligned with content `sync-drift-config.js`).
+ * Soft host heartbeats use `host_anchor_soft`.
+ */
+const CORRECTION_REASON = Object.freeze({
+  JOIN: 'join',
+  LAGGARD_ANCHOR: 'laggard_anchor',
+  AD_MODE_EXIT: 'ad_mode_exit',
+  RECONNECT_SYNC: 'reconnect_sync',
+  HOST_SEEK_SYNC: 'host_seek_sync',
+  MANUAL_SYNC: 'manual_sync',
+  HOST_ANCHOR_SOFT: 'host_anchor_soft'
+});
+
+function getAdaptivePositionSnapshotMinMs(room) {
+  ensureRoomSyncPolicyFields(room);
+  if (room.adMode) return Math.min(POSITION_SNAPSHOT_MIN_INTERVAL_MS, POSITION_SNAPSHOT_FAST_MS);
+  const sp = room.lastObservedSpreadSec;
+  if (typeof sp === 'number' && Number.isFinite(sp) && sp >= POSITION_SNAPSHOT_SPREAD_BOOST_SEC) {
+    return Math.min(POSITION_SNAPSHOT_MIN_INTERVAL_MS, POSITION_SNAPSHOT_FAST_MS + 150);
+  }
+  return POSITION_SNAPSHOT_MIN_INTERVAL_MS;
+}
+
+/**
+ * When fresh member extrapolated playheads differ by at least this many seconds, snap canonical
+ * room state to the slowest (min) timeline and broadcast SYNC_STATE — avoids “ahead” peer (e.g.
+ * finished ad first) pulling others forward or into bad seeks; everyone rewinds to the laggard.
+ */
+const LAGGARD_ANCHOR_SPREAD_SEC = parseFloat(process.env.PLAYSHARE_LAGGARD_ANCHOR_SPREAD_SEC || '6');
+const LAGGARD_ANCHOR_MIN_INTERVAL_MS = parseInt(
+  process.env.PLAYSHARE_LAGGARD_ANCHOR_MIN_MS || '12000',
+  10
+);
+/** While any peer reports an ad break, require a larger spread before laggard anchor (platform-agnostic). */
+const AD_DIVERGENCE_SPREAD_MULT = parseFloat(process.env.PLAYSHARE_AD_DIVERGENCE_SPREAD_MULT || '1.7');
+/** If this fraction of fresh telemetry rows are LOW confidence, skip laggard anchor (avoid bad seeks during unstable UI). */
+const LOW_CONFIDENCE_ANCHOR_RATIO = parseFloat(process.env.PLAYSHARE_LOW_CONFIDENCE_ANCHOR_RATIO || '0.58');
+
+/** Spread (seconds) across fresh reports to enter server-side divergence / suspected-ad isolation. */
+const AD_MODE_ENTER_SPREAD_SEC = parseFloat(process.env.PLAYSHARE_AD_MODE_ENTER_SPREAD_SEC || '8');
+/** Exit isolation when fresh spread falls below this (seconds). */
+const AD_MODE_EXIT_SPREAD_SEC = parseFloat(process.env.PLAYSHARE_AD_MODE_EXIT_SPREAD_SEC || '2');
+/** Max time to stay in adMode before forcing one exit correction (ms). */
+const AD_MODE_MAX_MS = parseInt(process.env.PLAYSHARE_AD_MODE_MAX_MS || '90000', 10);
+/** Enter adMode only if host has not seeked within this window (ms). */
+const AD_MODE_HOST_SEEK_QUIET_MS = parseInt(process.env.PLAYSHARE_AD_MODE_HOST_SEEK_QUIET_MS || '3000', 10);
+/** Enter adMode only if no hard spread correction recently (ms). */
+const AD_MODE_ENTER_HARD_GAP_MS = parseInt(process.env.PLAYSHARE_AD_MODE_ENTER_HARD_GAP_MS || '5000', 10);
+/** Min time between laggard / spread hard corrections (ms). */
+const HARD_CORRECTION_MIN_GAP_MS = parseInt(process.env.PLAYSHARE_HARD_CORRECTION_MIN_GAP_MS || '6000', 10);
+/** After a member joins, block spread-based hard corrections until this wall time (ms from join). */
+const RECONNECT_SETTLE_MS = parseInt(process.env.PLAYSHARE_RECONNECT_SETTLE_MS || '5000', 10);
+
+function normalizePositionConfidence(raw) {
+  const c = String(raw || 'MEDIUM').toUpperCase();
+  if (c === 'HIGH' || c === 'MEDIUM' || c === 'LOW') return c;
+  return 'MEDIUM';
+}
 
 /** Periodic authoritative sync packets for viewer reconciliation (ms). */
 const SYNC_BROADCAST_INTERVAL_MS = parseInt(process.env.PLAYSHARE_SYNC_BROADCAST_MS || '2000', 10);
@@ -183,10 +251,12 @@ function schedulePositionSnapshot(roomCode) {
   const room = rooms.get(roomCode);
   if (!room) return;
   ensureRoomPositionMaps(room);
+  ensureRoomSyncPolicyFields(room);
   if (positionSnapshotTimers.has(roomCode)) return;
   const now = Date.now();
+  const minInterval = getAdaptivePositionSnapshotMinMs(room);
   const elapsed = now - room.lastPositionSnapshotBroadcastAt;
-  const delay = elapsed >= POSITION_SNAPSHOT_MIN_INTERVAL_MS ? 0 : POSITION_SNAPSHOT_MIN_INTERVAL_MS - elapsed;
+  const delay = elapsed >= minInterval ? 0 : minInterval - elapsed;
   positionSnapshotTimers.set(
     roomCode,
     setTimeout(() => {
@@ -196,12 +266,281 @@ function schedulePositionSnapshot(roomCode) {
   );
 }
 
+function extrapolatePositionReportTime(rep, wallMs) {
+  const dt = Math.max(0, (wallMs - rep.receivedAt) / 1000);
+  return rep.playing ? rep.currentTime + dt : rep.currentTime;
+}
+
+function ensureRoomSyncPolicyFields(room) {
+  if (!room) return;
+  if (room.adMode == null) room.adMode = false;
+  if (room.adModeStartedAt == null) room.adModeStartedAt = 0;
+  if (room.adModeReason == null) room.adModeReason = null;
+  if (room.lastHostSeekAt == null) room.lastHostSeekAt = 0;
+  if (room.lastHardCorrectionAt == null) room.lastHardCorrectionAt = 0;
+  if (room.reconnectSettleUntil == null) room.reconnectSettleUntil = 0;
+  if (room.lastObservedSpreadSec === undefined) room.lastObservedSpreadSec = null;
+}
+
+/**
+ * Position reports still within POSITION_REPORT_STALE_MS — sole source for spread / adMode decisions.
+ * @returns {{ clientId: string, rep: object }[]}
+ */
+function getFreshPositionReports(room, now) {
+  ensureRoomPositionMaps(room);
+  const out = [];
+  for (const [cid, rep] of room.positionReports.entries()) {
+    if (!rep || typeof rep.currentTime !== 'number' || !Number.isFinite(rep.currentTime)) continue;
+    if (now - rep.receivedAt > POSITION_REPORT_STALE_MS) continue;
+    out.push({ clientId: cid, rep });
+  }
+  return out;
+}
+
+/** @returns {{ clientId: string, rep: object, ex: number }[]} */
+function buildFreshExtrapolatedRows(room, wallMs) {
+  const fresh = getFreshPositionReports(room, wallMs);
+  const rows = [];
+  for (const { clientId, rep } of fresh) {
+    const ex = extrapolatePositionReportTime(rep, wallMs);
+    if (!Number.isFinite(ex)) continue;
+    rows.push({ clientId, rep, ex });
+  }
+  return rows;
+}
+
+/** @param {boolean} [diagOnly] if true, only pushRoomDiag (no console) — avoids spam during adMode hold. */
+function syncPolicyLog(roomCode, event, detail, diagOnly) {
+  const t = Date.now();
+  const line = `[PlayShare/sync:${roomCode}] ${event}`;
+  if (!diagOnly) {
+    if (detail && typeof detail === 'object') console.log(line, detail);
+    else if (detail != null) console.log(line, String(detail));
+    else console.log(line);
+  }
+  try {
+    pushRoomDiag(roomCode, { t, type: event, ...(typeof detail === 'object' && detail ? detail : {}) });
+  } catch {
+    /* ignore */
+  }
+}
+
+function broadcastHardSyncState(roomCode, room, wallMs, playing, currentTime, correctionReason) {
+  const computedAt = Date.now();
+  room.state = {
+    playing: !!playing,
+    currentTime,
+    updatedAt: wallMs
+  };
+  room.lastHardCorrectionAt = wallMs;
+  const sentAt = Date.now();
+  broadcastAll(roomCode, {
+    type: 'SYNC_STATE',
+    state: {
+      playing: !!playing,
+      currentTime,
+      computedAt,
+      sentAt,
+      syncKind: 'hard',
+      correctionReason: correctionReason || null
+    }
+  });
+}
+
+/**
+ * Exit adMode: one hard correction — prefer fresh host telemetry, else slowest (laggard).
+ * @param {{ clientId: string, rep: object, ex: number }[]} rows
+ */
+function applyAdModeExitCorrection(roomCode, room, wallMs, rows) {
+  rows.sort((a, b) => a.ex - b.ex || String(a.clientId).localeCompare(String(b.clientId)));
+  const lag = rows[0];
+  const hostRow = rows.find((r) => r.clientId === room.host);
+  const pick = hostRow || lag;
+  const anchorTime = pick.ex;
+  const anchorPlaying = !!pick.rep.playing;
+  room.adMode = false;
+  room.adModeStartedAt = 0;
+  room.adModeReason = null;
+  room.lastLaggardAnchorAt = wallMs;
+  broadcastHardSyncState(roomCode, room, wallMs, anchorPlaying, anchorTime, CORRECTION_REASON.AD_MODE_EXIT);
+  syncPolicyLog(roomCode, 'AD_MODE_EXIT', {
+    spreadSec: +(Math.max(...rows.map((r) => r.ex)) - Math.min(...rows.map((r) => r.ex))).toFixed(3),
+    usedHost: !!hostRow,
+    anchorTime,
+    anchorPlaying
+  });
+  return {
+    applied: true,
+    adModeExit: true,
+    spreadSec: +(Math.max(...rows.map((r) => r.ex)) - Math.min(...rows.map((r) => r.ex))).toFixed(3),
+    anchorTime,
+    anchorPlaying,
+    laggardClientId: lag.clientId,
+    laggardUsername: lag.rep.username || null
+  };
+}
+
+/** Exit adMode when fresh rows unavailable but timeout elapsed — use canonical room timeline. */
+function applyAdModeExitCanonical(roomCode, room, wallMs) {
+  const canonElapsed = room.state.playing ? (wallMs - room.state.updatedAt) / 1000 : 0;
+  const t = room.state.currentTime + canonElapsed;
+  room.adMode = false;
+  room.adModeStartedAt = 0;
+  room.adModeReason = null;
+  room.lastLaggardAnchorAt = wallMs;
+  broadcastHardSyncState(roomCode, room, wallMs, room.state.playing, t, CORRECTION_REASON.AD_MODE_EXIT);
+  syncPolicyLog(roomCode, 'AD_MODE_EXIT', { reason: 'timeout_canonical_fallback', anchorTime: t });
+  return {
+    applied: true,
+    adModeExit: true,
+    spreadSec: null,
+    anchorTime: t,
+    anchorPlaying: room.state.playing,
+    laggardClientId: null,
+    laggardUsername: null
+  };
+}
+
+/**
+ * Spread / ad isolation + laggard anchor. Uses only fresh position reports for spread.
+ * While room.adMode: no laggard anchor; exit via spread &lt; 2s or timeout → one hard SYNC_STATE.
+ */
+function runSpreadSyncPolicy(roomCode, room, wallMs) {
+  ensureRoomPositionMaps(room);
+  ensureRoomSyncPolicyFields(room);
+  if (
+    !Number.isFinite(LAGGARD_ANCHOR_SPREAD_SEC) ||
+    LAGGARD_ANCHOR_SPREAD_SEC <= 0 ||
+    room.members.size < 2
+  ) {
+    room.lastObservedSpreadSec = null;
+    return null;
+  }
+
+  const rows = buildFreshExtrapolatedRows(room, wallMs);
+  let spread = 0;
+  if (rows.length >= 2) {
+    const extrapolated = rows.map((r) => r.ex);
+    spread = Math.max(...extrapolated) - Math.min(...extrapolated);
+    room.lastObservedSpreadSec = spread;
+  } else {
+    room.lastObservedSpreadSec = null;
+  }
+
+  if (room.adMode) {
+    const elapsed = wallMs - room.adModeStartedAt;
+    if (rows.length >= 2) {
+      const shouldExit = spread < AD_MODE_EXIT_SPREAD_SEC || elapsed >= AD_MODE_MAX_MS;
+      if (shouldExit) {
+        return applyAdModeExitCorrection(roomCode, room, wallMs, rows);
+      }
+    } else if (elapsed >= AD_MODE_MAX_MS) {
+      return applyAdModeExitCanonical(roomCode, room, wallMs);
+    } else {
+      syncPolicyLog(roomCode, 'AD_MODE_SKIP_EXIT', { reason: 'fresh_reports_lt_2_wait_timeout' }, true);
+    }
+    syncPolicyLog(
+      roomCode,
+      'AD_MODE_HOLD',
+      {
+        spreadSec: rows.length >= 2 ? +spread.toFixed(3) : null,
+        elapsedMs: elapsed,
+        reason: 'divergence_isolation_active'
+      },
+      true
+    );
+    return null;
+  }
+
+  if (rows.length < 2) return null;
+
+  if (
+    Number.isFinite(AD_MODE_ENTER_SPREAD_SEC) &&
+    AD_MODE_ENTER_SPREAD_SEC > 0 &&
+    spread >= AD_MODE_ENTER_SPREAD_SEC &&
+    wallMs - room.lastHostSeekAt >= AD_MODE_HOST_SEEK_QUIET_MS &&
+    wallMs - room.lastHardCorrectionAt >= AD_MODE_ENTER_HARD_GAP_MS
+  ) {
+    room.adMode = true;
+    room.adModeStartedAt = wallMs;
+    room.adModeReason = 'divergence_suspected_ad';
+    syncPolicyLog(roomCode, 'AD_MODE_ENTER', {
+      spreadSec: +spread.toFixed(3),
+      reason: room.adModeReason
+    });
+    try {
+      clearPositionSnapshotTimer(roomCode);
+      schedulePositionSnapshot(roomCode);
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
+
+  if (wallMs < room.reconnectSettleUntil) {
+    syncPolicyLog(roomCode, 'LAGGARD_SKIPPED', { reason: 'reconnect_settle', until: room.reconnectSettleUntil });
+    return null;
+  }
+  if (wallMs - room.lastHardCorrectionAt < HARD_CORRECTION_MIN_GAP_MS) {
+    syncPolicyLog(roomCode, 'LAGGARD_SKIPPED', {
+      reason: 'hard_correction_cooldown',
+      gapMs: wallMs - room.lastHardCorrectionAt
+    });
+    return null;
+  }
+  if (wallMs - room.lastLaggardAnchorAt < LAGGARD_ANCHOR_MIN_INTERVAL_MS) return null;
+
+  const adIsolation = activeAdBreaksList(room).length > 0 ? AD_DIVERGENCE_SPREAD_MULT : 1;
+  const spreadRequired = LAGGARD_ANCHOR_SPREAD_SEC * adIsolation;
+  if (spread < spreadRequired) return null;
+
+  let lowConf = 0;
+  for (const r of rows) {
+    if (normalizePositionConfidence(r.rep.confidence) === 'LOW') lowConf++;
+  }
+  if (rows.length >= 2 && lowConf / rows.length >= LOW_CONFIDENCE_ANCHOR_RATIO) {
+    syncPolicyLog(roomCode, 'LAGGARD_SKIPPED', { reason: 'low_confidence_quorum' });
+    return null;
+  }
+
+  rows.sort((a, b) => a.ex - b.ex || String(a.clientId).localeCompare(String(b.clientId)));
+  const lag = rows[0];
+  const anchorTime = lag.ex;
+  const anchorPlaying = !!lag.rep.playing;
+
+  room.lastLaggardAnchorAt = wallMs;
+  broadcastHardSyncState(roomCode, room, wallMs, anchorPlaying, anchorTime, CORRECTION_REASON.LAGGARD_ANCHOR);
+  syncPolicyLog(roomCode, 'LAGGARD_ANCHOR', {
+    spreadSec: +spread.toFixed(3),
+    laggardClientId: lag.clientId
+  });
+
+  return {
+    applied: true,
+    spreadSec: +spread.toFixed(3),
+    anchorTime,
+    anchorPlaying,
+    laggardClientId: lag.clientId,
+    laggardUsername: lag.rep.username || null,
+    correctionReason: CORRECTION_REASON.LAGGARD_ANCHOR
+  };
+}
+
 function broadcastPositionSnapshot(roomCode) {
   const room = rooms.get(roomCode);
   if (!room) return;
   ensureRoomPositionMaps(room);
   const wallMs = Date.now();
   room.lastPositionSnapshotBroadcastAt = wallMs;
+
+  ensureRoomSyncPolicyFields(room);
+  let laggardAnchor = null;
+  try {
+    laggardAnchor = runSpreadSyncPolicy(roomCode, room, wallMs);
+  } catch (e) {
+    console.warn('[POSITION_SNAPSHOT] spread sync policy failed', e?.message || e);
+  }
+
   const canonElapsed = room.state.playing ? (wallMs - room.state.updatedAt) / 1000 : 0;
   const canonicalTime = room.state.currentTime + canonElapsed;
   const members = [];
@@ -212,6 +551,7 @@ function broadcastPositionSnapshot(roomCode) {
       isHost: cid === room.host,
       currentTime: rep.currentTime,
       playing: !!rep.playing,
+      confidence: normalizePositionConfidence(rep.confidence),
       receivedAt: rep.receivedAt,
       stale: wallMs - rep.receivedAt > POSITION_REPORT_STALE_MS
     });
@@ -225,7 +565,16 @@ function broadcastPositionSnapshot(roomCode) {
       playing: !!room.state.playing,
       computedAt: wallMs
     },
-    members
+    members,
+    laggardAnchor,
+    roomSyncPolicy: {
+      adMode: !!room.adMode,
+      adModeReason: room.adModeReason,
+      adModeStartedAt: room.adModeStartedAt,
+      reconnectSettleUntil: room.reconnectSettleUntil,
+      lastHardCorrectionAt: room.lastHardCorrectionAt,
+      lastHostSeekAt: room.lastHostSeekAt
+    }
   });
 }
 
@@ -501,6 +850,36 @@ function openSite(u){window.open(u,'_blank');}
     res.end(req.method === 'HEAD' ? undefined : 'PlayShare signaling OK\n');
     return;
   }
+  if (url.pathname === '/diag/upload' || url.pathname === '/diag/upload/') {
+    if (req.method === 'OPTIONS' || req.method === 'POST') {
+      handleDiagUpload(req, res).catch((e) => {
+        console.error('[PlayShare/diag/upload]', e);
+        try {
+          res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: false, error: 'internal' }));
+        } catch {
+          /* ignore */
+        }
+      });
+      return;
+    }
+    res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: false, error: 'method_not_allowed' }));
+    return;
+  }
+  if (url.pathname.startsWith('/diag/intel')) {
+    const base = `http://${req.headers.host || 'localhost'}`;
+    handleDiagIntel(req, res, base).catch((e) => {
+      console.error('[PlayShare/diag/intel]', e);
+      try {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, error: 'internal' }));
+      } catch {
+        /* ignore */
+      }
+    });
+    return;
+  }
   if (
     url.pathname === '/' &&
     (req.method === 'GET' || req.method === 'HEAD') &&
@@ -584,7 +963,13 @@ wss.on('connection', (ws) => {
           countdownOnPlay,
           members: new Map([[clientId, { ws, username, color }]]),
           state: { playing: false, currentTime: 0, updatedAt: Date.now() },
-          adBreakClients: new Set()
+          adBreakClients: new Set(),
+          adMode: false,
+          adModeStartedAt: 0,
+          adModeReason: null,
+          lastHostSeekAt: 0,
+          lastHardCorrectionAt: 0,
+          reconnectSettleUntil: 0
         });
         startRoomSyncBroadcast(roomCode);
         client.roomCode = roomCode;
@@ -614,6 +999,9 @@ wss.on('connection', (ws) => {
           return;
         }
         const room = rooms.get(roomCode);
+        ensureRoomSyncPolicyFields(room);
+        room.reconnectSettleUntil = Date.now() + RECONNECT_SETTLE_MS;
+        syncPolicyLog(roomCode, 'RECONNECT_SETTLE', { until: room.reconnectSettleUntil });
         const color = assignColor(roomCode);
         room.members.set(clientId, { ws, username, color });
         client.roomCode = roomCode;
@@ -627,7 +1015,9 @@ wss.on('connection', (ws) => {
           playing: room.state.playing,
           currentTime: room.state.currentTime + elapsed,
           computedAt,
-          sentAt: computedAt
+          sentAt: computedAt,
+          syncKind: 'hard',
+          correctionReason: CORRECTION_REASON.JOIN
         };
 
         // Send current state to the new joiner
@@ -717,6 +1107,11 @@ wss.on('connection', (ws) => {
         const seekTime = msg.currentTime || 0;
         room.state.currentTime = seekTime;
         room.state.updatedAt = Date.now();
+        if (room.host === clientId) {
+          ensureRoomSyncPolicyFields(room);
+          room.lastHostSeekAt = Date.now();
+          syncPolicyLog(client.roomCode, 'HOST_SEEK', { at: room.lastHostSeekAt });
+        }
         const correlationId = uuidv4();
         const serverTime = Date.now();
         pushRoomDiag(client.roomCode, { t: serverTime, type: 'SEEK', correlationId, fromClientId: clientId, fromUsername: client.username });
@@ -750,19 +1145,23 @@ wss.on('connection', (ws) => {
             isHost: true,
             currentTime: t,
             playing: !!room.state.playing,
+            confidence: 'HIGH',
             receivedAt: Date.now()
           });
           schedulePositionSnapshot(client.roomCode);
           // Broadcast position to viewers so they can correct drift (host excluded)
           const elapsed = room.state.playing ? (Date.now() - room.state.updatedAt) / 1000 : 0;
           const computedAt = Date.now();
+          const sentAt = Date.now();
           broadcast(client.roomCode, {
             type: 'SYNC_STATE',
             state: {
               playing: room.state.playing,
               currentTime: room.state.currentTime + elapsed,
               computedAt,
-              sentAt: computedAt
+              sentAt,
+              syncKind: 'soft',
+              correctionReason: CORRECTION_REASON.HOST_ANCHOR_SOFT
             }
           }, ws);
         }
@@ -774,6 +1173,7 @@ wss.on('connection', (ws) => {
         if (!client.roomCode) return;
         const room = rooms.get(client.roomCode);
         if (!room) return;
+        ensureRoomSyncPolicyFields(room);
         const t = msg.currentTime;
         if (typeof t !== 'number' || t < 0 || !Number.isFinite(t)) return;
         ensureRoomPositionMaps(room);
@@ -782,6 +1182,7 @@ wss.on('connection', (ws) => {
           isHost: room.host === clientId,
           currentTime: t,
           playing: !!msg.playing,
+          confidence: normalizePositionConfidence(msg.confidence),
           receivedAt: Date.now()
         });
         schedulePositionSnapshot(client.roomCode);
@@ -794,13 +1195,16 @@ wss.on('connection', (ws) => {
         if (!room) return;
         const computedAt = Date.now();
         const elapsed = room.state.playing ? (computedAt - room.state.updatedAt) / 1000 : 0;
+        const sentAt = Date.now();
         sendTo(ws, {
           type: 'SYNC_STATE',
           state: {
             playing: room.state.playing,
             currentTime: room.state.currentTime + elapsed,
             computedAt,
-            sentAt: computedAt
+            sentAt,
+            syncKind: 'hard',
+            correctionReason: CORRECTION_REASON.RECONNECT_SYNC
           }
         });
         break;

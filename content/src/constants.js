@@ -46,6 +46,8 @@ export const contentConstants = {
   SOFT_SYNC_RATE_BEHIND: 1.05,
   /** Reset playbackRate after soft nudge (ms). */
   SOFT_SYNC_RESET_MS: 2800,
+  /** Align with SyncDecisionEngine soft-drift window + small margin. */
+  VIEWER_SOFT_DRIFT_RESET_MS: 4720,
   /** All peers send local playhead for cluster sync badge / spread (telemetry only on server). */
   POSITION_REPORT_INTERVAL_MS: 4000,
   /** Max difference in extrapolated `currentTime` (seconds) to show “synced” for the room cluster. */
@@ -65,6 +67,13 @@ export const contentConstants = {
    * with periodic SYNC_STATE / sync packets.
    */
   PLAYBACK_ECHO_SUPPRESS_MS: 1300,
+  /**
+   * After a pause sync that seeks the playhead, some players (notably Prime) call play() on seeked.
+   * We must not treat that as “user resumed while room is paused” or we broadcast PLAY and fight peers.
+   */
+  PAUSE_SEEK_OUTBOUND_PLAY_SUPPRESS_MS: 3600,
+  /** Prime: longer seek / MSE pipeline — autoplay-after-seek can arrive late. */
+  PRIME_PAUSE_SEEK_OUTBOUND_PLAY_SUPPRESS_MS: 4500,
   TIME_JUMP_THRESHOLD: 1.0,
   /** Host: ignore auto-SEEK-from-timeupdate briefly after `play` (ABR/keyframe resume looks like a seek). */
   HOST_SEEK_SUPPRESS_AFTER_PLAY_MS: 1600,

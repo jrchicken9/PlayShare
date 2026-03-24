@@ -3,6 +3,7 @@
  */
 import { contentConstants as C } from './constants.js';
 import { getPrimePlaybackProfilePatch, isPrimeVideoHostname } from './sites/prime-video-sync.js';
+import { getNetflixPlaybackProfilePatch, isNetflixHostname } from './sites/netflix-sync.js';
 
 /** @typedef {ReturnType<typeof getPlaybackProfile>} PlaybackProfile */
 
@@ -23,7 +24,8 @@ const BASE = {
   applyDelayNetflix: C.APPLY_DELAY_NETFLIX,
   applyDelayPrime: C.APPLY_DELAY_PRIME,
   /** 0 = send every local PLAY/PAUSE immediately. */
-  playbackOutboundCoalesceMs: 0
+  playbackOutboundCoalesceMs: 0,
+  pauseSeekOutboundPlaySuppressMs: C.PAUSE_SEEK_OUTBOUND_PLAY_SUPPRESS_MS
 };
 
 /**
@@ -35,17 +37,8 @@ export function getPlaybackProfile(hostname, pathname) {
   /** @type {typeof BASE} */
   let profile = { ...BASE };
 
-  if (/netflix\.com/.test(h)) {
-    profile = {
-      ...profile,
-      handlerKey: 'netflix',
-      label: 'Netflix',
-      drmPassive: true,
-      syncThresholdSoft: C.SYNC_THRESHOLD_NETFLIX,
-      applyDebounceMs: C.SYNC_DEBOUNCE_MS,
-      syncStateApplyDelayMs: 300,
-      syncRequestDelayMs: 2000
-    };
+  if (isNetflixHostname(h)) {
+    profile = { ...profile, ...getNetflixPlaybackProfilePatch() };
   } else if (/disneyplus\.com/.test(h)) {
     profile = {
       ...profile,

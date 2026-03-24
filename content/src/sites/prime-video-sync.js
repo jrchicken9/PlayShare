@@ -41,7 +41,8 @@ export function getPrimePlaybackProfilePatch() {
     applyDebounceMs: C.PRIME_APPLY_DEBOUNCE_MS,
     playbackOutboundCoalesceMs: C.PRIME_PLAYBACK_OUTBOUND_COALESCE_MS,
     playbackSlackSec: C.SYNC_THRESHOLD_PRIME,
-    timeJumpThresholdSec: C.PRIME_TIME_JUMP_THRESHOLD
+    timeJumpThresholdSec: C.PRIME_TIME_JUMP_THRESHOLD,
+    pauseSeekOutboundPlaySuppressMs: C.PRIME_PAUSE_SEEK_OUTBOUND_PLAY_SUPPRESS_MS
   };
 }
 
@@ -236,6 +237,21 @@ export function getPrimeAdDetectionSnapshot(_video) {
  */
 export function detectPrimeVideoAd(video) {
   return getPrimeAdDetectionSnapshot(video).likelyAd;
+}
+
+/**
+ * @param {HTMLVideoElement|null|undefined} video
+ * @returns {'HIGH'|'MEDIUM'|'LOW'}
+ */
+export function getPrimePlaybackConfidence(video) {
+  if (!video || video.tagName !== 'VIDEO') return 'LOW';
+  if (getPrimeAdDetectionSnapshot(video).likelyAd) return 'LOW';
+  try {
+    if (video.seeking) return 'LOW';
+  } catch {
+    /* ignore */
+  }
+  return 'HIGH';
 }
 
 /**
@@ -979,6 +995,12 @@ export const PRIME_AD_BREAK_MONITOR_OPTIONS = {
 
 export const primeSiteSyncAdapter = Object.freeze({
   key: PRIME_SYNC_HANDLER_KEY,
+  getPlaybackConfidence: ({ video }) => getPrimePlaybackConfidence(video),
+  remoteApplyIgnoreLocalMs: 650,
+  microCorrectionIgnoreSec: 0.65,
+  rapidSeekRejectWindowMs: 2200,
+  rapidSeekMaxInWindow: 5,
+  skipRemoteSeekWhileVideoSeeking: true,
   getPriorityVideoSelectors: () => PRIME_PRIORITY_VIDEO_SELECTORS,
   adjustVideoCandidateScore: adjustPrimeVideoCandidateScore,
   shouldRefreshVideoCache: primeShouldRefreshVideoCache,
