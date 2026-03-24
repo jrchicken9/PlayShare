@@ -971,6 +971,13 @@ function explorerHtml() {
     #gateErr {
       margin-top: 14px;
     }
+    #gateErr[role='alert'] {
+      outline: none;
+    }
+    input.gate-input-err {
+      border-color: #f87171 !important;
+      box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.35);
+    }
     #gateSubmit {
       margin-top: 18px;
       width: 100%;
@@ -1002,16 +1009,16 @@ function explorerHtml() {
         variable; they must match exactly. For the AI assistant, paste an OpenAI key below <em>or</em> leave it empty when this server has <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code> in Railway (the host will use that key).
       </p>
       <label class="lbl" for="gateBearer">1 · Paste Railway secret here (PLAYSHARE_DIAG_INTEL_SECRET value)</label>
-      <input type="password" id="gateBearer" autocomplete="off" spellcheck="false" placeholder="Paste the full secret from Railway Variables" />
+      <input type="password" id="gateBearer" autocomplete="off" spellcheck="false" placeholder="Paste the full secret from Railway Variables" aria-describedby="gateErr" />
       <label class="lbl" for="gateOpenAi">2 · OpenAI API key (optional if the server already has an LLM key in env)</label>
-      <input type="password" id="gateOpenAi" autocomplete="off" spellcheck="false" placeholder="sk-… (leave empty only when Railway has PLAYSHARE_DIAG_AI_API_KEY or OPENAI_API_KEY)" />
+      <input type="password" id="gateOpenAi" autocomplete="off" spellcheck="false" placeholder="sk-… (leave empty only when Railway has PLAYSHARE_DIAG_AI_API_KEY or OPENAI_API_KEY)" aria-describedby="gateErr" />
       <p id="gateServerLlmHint" class="muted" style="display: none; margin-top: 10px; font-size: 13px; line-height: 1.5">
         This host reports an LLM key in its environment — you may leave the OpenAI field empty and the AI assistant will use the server’s key.
       </p>
       <p class="muted" style="margin-top: 12px; font-size: 12px; line-height: 1.45">Secrets are kept in this tab only until you close it or refresh; they are not written to sessionStorage.</p>
       <button type="button" id="gateSubmit">Continue</button>
       <p id="gateWorking" class="muted" style="display: none; margin-top: 12px; font-size: 13px; line-height: 1.45" aria-live="polite"></p>
-      <div id="gateErr" class="alert err" style="display: none; margin-top: 14px"></div>
+      <div id="gateErr" class="alert err" style="display: none; margin-top: 14px" tabindex="-1"></div>
     </div>
   </div>
 
@@ -1242,82 +1249,198 @@ function explorerHtml() {
     return t;
   }
 
+  function clearGateFieldHighlights() {
+    var b = $('gateBearer');
+    var o = $('gateOpenAi');
+    if (b) {
+      b.classList.remove('gate-input-err');
+      b.removeAttribute('aria-invalid');
+    }
+    if (o) {
+      o.classList.remove('gate-input-err');
+      o.removeAttribute('aria-invalid');
+    }
+  }
+
+  function highlightGateField(which) {
+    clearGateFieldHighlights();
+    var el = which === 'openai' ? $('gateOpenAi') : $('gateBearer');
+    if (el) {
+      el.classList.add('gate-input-err');
+      el.setAttribute('aria-invalid', 'true');
+      try {
+        el.focus();
+      } catch (eF) {}
+    }
+  }
+
+  function clearGateErr() {
+    var el = $('gateErr');
+    if (!el) return;
+    el.textContent = '';
+    el.style.display = 'none';
+    el.removeAttribute('role');
+  }
+
+  function showGateErr(msg) {
+    var el = $('gateErr');
+    if (!el) return;
+    el.textContent = msg;
+    el.style.display = 'block';
+    el.setAttribute('role', 'alert');
+    try {
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      el.focus();
+    } catch (e) {}
+  }
+
+  /** @param {Response} res */
+  async function readGateErrorDetail(res) {
+    var raw = '';
+    try {
+      raw = await res.text();
+    } catch (e) {
+      return '';
+    }
+    if (!raw) return '';
+    try {
+      var j = JSON.parse(raw);
+      if (j && typeof j === 'object') {
+        var parts = [];
+        if (j.error) parts.push(String(j.error));
+        if (j.detail) parts.push(String(j.detail));
+        if (j.hint) parts.push(String(j.hint));
+        if (parts.length) return parts.join(' — ');
+      }
+    } catch (e2) {}
+    return raw.length > 280 ? raw.slice(0, 280) + '…' : raw;
+  }
+
   async function validateAndEnterFromGate() {
     var bearer = normalizeTokInput($('gateBearer') && $('gateBearer').value) || '';
     var openai = ($('gateOpenAi') && $('gateOpenAi').value.trim()) || '';
-    var err = $('gateErr');
     var btn = $('gateSubmit');
     var working = $('gateWorking');
-    if (err) {
-      err.style.display = 'none';
-      err.textContent = '';
-    }
+    clearGateErr();
+    clearGateFieldHighlights();
+
     if (!bearer) {
-      if (err) {
-        err.textContent = 'Server secret is required.';
-        err.style.display = 'block';
-      }
+      highlightGateField('bearer');
+      showGateErr('Paste the Railway diagnostic secret (PLAYSHARE_DIAG_INTEL_SECRET or upload secret). It cannot be empty.');
       return;
     }
     if (!openai && !serverLlmConfigured) {
-      if (err) {
-        err.textContent =
-          'Paste an OpenAI API key, or set PLAYSHARE_DIAG_AI_API_KEY (or OPENAI_API_KEY) on this server so the AI assistant can run without a browser key.';
-        err.style.display = 'block';
-      }
+      highlightGateField('openai');
+      showGateErr(
+        'Paste an OpenAI API key here, or set PLAYSHARE_DIAG_AI_API_KEY (or OPENAI_API_KEY) on this server. If this page could not detect a server key (network blip), try again in a moment or paste a key anyway.'
+      );
       return;
     }
+    if (openai && openai.length < 12) {
+      highlightGateField('openai');
+      showGateErr('That OpenAI key looks too short. Copy the full key from OpenAI (usually starts with sk- or similar).');
+      return;
+    }
+
     if (btn) btn.disabled = true;
     if (working) {
       working.style.display = 'block';
       working.textContent = 'Checking credentials with the server…';
     }
+    var ctrl = new AbortController();
+    var timeoutMs = 25000;
+    var to = setTimeout(function () {
+      try {
+        ctrl.abort();
+      } catch (eAb) {}
+    }, timeoutMs);
     try {
       var r;
       try {
-        r = await fetch(intelApi('/cases?limit=1'), { headers: { Authorization: 'Bearer ' + bearer } });
+        r = await fetch(intelApi('/cases?limit=1'), {
+          signal: ctrl.signal,
+          headers: { Authorization: 'Bearer ' + bearer }
+        });
       } catch (eFetch) {
-        if (err) {
-          err.textContent =
-            'Could not reach the diagnostics API (network error). Open this page from your PlayShare server’s link (…/diag/intel/explorer), not a downloaded copy. If you use a reverse proxy, keep the same path prefix. ' +
-            (eFetch && eFetch.message ? '(' + eFetch.message + ')' : '');
-          err.style.display = 'block';
+        var aborted = eFetch && (eFetch.name === 'AbortError' || (String(eFetch.message || '').indexOf('abort') >= 0));
+        if (aborted) {
+          showGateErr(
+            'Request timed out after ' +
+              Math.round(timeoutMs / 1000) +
+              's. Your server may be sleeping (cold start), overloaded, or unreachable. Wait and try again, or check Railway / hosting logs.'
+          );
+        } else {
+          showGateErr(
+            'Could not reach the diagnostics API. Open this page from your PlayShare server (…/diag/intel/explorer), not a saved file. If you use a reverse proxy, keep the same path prefix. ' +
+              (eFetch && eFetch.message ? 'Technical detail: ' + eFetch.message : '')
+          );
         }
         return;
+      } finally {
+        clearTimeout(to);
       }
-      if (r.status === 401 || r.status === 403) {
-        if (err) {
-          err.textContent =
-            'Invalid server secret (401). Paste the exact value of PLAYSHARE_DIAG_INTEL_SECRET or PLAYSHARE_DIAG_UPLOAD_SECRET (if both are set in Railway, use either — not a mix). Remove quotes and do not type the word Bearer.';
-          err.style.display = 'block';
-        }
+
+      if (r.status === 401) {
+        highlightGateField('bearer');
+        showGateErr(
+          'Invalid or wrong Railway secret (401). Paste the exact value of PLAYSHARE_DIAG_INTEL_SECRET or PLAYSHARE_DIAG_UPLOAD_SECRET from Variables. Do not add the word Bearer, quotes, or extra spaces.'
+        );
+        return;
+      }
+      if (r.status === 403) {
+        highlightGateField('bearer');
+        var d403 = await readGateErrorDetail(r);
+        showGateErr(
+          'Access denied (403).' + (d403 ? ' ' + d403 : ' Check that the secret matches the variable on this server.')
+        );
+        return;
+      }
+      if (r.status === 404) {
+        showGateErr(
+          'Diagnostics URL not found (404). You may be on the wrong host or path. Use the live /diag/intel/explorer URL from the machine running PlayShare.'
+        );
         return;
       }
       if (r.status === 503) {
-        var j503 = await r.json().catch(function () { return {}; });
-        if (err) {
-          err.textContent = (j503.error || 'server_misconfigured') + (j503.hint ? ' — ' + j503.hint : '');
-          err.style.display = 'block';
-        }
+        var j503t = await readGateErrorDetail(r);
+        showGateErr(j503t || 'Service unavailable (503). Supabase or another dependency may be missing — check server env and logs.');
+        return;
+      }
+      if (r.status >= 500) {
+        var d5 = await readGateErrorDetail(r);
+        showGateErr(
+          'Server error (' +
+            r.status +
+            ').' +
+            (d5 ? ' ' + d5 : ' Check deployment logs on Railway (or your host) and try again.')
+        );
         return;
       }
       if (!r.ok) {
-        if (err) {
-          err.textContent = 'Server returned ' + r.status + '. Try again.';
-          err.style.display = 'block';
-        }
+        var dx = await readGateErrorDetail(r);
+        showGateErr(
+          'Unexpected response ' + r.status + ' ' + (r.statusText || '') + '.' + (dx ? ' ' + dx : ' Try again or redeploy the server.')
+        );
         return;
       }
-      runtimeAiKey = openai;
+
       try {
-        sessionStorage.removeItem(TOK_KEY);
-        sessionStorage.removeItem(AI_KEY_STORAGE);
-        sessionStorage.removeItem(SKIP_LLM_STORAGE);
-      } catch (e2) {}
-      runtimeDiagBearer = bearer;
-      $('tok').value = bearer;
-      enterExplorerApp();
+        runtimeAiKey = openai;
+        try {
+          sessionStorage.removeItem(TOK_KEY);
+          sessionStorage.removeItem(AI_KEY_STORAGE);
+          sessionStorage.removeItem(SKIP_LLM_STORAGE);
+        } catch (e2) {}
+        runtimeDiagBearer = bearer;
+        if ($('tok')) $('tok').value = bearer;
+        clearGateErr();
+        clearGateFieldHighlights();
+        enterExplorerApp();
+      } catch (eDone) {
+        showGateErr('Unlocked locally but something failed in the page: ' + (eDone && eDone.message ? eDone.message : String(eDone)));
+      }
     } finally {
+      clearTimeout(to);
       if (working) working.style.display = 'none';
       if (btn) btn.disabled = false;
     }
@@ -1339,13 +1462,17 @@ function explorerHtml() {
   var gateBtn = $('gateSubmit');
   if (gateBtn) {
     gateBtn.onclick = function () {
-      validateAndEnterFromGate();
+      validateAndEnterFromGate().catch(function (eUnhandled) {
+        showGateErr('Unexpected error: ' + (eUnhandled && eUnhandled.message ? eUnhandled.message : String(eUnhandled)));
+      });
     };
   }
   function gateMaybeSubmit(e) {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    validateAndEnterFromGate();
+    validateAndEnterFromGate().catch(function (eUnhandled) {
+      showGateErr('Unexpected error: ' + (eUnhandled && eUnhandled.message ? eUnhandled.message : String(eUnhandled)));
+    });
   }
   var gb = $('gateBearer');
   if (gb) gb.addEventListener('keydown', gateMaybeSubmit);
