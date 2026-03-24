@@ -593,7 +593,16 @@ function explorerHtml() {
       align-items: start;
     }
     @media (max-width: 920px) {
-      .shell { grid-template-columns: 1fr; }
+      .shell {
+        grid-template-columns: 1fr;
+      }
+      /* Put the Bearer field (inside main-col) above the sidebar hints on phones */
+      .main-col {
+        order: 1;
+      }
+      .side {
+        order: 2;
+      }
     }
     .side {
       background: var(--surface);
@@ -629,7 +638,26 @@ function explorerHtml() {
     .chk input { width: auto; }
     .steps { margin: 14px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
     .steps li { margin-bottom: 6px; }
-    .main-col { min-width: 0; }
+    .main-col {
+      min-width: 0;
+    }
+    .access-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px 16px;
+      margin-bottom: 16px;
+      border-left: 4px solid var(--accent);
+    }
+    .access-panel .lbl {
+      margin-top: 0;
+    }
+    .access-panel-hint {
+      font-size: 12px;
+      color: var(--muted);
+      margin: 8px 0 0;
+      line-height: 1.45;
+    }
     .tabs {
       display: flex;
       flex-wrap: wrap;
@@ -928,11 +956,12 @@ function explorerHtml() {
     <div class="gate-card">
       <h1>Unlock diagnostic intelligence</h1>
       <p class="gate-lead">
-        Enter both access details before the explorer loads. The <strong>server secret</strong> authorizes requests to PlayShare (same as
-        <code>PLAYSHARE_DIAG_INTEL_SECRET</code> / upload secret on Railway). The <strong>OpenAI key</strong> powers the AI assistant tab unless you rely on the server’s LLM env only.
+        <strong>Railway does not put this secret into the page for you.</strong> Open Railway → your service → <strong>Variables</strong>, copy the
+        <em>value</em> of <code>PLAYSHARE_DIAG_INTEL_SECRET</code> (or upload secret), and paste it in the first box. The server compares that header to the
+        variable; they must match exactly. Then set the LLM line (OpenAI key or “server LLM only”).
       </p>
-      <label class="lbl" for="gateBearer">1 · Server secret (Bearer)</label>
-      <input type="password" id="gateBearer" autocomplete="off" spellcheck="false" placeholder="Railway diag / upload secret" />
+      <label class="lbl" for="gateBearer">1 · Paste Railway secret here (PLAYSHARE_DIAG_INTEL_SECRET value)</label>
+      <input type="password" id="gateBearer" autocomplete="off" spellcheck="false" placeholder="Paste the full secret from Railway Variables" />
       <label class="lbl" for="gateOpenAi">2 · OpenAI API key</label>
       <input type="password" id="gateOpenAi" autocomplete="off" spellcheck="false" placeholder="sk-…" />
       <div class="chk" style="margin-top: 12px">
@@ -958,18 +987,28 @@ function explorerHtml() {
     <div class="shell">
       <aside class="side">
         <h2>1 · Access</h2>
-        <label class="lbl" for="tok">Server secret (Bearer)</label>
-        <input type="password" id="tok" placeholder="From unlock screen; edit if needed" autocomplete="off" spellcheck="false" />
-        <div class="chk"><label><input type="checkbox" id="rememberTok" /> Remember for this tab (sessionStorage)</label></div>
+        <p class="muted" style="margin: 0 0 10px; font-size: 12px; line-height: 1.45">
+          The <strong>Bearer secret</strong> you must type is in the <strong>panel above the tabs</strong> (or on the unlock screen first). It is the
+          <em>same string</em> as <code>PLAYSHARE_DIAG_INTEL_SECRET</code> in Railway — copy from Variables and paste; the browser never receives it from the server automatically.
+        </p>
         <ol class="steps">
-          <li>Set secrets on the unlock screen first.</li>
+          <li>Complete unlock, then keep the access panel filled for all requests.</li>
           <li>Open a tab below and run its primary action.</li>
           <li>Read the summary table; expand <em>Raw JSON</em> only if you need the full payload.</li>
         </ol>
-        <p class="muted" style="margin-top:12px">503 <code>supabase_not_configured</code> → set URL + service role on the server. 401 → wrong token.</p>
+        <p class="muted" style="margin-top:12px">503 <code>supabase_not_configured</code> → set URL + service role on the server. 401 → wrong or empty Bearer above.</p>
       </aside>
 
       <div class="main-col">
+        <div class="access-panel" id="accessPanel">
+          <label class="lbl" for="tok">Bearer secret — paste value of <code>PLAYSHARE_DIAG_INTEL_SECRET</code> (Railway Variables)</label>
+          <input type="password" id="tok" placeholder="Required on every visit unless Remember is checked" autocomplete="off" spellcheck="false" />
+          <div class="chk"><label><input type="checkbox" id="rememberTok" /> Remember for this tab (sessionStorage)</label></div>
+          <p class="access-panel-hint">
+            Setting the variable on Railway only tells the server what to expect; you still paste that value here so requests include
+            <code>Authorization: Bearer …</code>. If this box is empty, you will get 401.
+          </p>
+        </div>
         <nav class="tabs" role="tablist" aria-label="Views">
           <button type="button" role="tab" class="active" data-tab="cases" aria-selected="true">Cases</button>
           <button type="button" role="tab" data-tab="clusters" aria-selected="false">Clusters</button>
@@ -1030,7 +1069,7 @@ function explorerHtml() {
             Uses <strong>live data</strong> from diagnostic recordings (<code>diag_cases</code> / clusters). Each successful AI run can be <strong>saved</strong> into <code>diag_intel_knowledge</code>; the next run automatically includes those excerpts so the tool <strong>accumulates context</strong> about the extension over time.
           </p>
           <p class="muted" style="margin:0 0 10px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);font-size:13px;line-height:1.5">
-            LLM access comes from the <strong>unlock screen</strong> (OpenAI key) or Railway <code>PLAYSHARE_DIAG_AI_API_KEY</code> if you chose “server LLM only.” If you see <strong>LLM not configured</strong>, reload the page and add a key at unlock, set the env on Railway, or use <strong>Data pack only</strong>. <strong>401</strong> on requests is almost always the Bearer in the sidebar.
+            LLM access comes from the <strong>unlock screen</strong> (OpenAI key) or Railway <code>PLAYSHARE_DIAG_AI_API_KEY</code> if you chose “server LLM only.” If you see <strong>LLM not configured</strong>, reload the page and add a key at unlock, set the env on Railway, or use <strong>Data pack only</strong>. <strong>401</strong> on requests is almost always the Bearer box above the tabs.
           </p>
           <p class="muted" style="margin:0 0 14px;font-size:12px">
             <strong>Supabase:</strong> apply migration <code>20260330120000_diag_intel_knowledge.sql</code>. Optional server env: <code>PLAYSHARE_DIAG_AI_BASE_URL</code>, <code>PLAYSHARE_DIAG_AI_MODEL</code> (default <code>gpt-4o-mini</code>). <strong>Primer:</strong> <code>npm run generate:primer</code> · <code>playshare-extension-primer.static.md</code> / <code>playshare-extension-primer.js</code>.
@@ -1678,7 +1717,7 @@ function explorerHtml() {
       st.textContent = '';
       out.innerHTML =
         '<div class="alert err"><strong>Missing server secret</strong>' +
-        '<p class="muted" style="margin:8px 0 0">Paste your Railway <code>PLAYSHARE_DIAG_INTEL_SECRET</code> or <code>PLAYSHARE_DIAG_UPLOAD_SECRET</code> into <strong>1 · Access → Server secret (Bearer)</strong> on the left, then generate again. Without it the server returns <strong>401</strong> (this is separate from <code>OPENAI_API_KEY</code>).</p></div>';
+        '<p class="muted" style="margin:8px 0 0">Paste your Railway <code>PLAYSHARE_DIAG_INTEL_SECRET</code> (or upload secret) into the <strong>Bearer secret</strong> box <strong>above the Cases / Clusters tabs</strong>, then try again. Without it the server returns <strong>401</strong>.</p></div>';
       return;
     }
     btn.disabled = true;
@@ -1712,7 +1751,7 @@ function explorerHtml() {
       if (!j.ok && (r.status === 401 || j.error === 'unauthorized')) {
         parts.push(
           '<div class="alert err"><strong>401 — wrong or missing Bearer token</strong>' +
-            '<p class="muted" style="margin:8px 0 0">The value in <strong>1 · Access</strong> must match <code>PLAYSHARE_DIAG_INTEL_SECRET</code> or <code>PLAYSHARE_DIAG_UPLOAD_SECRET</code> on the server (Railway). Copy-paste the full secret, no extra spaces. This is not your OpenAI API key.</p></div>'
+            '<p class="muted" style="margin:8px 0 0">The <strong>Bearer secret</strong> box above the tabs must contain the <em>exact</em> value of <code>PLAYSHARE_DIAG_INTEL_SECRET</code> or <code>PLAYSHARE_DIAG_UPLOAD_SECRET</code> from Railway Variables (copy-paste, no extra spaces). This is not your OpenAI API key.</p></div>'
         );
       } else if (!j.ok && (j.error === 'ai_not_configured' || j.error === 'ai_request_failed')) {
         var skipL = false;
