@@ -10,8 +10,21 @@ const { EXTENSION_PRIMER_MARKDOWN, EXTENSION_PRIMER_VERSION } = require('./plays
 const DEFAULT_MODEL = 'gpt-4o-mini';
 const MAX_USER_JSON_CHARS = 72000;
 
-function getDiagAiConfig() {
-  const apiKey = String(process.env.PLAYSHARE_DIAG_AI_API_KEY || process.env.OPENAI_API_KEY || '').trim();
+/** Explorer can send a per-session key (header) when Railway has no LLM env. */
+function readClientAiApiKey(req) {
+  if (!req || !req.headers || typeof req.headers !== 'object') return '';
+  const v = req.headers['x-playshare-diag-ai-key'];
+  return v && typeof v === 'string' ? v.trim() : '';
+}
+
+/**
+ * @param {import('http').IncomingMessage | undefined} [req]
+ */
+function getDiagAiConfig(req) {
+  const fromHeader = readClientAiApiKey(req);
+  const apiKey = String(
+    fromHeader || process.env.PLAYSHARE_DIAG_AI_API_KEY || process.env.OPENAI_API_KEY || ''
+  ).trim();
   const baseUrl = String(process.env.PLAYSHARE_DIAG_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
   const model = String(process.env.PLAYSHARE_DIAG_AI_MODEL || DEFAULT_MODEL).trim();
   return { apiKey, baseUrl, model, configured: Boolean(apiKey) };

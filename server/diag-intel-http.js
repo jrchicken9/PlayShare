@@ -105,7 +105,7 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-PlayShare-Diag-AI-Key'
     });
     res.end();
     return;
@@ -388,13 +388,13 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
             architecture_primer_markdown: EXTENSION_PRIMER_MARKDOWN
           },
           fallback_markdown: fallbackMarkdown,
-          ai_configured: getDiagAiConfig().configured,
+          ai_configured: getDiagAiConfig(req).configured,
           prior_runs_in_prompt: (context.prior_runs_from_database || []).length
         });
         return;
       }
 
-      const aiCfg = getDiagAiConfig();
+      const aiCfg = getDiagAiConfig(req);
       if (!aiCfg.configured) {
         json(res, 503, {
           ok: false,
@@ -842,10 +842,92 @@ function explorerHtml() {
       font-family: ui-monospace, monospace;
       resize: vertical;
     }
+    .gate-screen {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+    }
+    .gate-screen[hidden] {
+      display: none !important;
+    }
+    #playshareExplorerApp[hidden] {
+      display: none !important;
+    }
+    .gate-card {
+      width: 100%;
+      max-width: 500px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px 26px;
+      border-left: 4px solid var(--accent);
+    }
+    .gate-card h1 {
+      margin: 0 0 8px;
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .gate-lead {
+      color: var(--muted);
+      font-size: 14px;
+      margin: 0 0 20px;
+      line-height: 1.55;
+    }
+    .gate-card .lbl:first-of-type {
+      margin-top: 0;
+    }
+    .gate-card .lbl {
+      margin-top: 14px;
+    }
+    #gateErr {
+      margin-top: 14px;
+    }
+    #gateSubmit {
+      margin-top: 18px;
+      width: 100%;
+      padding: 12px 14px;
+      font-size: 15px;
+      font-weight: 600;
+      border: none;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #04202c;
+      cursor: pointer;
+    }
+    #gateSubmit:hover {
+      filter: brightness(1.06);
+    }
+    #gateSubmit:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
   </style>
 </head>
 <body>
-  <!-- explorer UI v2 -->
+  <div id="gateRoot" class="gate-screen">
+    <div class="gate-card">
+      <h1>Unlock diagnostic intelligence</h1>
+      <p class="gate-lead">
+        Enter both access details before the explorer loads. The <strong>server secret</strong> authorizes requests to PlayShare (same as
+        <code>PLAYSHARE_DIAG_INTEL_SECRET</code> / upload secret on Railway). The <strong>OpenAI key</strong> powers the AI assistant tab unless you rely on the server’s LLM env only.
+      </p>
+      <label class="lbl" for="gateBearer">1 · Server secret (Bearer)</label>
+      <input type="password" id="gateBearer" autocomplete="off" spellcheck="false" placeholder="Railway diag / upload secret" />
+      <label class="lbl" for="gateOpenAi">2 · OpenAI API key</label>
+      <input type="password" id="gateOpenAi" autocomplete="off" spellcheck="false" placeholder="sk-…" />
+      <div class="chk" style="margin-top: 12px">
+        <label><input type="checkbox" id="gateSkipOpenAi" /> Use server LLM only (<code>PLAYSHARE_DIAG_AI_API_KEY</code> on Railway — skip key above)</label>
+      </div>
+      <div class="chk"><label><input type="checkbox" id="gateRemember" checked /> Remember on this browser tab (sessionStorage)</label></div>
+      <button type="button" id="gateSubmit">Continue</button>
+      <div id="gateErr" class="alert err" style="display: none; margin-top: 14px"></div>
+    </div>
+  </div>
+
+  <div id="playshareExplorerApp" hidden>
   <div class="wrap">
     <header class="topbar">
       <h1>Diagnostic intelligence</h1>
@@ -857,10 +939,10 @@ function explorerHtml() {
       <aside class="side">
         <h2>1 · Access</h2>
         <label class="lbl" for="tok">Server secret (Bearer)</label>
-        <input type="password" id="tok" placeholder="PLAYSHARE_DIAG_INTEL_SECRET or UPLOAD secret" autocomplete="off" spellcheck="false" />
+        <input type="password" id="tok" placeholder="From unlock screen; edit if needed" autocomplete="off" spellcheck="false" />
         <div class="chk"><label><input type="checkbox" id="rememberTok" /> Remember for this tab (sessionStorage)</label></div>
         <ol class="steps">
-          <li>Paste the secret above.</li>
+          <li>Set secrets on the unlock screen first.</li>
           <li>Open a tab below and run its primary action.</li>
           <li>Read the summary table; expand <em>Raw JSON</em> only if you need the full payload.</li>
         </ol>
@@ -927,8 +1009,11 @@ function explorerHtml() {
           <p class="muted" style="margin:0 0 10px">
             Uses <strong>live data</strong> from diagnostic recordings (<code>diag_cases</code> / clusters). Each successful AI run can be <strong>saved</strong> into <code>diag_intel_knowledge</code>; the next run automatically includes those excerpts so the tool <strong>accumulates context</strong> about the extension over time.
           </p>
+          <p class="muted" style="margin:0 0 10px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);font-size:13px;line-height:1.5">
+            LLM access comes from the <strong>unlock screen</strong> (OpenAI key) or Railway <code>PLAYSHARE_DIAG_AI_API_KEY</code> if you chose “server LLM only.” If you see <strong>LLM not configured</strong>, reload the page and add a key at unlock, set the env on Railway, or use <strong>Data pack only</strong>. <strong>401</strong> on requests is almost always the Bearer in the sidebar.
+          </p>
           <p class="muted" style="margin:0 0 14px;font-size:12px">
-            <strong>Supabase:</strong> apply migration <code>20260330120000_diag_intel_knowledge.sql</code>. <strong>LLM:</strong> <code>PLAYSHARE_DIAG_AI_API_KEY</code> or <code>OPENAI_API_KEY</code>; optional <code>PLAYSHARE_DIAG_AI_BASE_URL</code>, <code>PLAYSHARE_DIAG_AI_MODEL</code> (default <code>gpt-4o-mini</code>). <strong>Primer:</strong> run <code>npm run generate:primer</code> to refresh <code>server/playshare-extension-primer.auto.md</code> (versions, git SHA, file inventory); that runs after <code>bump:extension</code> and before packaging. Narrative: <code>playshare-extension-primer.static.md</code>. Loader: <code>playshare-extension-primer.js</code>.
+            <strong>Supabase:</strong> apply migration <code>20260330120000_diag_intel_knowledge.sql</code>. Optional server env: <code>PLAYSHARE_DIAG_AI_BASE_URL</code>, <code>PLAYSHARE_DIAG_AI_MODEL</code> (default <code>gpt-4o-mini</code>). <strong>Primer:</strong> <code>npm run generate:primer</code> · <code>playshare-extension-primer.static.md</code> / <code>playshare-extension-primer.js</code>.
           </p>
           <div class="row">
             <div class="grow"><label class="lbl" for="aiFocusPlat">Focus platform (optional)</label><input type="text" id="aiFocusPlat" placeholder="e.g. netflix, prime" /></div>
@@ -987,10 +1072,15 @@ function explorerHtml() {
 
     <footer>PlayShare · <code>/diag/intel/*</code> · health <code>/diag/intel/health</code></footer>
   </div>
+  </div>
 
   <script>
 (function () {
   var TOK_KEY = 'playshare_diag_intel_token_v1';
+  var AI_KEY_STORAGE = 'playshare_diag_explorer_ai_key_v1';
+  var SKIP_LLM_STORAGE = 'playshare_diag_explorer_skip_llm_v1';
+  var runtimeAiKey = '';
+  var runtimeSkipServerLlm = false;
   var lastText = '';
   var lastPath = '';
   var lastPagedFetch = null;
@@ -1007,6 +1097,129 @@ function explorerHtml() {
   };
 
   function $(id) { return document.getElementById(id); }
+
+  function enterExplorerApp() {
+    var g = $('gateRoot');
+    var a = $('playshareExplorerApp');
+    if (g) g.hidden = true;
+    if (a) a.hidden = false;
+  }
+
+  function attachClientAiHeaders(h) {
+    var skip = runtimeSkipServerLlm;
+    try {
+      if (sessionStorage.getItem(SKIP_LLM_STORAGE) === '1') skip = true;
+    } catch (e0) {}
+    if (skip) return h;
+    var ak = runtimeAiKey;
+    try {
+      if (!ak) ak = sessionStorage.getItem(AI_KEY_STORAGE) || '';
+    } catch (e1) {}
+    if (ak) h['X-PlayShare-Diag-AI-Key'] = ak;
+    return h;
+  }
+
+  async function validateAndEnterFromGate() {
+    var bearer = ($('gateBearer') && $('gateBearer').value.trim()) || '';
+    var openai = ($('gateOpenAi') && $('gateOpenAi').value.trim()) || '';
+    var skipAi = $('gateSkipOpenAi') && $('gateSkipOpenAi').checked;
+    var remember = $('gateRemember') && $('gateRemember').checked;
+    var err = $('gateErr');
+    var btn = $('gateSubmit');
+    if (err) {
+      err.style.display = 'none';
+      err.textContent = '';
+    }
+    if (!bearer) {
+      if (err) {
+        err.textContent = 'Server secret is required.';
+        err.style.display = 'block';
+      }
+      return;
+    }
+    if (!skipAi && !openai) {
+      if (err) {
+        err.textContent = 'OpenAI API key is required, or enable “Use server LLM only”.';
+        err.style.display = 'block';
+      }
+      return;
+    }
+    if (btn) btn.disabled = true;
+    try {
+      var r = await fetch('/diag/intel/cases?limit=1', { headers: { Authorization: 'Bearer ' + bearer } });
+      if (r.status === 401 || r.status === 403) {
+        if (err) {
+          err.textContent = 'Invalid server secret (401). Check Railway PLAYSHARE_DIAG_INTEL_SECRET or UPLOAD secret.';
+          err.style.display = 'block';
+        }
+        return;
+      }
+      if (r.status === 503) {
+        var j503 = await r.json().catch(function () { return {}; });
+        if (err) {
+          err.textContent = (j503.error || 'server_misconfigured') + (j503.hint ? ' — ' + j503.hint : '');
+          err.style.display = 'block';
+        }
+        return;
+      }
+      if (!r.ok) {
+        if (err) {
+          err.textContent = 'Server returned ' + r.status + '. Try again.';
+          err.style.display = 'block';
+        }
+        return;
+      }
+      runtimeAiKey = skipAi ? '' : openai;
+      runtimeSkipServerLlm = skipAi;
+      try {
+        if (remember) {
+          sessionStorage.setItem(TOK_KEY, bearer);
+          if (skipAi) {
+            sessionStorage.removeItem(AI_KEY_STORAGE);
+            sessionStorage.setItem(SKIP_LLM_STORAGE, '1');
+          } else {
+            sessionStorage.setItem(AI_KEY_STORAGE, openai);
+            sessionStorage.removeItem(SKIP_LLM_STORAGE);
+          }
+        } else {
+          sessionStorage.removeItem(TOK_KEY);
+          sessionStorage.removeItem(AI_KEY_STORAGE);
+          sessionStorage.removeItem(SKIP_LLM_STORAGE);
+        }
+      } catch (e2) {}
+      $('tok').value = bearer;
+      var remTok = $('rememberTok');
+      if (remTok) remTok.checked = remember;
+      enterExplorerApp();
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  var gateBtn = $('gateSubmit');
+  if (gateBtn) {
+    gateBtn.onclick = function () {
+      validateAndEnterFromGate();
+    };
+  }
+
+  (function tryAutoUnlockFromStorage() {
+    try {
+      var bearer = sessionStorage.getItem(TOK_KEY);
+      var skip = sessionStorage.getItem(SKIP_LLM_STORAGE) === '1';
+      var ai = sessionStorage.getItem(AI_KEY_STORAGE) || '';
+      if (!bearer || (!skip && !ai)) return;
+      fetch('/diag/intel/cases?limit=1', { headers: { Authorization: 'Bearer ' + bearer } }).then(function (r) {
+        if (!r.ok) return;
+        $('tok').value = bearer;
+        var remTok2 = $('rememberTok');
+        if (remTok2) remTok2.checked = true;
+        runtimeSkipServerLlm = skip;
+        runtimeAiKey = ai;
+        enterExplorerApp();
+      });
+    } catch (e3) {}
+  })();
 
   function esc(s) {
     if (s == null || s === '') return '';
@@ -1064,9 +1277,9 @@ function explorerHtml() {
 
   function authHeaders() {
     var t = $('tok').value.trim();
-    return t
-      ? { Authorization: 'Bearer ' + t, 'Content-Type': 'application/json' }
-      : { 'Content-Type': 'application/json' };
+    var h = { 'Content-Type': 'application/json' };
+    if (t) h.Authorization = 'Bearer ' + t;
+    return attachClientAiHeaders(h);
   }
 
   function setPill(text, kind) {
@@ -1418,6 +1631,13 @@ function explorerHtml() {
     var btn = $('btnAiBrief');
     var out = $('aiBriefResult');
     var st = $('aiBriefStatus');
+    if (!$('tok').value.trim()) {
+      st.textContent = '';
+      out.innerHTML =
+        '<div class="alert err"><strong>Missing server secret</strong>' +
+        '<p class="muted" style="margin:8px 0 0">Paste your Railway <code>PLAYSHARE_DIAG_INTEL_SECRET</code> or <code>PLAYSHARE_DIAG_UPLOAD_SECRET</code> into <strong>1 · Access → Server secret (Bearer)</strong> on the left, then generate again. Without it the server returns <strong>401</strong> (this is separate from <code>OPENAI_API_KEY</code>).</p></div>';
+      return;
+    }
     btn.disabled = true;
     st.textContent = '';
     out.innerHTML = '<div class="empty">Gathering data' + ($('aiDryRun').checked ? '…' : ' and calling the model…') + '</div>';
@@ -1444,7 +1664,12 @@ function explorerHtml() {
       st.textContent = r.status + ' ' + r.statusText;
 
       var parts = [];
-      if (!j.ok && (j.error === 'ai_not_configured' || j.error === 'ai_request_failed')) {
+      if (!j.ok && (r.status === 401 || j.error === 'unauthorized')) {
+        parts.push(
+          '<div class="alert err"><strong>401 — wrong or missing Bearer token</strong>' +
+            '<p class="muted" style="margin:8px 0 0">The value in <strong>1 · Access</strong> must match <code>PLAYSHARE_DIAG_INTEL_SECRET</code> or <code>PLAYSHARE_DIAG_UPLOAD_SECRET</code> on the server (Railway). Copy-paste the full secret, no extra spaces. This is not your OpenAI API key.</p></div>'
+        );
+      } else if (!j.ok && (j.error === 'ai_not_configured' || j.error === 'ai_request_failed')) {
         parts.push(
           '<div class="alert warn"><strong>' +
             esc(j.error === 'ai_not_configured' ? 'LLM not configured' : 'LLM request failed') +
@@ -1678,7 +1903,12 @@ function explorerHtml() {
   var remEl = $('rememberTok');
   try {
     var saved = sessionStorage.getItem(TOK_KEY);
-    if (saved) { tokEl.value = saved; remEl.checked = true; }
+    var gr = $('gateRoot');
+    var gateBlocking = gr && !gr.hidden;
+    if (saved && !gateBlocking) {
+      tokEl.value = saved;
+      remEl.checked = true;
+    }
   } catch (e) {}
   function persistTok() {
     try {
