@@ -2,6 +2,22 @@ importScripts('server-config.js');
 importScripts('shared/streaming-hosts.generated.js');
 importScripts('shared/diag-anonymize.js');
 
+/** Keep in sync with `content/src/constants.js` → `DEFAULT_DIAG_UPLOAD_BEARER`. Only used for unpacked (development) installs. */
+const DEFAULT_DIAG_UPLOAD_BEARER = 'ibrahim1@';
+
+function playShareIsDevelopmentInstall() {
+  return new Promise((resolve) => {
+    try {
+      chrome.management.getSelf((info) => {
+        if (chrome.runtime.lastError || !info) resolve(false);
+        else resolve(info.installType === 'development');
+      });
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
 /**
  * PlayShare — Background Service Worker
  * Manages WebSocket connection lifecycle and message routing between
@@ -587,8 +603,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             payload: anon
           };
           const extraTok = await chrome.storage.local.get(['playshare_diag_upload_bearer']);
-          const bearer =
+          let bearer =
             (extraTok.playshare_diag_upload_bearer && String(extraTok.playshare_diag_upload_bearer).trim()) || '';
+          const devInstall = await playShareIsDevelopmentInstall();
+          if (!bearer && devInstall) bearer = DEFAULT_DIAG_UPLOAD_BEARER;
           /** @type {Record<string, string>} */
           const headers = { 'Content-Type': 'application/json' };
           if (bearer) headers.Authorization = `Bearer ${bearer}`;

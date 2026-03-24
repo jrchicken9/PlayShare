@@ -208,9 +208,9 @@
 
     <div class="ws-footer">
       <span class="ws-footer-line" id="footerVersionLine" aria-live="polite"></span>
-      <label class="ws-footer-prime-debug">
+      <label class="ws-footer-prime-debug" id="primeSyncDebugHudRow" hidden>
         <input type="checkbox" id="primeSyncDebugHud" />
-        <span>Show Prime sync HUD (Prime Video tabs only)</span>
+        <span>Show Prime sync HUD (dev / unpacked extension only)</span>
       </label>
     </div>
   </div>
@@ -218,6 +218,7 @@
   <script src="../server-config.js"></script>
   <script src="../shared/signal-permissions.js"></script>
   <script src="../lib/supabase.min.js"></script>
+  <script src="../shared/supabase-client-config.js"></script>
   <script src="supabase-config.js"></script>
   <script src="auth.js"></script>
   <script src="popup.js"></script>

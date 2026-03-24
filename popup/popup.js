@@ -237,6 +237,21 @@ function updateLobbyNicknameField() {
   usernameInput.classList.toggle('ws-input-readonly', signedIn);
 }
 
+/** Persist Supabase session so the service worker can refresh tokens or call Supabase later (same project as auth). */
+function persistPlayShareSupabaseSessionForBackground(session) {
+  if (session && session.access_token) {
+    chrome.storage.local.set({
+      playshare_supabase_session: {
+        access_token: session.access_token,
+        refresh_token: session.refresh_token != null ? session.refresh_token : '',
+        expires_at: session.expires_at != null ? session.expires_at : null
+      }
+    });
+  } else {
+    chrome.storage.local.remove('playshare_supabase_session');
+  }
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   setupAuthTabs();
@@ -248,14 +263,17 @@ async function init() {
     const session = await auth.init();
     if (session) {
       currentUser = session.user;
+      persistPlayShareSupabaseSessionForBackground(session);
       chrome.storage.local.set({ user: { id: session.user.id, email: session.user.email, displayName: auth.getUserDisplayName(session) } });
       if (usernameInput) usernameInput.value = auth.getUserDisplayName(session);
       showLobbyView();
     } else {
+      persistPlayShareSupabaseSessionForBackground(null);
       showAuth();
     }
     auth.onAuthStateChange((session) => {
       currentUser = session?.user || null;
+      persistPlayShareSupabaseSessionForBackground(session || null);
       if (session) {
         chrome.storage.local.set({ user: { id: session.user.id, email: session.user.email, displayName: auth.getUserDisplayName(session) } });
         if (usernameInput) usernameInput.value = auth.getUserDisplayName(session);
@@ -294,13 +312,26 @@ init();
 /** Same key as `PRIME_SYNC_DEBUG_STORAGE_KEY` in content `sites/prime-video-sync.js`. */
 const PRIME_SYNC_DEBUG_STORAGE_KEY = 'primeSyncDebugHud';
 const primeSyncDebugHudInput = document.getElementById('primeSyncDebugHud');
-if (primeSyncDebugHudInput) {
-  chrome.storage.local.get({ [PRIME_SYNC_DEBUG_STORAGE_KEY]: false }, (d) => {
-    primeSyncDebugHudInput.checked = !!d[PRIME_SYNC_DEBUG_STORAGE_KEY];
-  });
-  primeSyncDebugHudInput.addEventListener('change', () => {
-    chrome.storage.local.set({ [PRIME_SYNC_DEBUG_STORAGE_KEY]: primeSyncDebugHudInput.checked });
-  });
+const primeSyncDebugHudRow = document.getElementById('primeSyncDebugHudRow');
+if (primeSyncDebugHudInput && primeSyncDebugHudRow) {
+  try {
+    chrome.management.getSelf((info) => {
+      const dev = !chrome.runtime.lastError && info && info.installType === 'development';
+      if (!dev) {
+        primeSyncDebugHudRow.setAttribute('hidden', '');
+        return;
+      }
+      primeSyncDebugHudRow.removeAttribute('hidden');
+      chrome.storage.local.get({ [PRIME_SYNC_DEBUG_STORAGE_KEY]: false }, (d) => {
+        primeSyncDebugHudInput.checked = !!d[PRIME_SYNC_DEBUG_STORAGE_KEY];
+      });
+      primeSyncDebugHudInput.addEventListener('change', () => {
+        chrome.storage.local.set({ [PRIME_SYNC_DEBUG_STORAGE_KEY]: primeSyncDebugHudInput.checked });
+      });
+    });
+  } catch {
+    primeSyncDebugHudRow.setAttribute('hidden', '');
+  }
 }
 
 // ── Auth handlers ─────────────────────────────────────────────────────────────
@@ -315,6 +346,7 @@ if (btnLogin) {
     }
     try {
       const data = await PlayShareAuth.signIn(email, password);
+      if (data?.session) persistPlayShareSupabaseSessionForBackground(data.session);
       currentUser = data?.user || null;
       if (currentUser) {
         chrome.storage.local.set({ user: { id: currentUser.id, email: currentUser.email, displayName: PlayShareAuth.getUserDisplayName({ user: currentUser }) } });
@@ -342,7 +374,8 @@ if (btnSignup) {
       return;
     }
     try {
-      await PlayShareAuth.signUp(email, password, name);
+      const data = await PlayShareAuth.signUp(email, password, name);
+      if (data?.session) persistPlayShareSupabaseSessionForBackground(data.session);
       authError.textContent = 'Check your email to confirm your account, or sign in.';
     } catch (e) {
       authError.textContent = e.message || 'Sign up failed.';
@@ -673,6 +706,7 @@ async function handleSignOut() {
     await PlayShareAuth.signOut();
     currentUser = null;
     chrome.storage.local.remove('user');
+    persistPlayShareSupabaseSessionForBackground(null);
     showAuth();
   }
 }

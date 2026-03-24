@@ -19,6 +19,32 @@ const FEEDBACK_LABELS = new Set([
   'other'
 ]);
 
+const DIAG_INTEL_MAX_OFFSET = 100000;
+
+/**
+ * @param {URLSearchParams} searchParams
+ * @param {number} defaultLimit
+ * @param {number} maxLimit
+ */
+function diagIntelPageParams(searchParams, defaultLimit, maxLimit) {
+  const limit = Math.min(maxLimit, Math.max(1, parseInt(searchParams.get('limit') || String(defaultLimit), 10) || defaultLimit));
+  const rawOff = parseInt(searchParams.get('offset') || '0', 10);
+  const offset = Number.isFinite(rawOff) ? Math.min(DIAG_INTEL_MAX_OFFSET, Math.max(0, rawOff)) : 0;
+  return { limit, offset };
+}
+
+/**
+ * Fetch limit+1 rows to detect has_more; return first `limit` rows.
+ * @param {{ length: number }} rows
+ * @param {number} limit
+ */
+function diagIntelSlicePage(rows, limit) {
+  const arr = rows || [];
+  const hasMore = arr.length > limit;
+  const data = hasMore ? arr.slice(0, limit) : arr;
+  return { data, hasMore, returned: data.length };
+}
+
 function getIntelSecret() {
   return String(process.env.PLAYSHARE_DIAG_INTEL_SECRET || process.env.PLAYSHARE_DIAG_UPLOAD_SECRET || '').trim();
 }
@@ -129,7 +155,8 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
         json(res, 400, { ok: false, error: 'query_too_short', min: 2 });
         return;
       }
-      const limit = Math.min(40, Math.max(1, parseInt(url.searchParams.get('limit') || '20', 10)));
+      const { limit, offset } = diagIntelPageParams(url.searchParams, 20, 40);
+      const rangeEnd = offset + limit;
       const pattern = `%${q}%`;
       const { data, error } = await supabase
         .from('diag_cases')
@@ -138,9 +165,15 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
         )
         .ilike('case_summary_text', pattern)
         .order('uploaded_at', { ascending: false })
-        .limit(limit);
+        .range(offset, rangeEnd);
       if (error) throw error;
-      json(res, 200, { ok: true, query: q, cases: data || [] });
+      const page = diagIntelSlicePage(data || [], limit);
+      json(res, 200, {
+        ok: true,
+        query: q,
+        cases: page.data,
+        pagination: { limit, offset, returned: page.returned, has_more: page.hasMore }
+      });
       return;
     }
 
@@ -149,7 +182,8 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
         json(res, 405, { ok: false, error: 'method_not_allowed' });
         return;
       }
-      const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '40', 10)));
+      const { limit, offset } = diagIntelPageParams(url.searchParams, 40, 100);
+      const rangeEnd = offset + limit;
       const platform = url.searchParams.get('platform');
       const tag = url.searchParams.get('tag');
       const cluster = url.searchParams.get('cluster');
@@ -160,14 +194,19 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
           'report_id,uploaded_at,extension_version,server_version,platform,handler_key,role,case_summary_text,cluster_signature,derived_tags'
         )
         .order('uploaded_at', { ascending: false })
-        .limit(limit);
+        .range(offset, rangeEnd);
       if (platform) q = q.eq('platform', platform);
       if (cluster) q = q.eq('cluster_signature', cluster);
       if (tag) q = q.contains('derived_tags', [tag]);
       if (extensionVersion) q = q.eq('extension_version', String(extensionVersion).slice(0, 32));
       const { data, error } = await q;
       if (error) throw error;
-      json(res, 200, { ok: true, cases: data || [] });
+      const page = diagIntelSlicePage(data || [], limit);
+      json(res, 200, {
+        ok: true,
+        cases: page.data,
+        pagination: { limit, offset, returned: page.returned, has_more: page.hasMore }
+      });
       return;
     }
 
@@ -218,14 +257,20 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
         json(res, 405, { ok: false, error: 'method_not_allowed' });
         return;
       }
-      const limit = Math.min(80, Math.max(1, parseInt(url.searchParams.get('limit') || '40', 10)));
+      const { limit, offset } = diagIntelPageParams(url.searchParams, 40, 80);
+      const rangeEnd = offset + limit;
       const { data, error } = await supabase
         .from('diag_case_clusters')
         .select('*')
         .order('last_case_at', { ascending: false, nullsFirst: false })
-        .limit(limit);
+        .range(offset, rangeEnd);
       if (error) throw error;
-      json(res, 200, { ok: true, clusters: data || [] });
+      const page = diagIntelSlicePage(data || [], limit);
+      json(res, 200, {
+        ok: true,
+        clusters: page.data,
+        pagination: { limit, offset, returned: page.returned, has_more: page.hasMore }
+      });
       return;
     }
 
@@ -329,69 +374,821 @@ function explorerHtml() {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PlayShare diagnostic intelligence</title>
+  <title>PlayShare · Diagnostic intelligence</title>
   <style>
-    :root { font-family: system-ui, sans-serif; background:#0c0e12; color:#e8edf4; }
-    body { max-width:960px; margin:24px auto; padding:0 16px; }
-    h1 { font-size:1.25rem; }
-    textarea, input { width:100%; max-width:520px; background:#161a22; color:#e8edf4; border:1px solid #2a3140; border-radius:8px; padding:8px; }
-    button { background:#2563eb; color:#fff; border:none; border-radius:8px; padding:8px 14px; cursor:pointer; margin:4px 4px 4px 0; }
-    button.secondary { background:#334155; }
-    pre { background:#11151c; padding:12px; border-radius:8px; overflow:auto; font-size:12px; max-height:420px; }
-    .muted { color:#8b95a8; font-size:13px; }
-    ul { padding-left:18px; }
-    li { margin:6px 0; }
+    :root {
+      --bg: #07090d;
+      --surface: #111620;
+      --surface2: #0c1018;
+      --border: #2a3142;
+      --text: #e8edf4;
+      --muted: #8b95a8;
+      --accent: #38bdf8;
+      --accent-dim: rgba(56, 189, 248, 0.12);
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --err: #f87171;
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0 18px 40px; }
+    .wrap { max-width: 1280px; margin: 0 auto; padding-top: 22px; }
+    .topbar {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 18px 20px;
+      background: linear-gradient(155deg, var(--surface) 0%, #0a0e16 100%);
+      border-left: 4px solid var(--accent);
+      margin-bottom: 20px;
+    }
+    .topbar h1 { margin: 0 0 6px; font-size: 1.4rem; font-weight: 700; letter-spacing: -0.02em; }
+    .topbar p { margin: 0; color: var(--muted); font-size: 0.92rem; max-width: 72ch; }
+    .ver { font-size: 11px; color: var(--muted); margin-top: 10px; opacity: 0.85; }
+    .shell {
+      display: grid;
+      grid-template-columns: minmax(240px, 280px) 1fr;
+      gap: 22px;
+      align-items: start;
+    }
+    @media (max-width: 920px) {
+      .shell { grid-template-columns: 1fr; }
+    }
+    .side {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 16px 14px;
+      position: sticky;
+      top: 12px;
+    }
+    @media (max-width: 920px) {
+      .side { position: static; }
+    }
+    .side h2 {
+      margin: 0 0 10px;
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+    }
+    label.lbl { display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 4px; }
+    input[type="text"], input[type="password"], input[type="search"] {
+      width: 100%;
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 11px;
+      font-size: 14px;
+    }
+    input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+    .chk { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-top: 8px; }
+    .chk input { width: auto; }
+    .steps { margin: 14px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
+    .steps li { margin-bottom: 6px; }
+    .main-col { min-width: 0; }
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 0;
+      padding-bottom: 0;
+    }
+    .tabs button {
+      background: transparent;
+      color: var(--muted);
+      border: none;
+      border-bottom: 2px solid transparent;
+      padding: 10px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: -1px;
+      border-radius: 8px 8px 0 0;
+    }
+    .tabs button:hover { color: var(--text); background: rgba(255,255,255,0.03); }
+    .tabs button.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+      background: var(--accent-dim);
+    }
+    .tab-panel {
+      display: none;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-top: none;
+      border-radius: 0 0 12px 12px;
+      padding: 16px 18px 18px;
+      margin-bottom: 18px;
+    }
+    .tab-panel.active { display: block; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 10px; }
+    .row:last-child { margin-bottom: 0; }
+    .grow { flex: 1 1 140px; min-width: 0; }
+    button.primary {
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 18px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.primary:hover { filter: brightness(1.08); }
+    button.secondary {
+      background: #334155;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 9px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.secondary:hover { filter: brightness(1.08); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
+    button.linkish {
+      background: transparent;
+      border: none;
+      color: var(--accent);
+      padding: 2px 0;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+    details.hint { margin-top: 12px; font-size: 12px; color: var(--muted); }
+    details.hint summary { cursor: pointer; color: var(--accent); user-select: none; }
+    .results {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 18px;
+    }
+    .results h2 {
+      margin: 0 0 12px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+    .result-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px 14px;
+      margin-bottom: 14px;
+    }
+    .pill {
+      font-size: 12px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-variant-numeric: tabular-nums;
+    }
+    .pill.ok { background: rgba(52, 211, 153, 0.15); color: var(--ok); }
+    .pill.warn { background: rgba(251, 191, 36, 0.12); color: var(--warn); }
+    .pill.err { background: rgba(248, 113, 113, 0.12); color: var(--err); }
+    .pill.idle { background: #1e2430; color: var(--muted); }
+    .path { font-size: 12px; color: var(--muted); font-family: ui-monospace, monospace; word-break: break-all; }
+    .human { min-height: 48px; margin-bottom: 12px; }
+    .empty {
+      padding: 20px 16px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 14px;
+      border: 1px dashed var(--border);
+      border-radius: 10px;
+      background: var(--surface2);
+    }
+    .alert {
+      padding: 12px 14px;
+      border-radius: 10px;
+      font-size: 14px;
+      margin-bottom: 12px;
+    }
+    .alert.err { background: rgba(248, 113, 113, 0.1); border: 1px solid rgba(248, 113, 113, 0.35); color: #fecaca; }
+    .alert.warn { background: rgba(251, 191, 36, 0.08); border: 1px solid rgba(251, 191, 36, 0.3); color: #fde68a; }
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    table.data-table th, table.data-table td {
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    table.data-table th {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    table.data-table tr:hover td { background: rgba(255,255,255,0.02); }
+    .sum { max-width: 36ch; color: #cbd5e1; }
+    .mono-sm { font-family: ui-monospace, monospace; font-size: 11px; word-break: break-all; }
+    .rec-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-bottom: 10px;
+      background: var(--surface2);
+    }
+    .rec-card p { margin: 0 0 8px; }
+    .rec-meta { font-size: 11px; color: var(--muted); }
+    .dl-row { display: grid; grid-template-columns: 1fr 2fr; gap: 8px 16px; font-size: 13px; margin: 6px 0; }
+    .dl-row dt { color: var(--muted); margin: 0; }
+    .dl-row dd { margin: 0; }
+    details.raw-json { margin-top: 4px; }
+    details.raw-json > summary {
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 12px;
+      user-select: none;
+      padding: 8px 0;
+    }
+    details.raw-json > summary:hover { color: var(--accent); }
+    pre#out {
+      margin: 0;
+      background: #05070a;
+      padding: 14px 16px;
+      border-radius: 10px;
+      overflow: auto;
+      font-size: 11px;
+      line-height: 1.45;
+      max-height: min(42vh, 480px);
+      border: 1px solid var(--border);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    button.ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.ghost:hover { color: var(--text); border-color: var(--muted); }
+    footer { margin-top: 24px; font-size: 11px; color: var(--muted); text-align: center; }
+    .muted { color: var(--muted); font-size: 12px; }
+    .pager {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+    .pager .pager-meta { font-size: 13px; color: var(--muted); flex: 1; min-width: 140px; }
+    .pager button.secondary:disabled { opacity: 0.35; cursor: not-allowed; }
   </style>
 </head>
 <body>
-  <h1>PlayShare diagnostic intelligence</h1>
-  <p class="muted">Paste the same Bearer token as <code>PLAYSHARE_DIAG_INTEL_SECRET</code> or <code>PLAYSHARE_DIAG_UPLOAD_SECRET</code>. Nothing is sent except to this server.</p>
-  <p><input type="password" id="tok" placeholder="Bearer token" autocomplete="off" /></p>
-  <p>
-    <button onclick="loadCases()">Recent cases</button>
-    <button onclick="loadClusters()" class="secondary">Clusters</button>
-    <button onclick="loadRecs()" class="secondary">Recommendations</button>
-  </p>
-  <p>
-    <input id="sq" placeholder="Keyword search on case summaries" />
-    <button onclick="loadSearch()" class="secondary">Search</button>
-  </p>
-  <p class="muted">Filter recent cases: add <code>?extension_version=1.0.0</code> (exact) to <code>/diag/intel/cases</code> alongside <code>platform</code> / <code>tag</code> / <code>cluster</code>.</p>
-  <p class="muted">Regression (extension versions, exact match):</p>
-  <p>
-    <input id="bv" placeholder="baseline extension version e.g. 1.0.0" />
-    <input id="tv" placeholder="target extension version e.g. 1.0.1" />
-    <input id="pf" placeholder="platform filter (optional)" />
-    <button onclick="loadReg()" class="secondary">Compare</button>
-  </p>
-  <pre id="out">{}</pre>
+  <!-- explorer UI v2 -->
+  <div class="wrap">
+    <header class="topbar">
+      <h1>Diagnostic intelligence</h1>
+      <p>Review anonymized sync diagnostics: recent uploads, repeating patterns (clusters), and version comparisons. Traffic stays on this server; paste the same Bearer secret you configured on the host (Railway).</p>
+      <p class="ver">UI v2 · If this page still looks like three plain buttons in a row, redeploy the server so <code>diag-intel-http.js</code> is current.</p>
+    </header>
+
+    <div class="shell">
+      <aside class="side">
+        <h2>1 · Access</h2>
+        <label class="lbl" for="tok">Server secret (Bearer)</label>
+        <input type="password" id="tok" placeholder="PLAYSHARE_DIAG_INTEL_SECRET or UPLOAD secret" autocomplete="off" spellcheck="false" />
+        <div class="chk"><label><input type="checkbox" id="rememberTok" /> Remember for this tab (sessionStorage)</label></div>
+        <ol class="steps">
+          <li>Paste the secret above.</li>
+          <li>Open a tab below and run its primary action.</li>
+          <li>Read the summary table; expand <em>Raw JSON</em> only if you need the full payload.</li>
+        </ol>
+        <p class="muted" style="margin-top:12px">503 <code>supabase_not_configured</code> → set URL + service role on the server. 401 → wrong token.</p>
+      </aside>
+
+      <div class="main-col">
+        <nav class="tabs" role="tablist" aria-label="Views">
+          <button type="button" role="tab" class="active" data-tab="cases" aria-selected="true">Cases</button>
+          <button type="button" role="tab" data-tab="clusters" aria-selected="false">Clusters</button>
+          <button type="button" role="tab" data-tab="insights" aria-selected="false">Insights</button>
+          <button type="button" role="tab" data-tab="search" aria-selected="false">Search</button>
+          <button type="button" role="tab" data-tab="regress" aria-selected="false">Compare versions</button>
+        </nav>
+
+        <div id="panel-cases" class="tab-panel active" role="tabpanel">
+          <p class="muted" style="margin:0 0 12px">Newest diagnostic cases. Use filters to narrow by extension build, site, tag, or cluster id.</p>
+          <div class="row">
+            <div class="grow"><label class="lbl" for="fLim">How many rows</label><input type="text" id="fLim" value="25" inputmode="numeric" /></div>
+            <div class="grow"><label class="lbl" for="fExt">Extension version (exact)</label><input type="text" id="fExt" placeholder="e.g. 1.1.0" /></div>
+            <div class="grow"><label class="lbl" for="fPlat">Platform / site key</label><input type="text" id="fPlat" /></div>
+          </div>
+          <div class="row">
+            <div class="grow"><label class="lbl" for="fTag">Derived tag</label><input type="text" id="fTag" placeholder="e.g. likely_buffer_issue" /></div>
+            <div class="grow"><label class="lbl" for="fCluster">Cluster signature</label><input type="text" id="fCluster" /></div>
+            <button type="button" class="primary" id="btnCases">Load cases</button>
+          </div>
+        </div>
+
+        <div id="panel-clusters" class="tab-panel" role="tabpanel" hidden>
+          <p class="muted" style="margin:0 0 12px">Groups of cases that look alike — useful for spotting recurring issues.</p>
+          <div class="row">
+            <div class="grow" style="max-width:200px"><label class="lbl" for="fCLim">Rows per page</label><input type="text" id="fCLim" value="25" inputmode="numeric" /></div>
+            <button type="button" class="primary" id="btnClusters">Load clusters</button>
+          </div>
+        </div>
+
+        <div id="panel-insights" class="tab-panel" role="tabpanel" hidden>
+          <p class="muted" style="margin:0 0 12px">Plain-language suggestions from recent metrics (not a substitute for reading individual cases).</p>
+          <button type="button" class="primary" id="btnRecs">Generate insights</button>
+        </div>
+
+        <div id="panel-search" class="tab-panel" role="tabpanel" hidden>
+          <p class="muted" style="margin:0 0 12px">Search the short text summary we store for each case (two characters minimum).</p>
+          <div class="row">
+            <div class="grow"><label class="lbl" for="sq">Keywords</label><input type="search" id="sq" placeholder="buffer, netflix, reconnect…" /></div>
+            <div class="grow" style="max-width:200px"><label class="lbl" for="fSearchLim">Rows per page</label><input type="text" id="fSearchLim" value="25" inputmode="numeric" /></div>
+            <button type="button" class="primary" id="btnSearch">Search</button>
+          </div>
+        </div>
+
+        <div id="panel-regress" class="tab-panel" role="tabpanel" hidden>
+          <p class="muted" style="margin:0 0 12px">Compare average metrics between two extension builds to spot regressions. Optional platform limits the sample to one site.</p>
+          <div class="row">
+            <div class="grow"><label class="lbl" for="bv">Older build (baseline)</label><input type="text" id="bv" placeholder="1.0.0" /></div>
+            <div class="grow"><label class="lbl" for="tv">Newer build (target)</label><input type="text" id="tv" placeholder="1.0.1" /></div>
+            <div class="grow"><label class="lbl" for="pf">Platform (optional)</label><input type="text" id="pf" /></div>
+            <button type="button" class="primary" id="btnReg">Run comparison</button>
+          </div>
+        </div>
+
+        <section class="results" aria-live="polite">
+          <h2>Results</h2>
+          <div class="result-head">
+            <span id="statusPill" class="pill idle">Ready</span>
+            <span id="latencyEl" class="path"></span>
+            <span id="pathEl" class="path"></span>
+            <span style="flex:1"></span>
+            <button type="button" class="ghost" id="btnCopy" disabled>Copy JSON</button>
+            <button type="button" class="ghost" id="btnDl" disabled>Download</button>
+          </div>
+          <div id="humanOut" class="human">
+            <div class="empty">Run a query from a tab above. A table or cards will appear here; raw data stays in the fold below.</div>
+          </div>
+          <details class="raw-json" id="rawDetails">
+            <summary>Technical details — raw JSON</summary>
+            <pre id="out">{}</pre>
+          </details>
+        </section>
+      </div>
+    </div>
+
+    <footer>PlayShare · <code>/diag/intel/*</code> · health <code>/diag/intel/health</code></footer>
+  </div>
+
   <script>
-    function authHeaders() {
-      const t = document.getElementById('tok').value.trim();
-      return t ? { 'Authorization': 'Bearer ' + t, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+(function () {
+  var TOK_KEY = 'playshare_diag_intel_token_v1';
+  var lastText = '';
+  var lastPath = '';
+  var lastPagedFetch = null;
+  var lastPagination = null;
+  var FIELD_LABELS = {
+    ad_mode_enter_count: 'Ad-mode entries',
+    hard_correction_count: 'Hard corrections',
+    buffering_count: 'Buffering events',
+    stalled_count: 'Playback stalls',
+    ws_disconnect_count: 'WebSocket disconnects',
+    netflix_safety_reject_count: 'Netflix safety rejects',
+    source_swap_count: 'Video source swaps',
+    sync_apply_reject_total: 'Sync apply rejects (all reasons)'
+  };
+
+  function $(id) { return document.getElementById(id); }
+
+  function esc(s) {
+    if (s == null || s === '') return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function fmtWhen(iso) {
+    if (!iso) return '—';
+    try {
+      return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+    } catch (e) {
+      return esc(iso);
     }
-    async function jget(path) {
-      const r = await fetch(path, { headers: authHeaders() });
-      const j = await r.json();
-      document.getElementById('out').textContent = JSON.stringify(j, null, 2);
+  }
+
+  function tagsCell(tags) {
+    if (!Array.isArray(tags) || !tags.length) return '—';
+    return esc(tags.join(', '));
+  }
+
+  function truncate(s, n) {
+    var t = String(s || '');
+    if (t.length <= n) return esc(t);
+    return esc(t.slice(0, n)) + '…';
+  }
+
+  function paginationBar(p) {
+    if (!p || typeof p.offset !== 'number' || typeof p.limit !== 'number') return '';
+    var start = p.returned ? p.offset + 1 : p.offset;
+    var end = p.offset + (p.returned || 0);
+    var prevDis = p.offset <= 0 ? ' disabled' : '';
+    var nextDis = !p.has_more ? ' disabled' : '';
+    var label =
+      p.returned > 0
+        ? 'Showing ' + start + '–' + end + (p.has_more ? ' (more available)' : '')
+        : 'No rows on this page';
+    return (
+      '<div class="pager" role="navigation" aria-label="Pagination">' +
+      '<button type="button" class="secondary"' +
+      prevDis +
+      ' data-page="prev">Previous page</button>' +
+      '<span class="pager-meta">' +
+      esc(label) +
+      '</span>' +
+      '<button type="button" class="secondary"' +
+      nextDis +
+      ' data-page="next">Next page</button>' +
+      '</div>'
+    );
+  }
+
+  function authHeaders() {
+    var t = $('tok').value.trim();
+    return t
+      ? { Authorization: 'Bearer ' + t, 'Content-Type': 'application/json' }
+      : { 'Content-Type': 'application/json' };
+  }
+
+  function setPill(text, kind) {
+    var el = $('statusPill');
+    el.textContent = text;
+    el.className = 'pill ' + (kind || 'idle');
+  }
+
+  function setLoading() {
+    setPill('Loading…', 'warn');
+    $('latencyEl').textContent = '';
+    $('pathEl').textContent = '';
+    $('out').textContent = '…';
+    $('btnCopy').disabled = true;
+    $('btnDl').disabled = true;
+    $('humanOut').innerHTML = '<div class="empty">Loading…</div>';
+  }
+
+  function pillForStatus(code) {
+    if (code >= 200 && code < 300) return 'ok';
+    if (code === 401 || code === 403) return 'err';
+    if (code >= 500) return 'err';
+    if (code >= 400) return 'warn';
+    return 'idle';
+  }
+
+  function renderHuman(j, statusCode) {
+    var box = $('humanOut');
+    var raw = $('rawDetails');
+    if (!j) {
+      box.innerHTML = '<div class="alert err">Empty response.</div>';
+      return;
     }
-    function loadCases() { jget('/diag/intel/cases?limit=25'); }
-    function loadClusters() { jget('/diag/intel/clusters?limit=25'); }
-    function loadRecs() { jget('/diag/intel/recommendations?sample=150'); }
-    function loadReg() {
-      const bv = encodeURIComponent(document.getElementById('bv').value.trim());
-      const tv = encodeURIComponent(document.getElementById('tv').value.trim());
-      const pf = document.getElementById('pf').value.trim();
-      if (!bv || !tv) { alert('baseline + target versions required'); return; }
-      let u = '/diag/intel/regression?baseline_ver=' + bv + '&target_ver=' + tv;
-      if (pf) u += '&platform=' + encodeURIComponent(pf);
-      jget(u);
+    if (j.parseError) {
+      box.innerHTML = '<div class="alert err">The server returned non-JSON. First bytes: <span class="mono-sm">' + esc((j.bodyPreview || '').slice(0, 400)) + '</span></div>';
+      if (statusCode >= 400) raw.open = true;
+      return;
     }
-    function loadSearch() {
-      const raw = document.getElementById('sq').value.trim();
-      if (raw.length < 2) { alert('Enter at least 2 characters'); return; }
-      jget('/diag/intel/search?q=' + encodeURIComponent(raw) + '&limit=25');
+    if (j.ok === false) {
+      var msg = esc(j.error || 'request_failed');
+      var det = j.detail ? '<br/><span class="mono-sm">' + esc(String(j.detail)) + '</span>' : '';
+      var cls = statusCode >= 500 ? 'err' : 'warn';
+      box.innerHTML = '<div class="alert ' + cls + '"><strong>' + msg + '</strong>' + det + '</div>';
+      raw.open = true;
+      return;
     }
+    if (Array.isArray(j.cases)) {
+      var qh =
+        j.query != null
+          ? '<p class="muted" style="margin:0 0 10px">Matches for <strong>' + esc(j.query) + '</strong> · ' + j.cases.length + ' row(s) on this page</p>'
+          : '<p class="muted" style="margin:0 0 10px">' + j.cases.length + ' case(s) on this page</p>';
+      if (!j.cases.length) {
+        box.innerHTML =
+          qh +
+          '<div class="empty">No rows matched. Upload a diagnostic from the extension, relax filters, or go to the previous page.</div>' +
+          (j.pagination ? paginationBar(j.pagination) : '');
+        return;
+      }
+      var tbl = qh + '<div style="overflow:auto"><table class="data-table"><thead><tr><th>When</th><th>Site</th><th>Ext</th><th>Summary</th><th>Tags</th><th></th></tr></thead><tbody>';
+      j.cases.forEach(function (c) {
+        var id = c.report_id || '';
+        tbl += '<tr><td>' + fmtWhen(c.uploaded_at) + '</td><td>' + esc(c.platform || '') + '</td><td class="mono-sm">' + esc(c.extension_version || '') + '</td><td class="sum">' + truncate(c.case_summary_text, 160) + '</td><td class="mono-sm">' + tagsCell(c.derived_tags) + '</td><td><button type="button" class="linkish" data-explain="' + esc(id) + '">Explain</button></td></tr>';
+      });
+      tbl += '</tbody></table></div>' + (j.pagination ? paginationBar(j.pagination) : '');
+      box.innerHTML = tbl;
+      box.querySelectorAll('[data-explain]').forEach(function (btn) {
+        btn.onclick = function () {
+          var rid = btn.getAttribute('data-explain');
+          if (rid) jget('/diag/intel/cases/' + rid + '/explain');
+        };
+      });
+      return;
+    }
+    if (Array.isArray(j.clusters)) {
+      if (!j.clusters.length) {
+        box.innerHTML =
+          '<div class="empty">No cluster rollups on this page (or none yet). They populate as cases are ingested.</div>' +
+          (j.pagination ? paginationBar(j.pagination) : '');
+        return;
+      }
+      var t2 =
+        '<p class="muted" style="margin:0 0 10px">' +
+        j.clusters.length +
+        ' cluster(s) on this page</p><div style="overflow:auto"><table class="data-table"><thead><tr><th>Last seen</th><th>Site</th><th>Cases</th><th>Signature</th><th>Summary</th></tr></thead><tbody>';
+      j.clusters.forEach(function (cl) {
+        t2 += '<tr><td>' + fmtWhen(cl.last_case_at) + '</td><td>' + esc(cl.platform || '') + '</td><td>' + esc(String(cl.case_count != null ? cl.case_count : '')) + '</td><td class="mono-sm">' + truncate(cl.cluster_signature, 48) + '</td><td class="sum">' + truncate(cl.cluster_summary, 120) + '</td></tr>';
+      });
+      t2 += '</tbody></table></div>' + (j.pagination ? paginationBar(j.pagination) : '');
+      box.innerHTML = t2;
+      return;
+    }
+    if (j.recommendations && Array.isArray(j.recommendations)) {
+      var sample = j.case_sample_size != null ? '<p class="muted" style="margin:0 0 12px">Based on the last <strong>' + esc(String(j.case_sample_size)) + '</strong> uploaded case(s).</p>' : '';
+      if (!j.recommendations.length) {
+        box.innerHTML = sample + '<div class="empty">No strong patterns in this sample. Try again after more uploads or raise the sample size in the API.</div>';
+        return;
+      }
+      var cards = sample;
+      j.recommendations.forEach(function (r) {
+        var conf = r.confidence ? '<span class="pill ' + (r.confidence === 'low' ? 'warn' : 'ok') + '" style="font-size:10px;margin-left:8px">' + esc(r.confidence) + '</span>' : '';
+        var ev = Array.isArray(r.evidence) ? r.evidence.map(function (x) { return esc(x); }).join(' · ') : '';
+        cards += '<div class="rec-card"><p><strong>Suggestion</strong>' + conf + '</p><p>' + esc(r.text || '') + '</p><div class="rec-meta">' + ev + '</div></div>';
+      });
+      box.innerHTML = cards;
+      return;
+    }
+    if (j.explanation) {
+      var ex = j.explanation;
+      var hints = ex.suggested_inspection && typeof ex.suggested_inspection === 'object' ? ex.suggested_inspection : {};
+      var hintList = Object.keys(hints).map(function (k) {
+        return '<div class="dl-row"><dt>' + esc(k) + '</dt><dd class="mono-sm">' + esc(hints[k]) + '</dd></div>';
+      }).join('');
+      var sec = Array.isArray(ex.secondary_factors) && ex.secondary_factors.length
+        ? '<p class="muted" style="margin-top:12px"><strong>Also consider:</strong> ' + esc(ex.secondary_factors.join(' · ')) + '</p>'
+        : '';
+      var sim = Array.isArray(ex.similar_cases) && ex.similar_cases.length
+        ? '<h3 class="muted" style="margin:16px 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em">Similar cases</h3><ul style="margin:0;padding-left:18px;color:#cbd5e1;font-size:13px">' +
+          ex.similar_cases.map(function (s) {
+            return '<li>' + fmtWhen(s.uploaded_at) + ' — ' + truncate(s.case_summary_text, 100) + '</li>';
+          }).join('') + '</ul>'
+        : '';
+      box.innerHTML =
+        '<div class="rec-card"><p class="muted" style="margin:0 0 6px">Report <span class="mono-sm">' + esc(ex.report_id) + '</span></p>' +
+        '<p style="font-size:1.05rem;margin:0 0 8px"><strong>Likely focus:</strong> ' + esc(ex.likely_issue || '') + '</p>' +
+        sec +
+        '<h3 class="muted" style="margin:16px 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em">Why</h3><ul style="margin:0;padding-left:18px;font-size:13px">' +
+        (Array.isArray(ex.reasoning) ? ex.reasoning.map(function (x) { return '<li class="mono-sm">' + esc(x) + '</li>'; }).join('') : '') +
+        '</ul>' +
+        (hintList ? '<h3 class="muted" style="margin:16px 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em">Where to look in code</h3>' + hintList : '') +
+        sim +
+        '</div>';
+      return;
+    }
+    if (j.case && typeof j.case === 'object') {
+      var row = j.case;
+      box.innerHTML =
+        '<div class="rec-card"><p class="mono-sm" style="margin:0 0 8px">' + esc(row.report_id) + '</p>' +
+        '<div class="dl-row"><dt>Uploaded</dt><dd>' + fmtWhen(row.uploaded_at) + '</dd></div>' +
+        '<div class="dl-row"><dt>Platform</dt><dd>' + esc(row.platform) + '</dd></div>' +
+        '<div class="dl-row"><dt>Extension</dt><dd>' + esc(row.extension_version) + '</dd></div>' +
+        '<div class="dl-row"><dt>Summary</dt><dd>' + esc(row.case_summary_text) + '</dd></div>' +
+        '<div class="dl-row"><dt>Tags</dt><dd class="mono-sm">' + tagsCell(row.derived_tags) + '</dd></div>' +
+        '<p style="margin-top:12px"><button type="button" class="linkish" id="btnExplainThis">Open plain-language explain</button></p></div>';
+      var bid = row.report_id;
+      $('btnExplainThis').onclick = function () {
+        if (bid) jget('/diag/intel/cases/' + bid + '/explain');
+      };
+      return;
+    }
+    if (j.comparison && typeof j.comparison === 'object') {
+      var cmp = j.comparison;
+      var head = '<p class="muted" style="margin:0 0 12px">Baseline <strong>' + esc(j.baseline_ver) + '</strong> (' + esc(String(cmp.baseline_n)) + ' cases) vs target <strong>' + esc(j.target_ver) + '</strong> (' + esc(String(cmp.target_n)) + ' cases). Filter: <strong>' + esc(String(cmp.filter)) + '</strong>.</p>';
+      if (!cmp.baseline_n || !cmp.target_n) {
+        box.innerHTML = head + '<div class="empty">Not enough cases on one or both versions. Check exact version strings in the database.</div>';
+        return;
+      }
+      var sumList = Array.isArray(cmp.summary) && cmp.summary.length
+        ? '<ul style="margin:0 0 14px;padding-left:18px;font-size:14px">' + cmp.summary.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul>'
+        : '<p class="muted">No metric crossed the “notable change” threshold — open JSON for full deltas.</p>';
+      var md = '<h3 class="muted" style="margin:12px 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em">Metric averages</h3><div style="overflow:auto"><table class="data-table"><thead><tr><th>Metric</th><th>Baseline Ø</th><th>Target Ø</th><th>Note</th></tr></thead><tbody>';
+      (cmp.metric_deltas || []).forEach(function (d) {
+        var label = FIELD_LABELS[d.field] || d.field;
+        var rowCls = d.notable ? ' style="background:rgba(251,191,36,0.06)"' : '';
+        md += '<tr' + rowCls + '><td>' + esc(label) + '</td><td class="mono-sm">' + (d.baseline_mean != null ? esc(d.baseline_mean.toFixed(2)) : '—') + '</td><td class="mono-sm">' + (d.target_mean != null ? esc(d.target_mean.toFixed(2)) : '—') + '</td><td>' + esc(d.note || '') + '</td></tr>';
+      });
+      md += '</tbody></table></div>';
+      var tg = '<h3 class="muted" style="margin:16px 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em">Tag rates</h3><div style="overflow:auto"><table class="data-table"><thead><tr><th>Tag</th><th>Baseline</th><th>Target</th><th>Δ</th></tr></thead><tbody>';
+      (cmp.tag_compare || []).forEach(function (t) {
+        var rowCls = t.notable ? ' style="background:rgba(251,191,36,0.06)"' : '';
+        var dlt = t.delta != null ? (t.delta * 100).toFixed(0) + ' pp' : '—';
+        tg += '<tr' + rowCls + '><td class="mono-sm">' + esc(t.tag) + '</td><td>' + (t.baseline_rate != null ? esc((t.baseline_rate * 100).toFixed(0) + '%') : '—') + '</td><td>' + (t.target_rate != null ? esc((t.target_rate * 100).toFixed(0) + '%') : '—') + '</td><td>' + esc(dlt) + '</td></tr>';
+      });
+      tg += '</tbody></table></div>';
+      box.innerHTML = head + sumList + md + tg;
+      return;
+    }
+    box.innerHTML = '<div class="empty">Received data in an unexpected shape. Expand <em>Raw JSON</em> below.</div>';
+  }
+
+  async function jget(path) {
+    lastPath = path;
+    setLoading();
+    var t0 = performance.now();
+    var status = 0;
+    try {
+      var r = await fetch(path, { headers: authHeaders() });
+      status = r.status;
+      var ms = Math.round(performance.now() - t0);
+      var raw = await r.text();
+      var j;
+      try {
+        j = JSON.parse(raw);
+      } catch (e) {
+        j = { ok: false, parseError: true, bodyPreview: raw.slice(0, 800) };
+      }
+      lastText = JSON.stringify(j, null, 2);
+      $('out').textContent = lastText;
+      $('latencyEl').textContent = ms + ' ms';
+      $('pathEl').textContent = path;
+      setPill(String(r.status) + ' ' + r.statusText, pillForStatus(r.status));
+      $('btnCopy').disabled = !lastText;
+      $('btnDl').disabled = !lastText;
+      if (j && j.ok !== false && j.pagination) lastPagination = j.pagination;
+      else lastPagination = null;
+      renderHuman(j, r.status);
+      $('rawDetails').open = r.status >= 400 || j.parseError;
+    } catch (e) {
+      lastPagination = null;
+      lastText = JSON.stringify({ ok: false, error: 'fetch_failed', detail: String(e && e.message ? e.message : e) }, null, 2);
+      $('out').textContent = lastText;
+      $('latencyEl').textContent = Math.round(performance.now() - t0) + ' ms';
+      $('pathEl').textContent = path;
+      setPill('Network error', 'err');
+      $('btnCopy').disabled = false;
+      $('btnDl').disabled = false;
+      renderHuman(JSON.parse(lastText), 0);
+      $('rawDetails').open = true;
+    }
+  }
+
+  function casesQuery(offset) {
+    var off = offset == null || offset === '' ? 0 : Math.max(0, parseInt(offset, 10) || 0);
+    var limRaw = parseInt(($('fLim').value || '25').trim(), 10) || 25;
+    var lim = Math.min(100, Math.max(1, limRaw));
+    var q = ['limit=' + encodeURIComponent(String(lim)), 'offset=' + encodeURIComponent(String(off))];
+    var ext = ($('fExt').value || '').trim();
+    var plat = ($('fPlat').value || '').trim();
+    var tag = ($('fTag').value || '').trim();
+    var cl = ($('fCluster').value || '').trim();
+    if (ext) q.push('extension_version=' + encodeURIComponent(ext));
+    if (plat) q.push('platform=' + encodeURIComponent(plat));
+    if (tag) q.push('tag=' + encodeURIComponent(tag));
+    if (cl) q.push('cluster=' + encodeURIComponent(cl));
+    return '/diag/intel/cases?' + q.join('&');
+  }
+
+  function searchPath(offset) {
+    var off = offset == null || offset === '' ? 0 : Math.max(0, parseInt(offset, 10) || 0);
+    var raw = ($('sq').value || '').trim();
+    var limRaw = parseInt(($('fSearchLim').value || '25').trim(), 10) || 25;
+    var lim = Math.min(40, Math.max(1, limRaw));
+    return '/diag/intel/search?q=' + encodeURIComponent(raw) + '&limit=' + lim + '&offset=' + off;
+  }
+
+  function clustersPath(offset) {
+    var off = offset == null || offset === '' ? 0 : Math.max(0, parseInt(offset, 10) || 0);
+    var limRaw = parseInt(($('fCLim').value || '25').trim(), 10) || 25;
+    var lim = Math.min(80, Math.max(1, limRaw));
+    return '/diag/intel/clusters?limit=' + lim + '&offset=' + off;
+  }
+
+  document.querySelectorAll('.tabs [role="tab"]').forEach(function (tab) {
+    tab.addEventListener('click', function () {
+      var id = tab.getAttribute('data-tab');
+      document.querySelectorAll('.tabs [role="tab"]').forEach(function (t) {
+        var on = t === tab;
+        t.classList.toggle('active', on);
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      document.querySelectorAll('.tab-panel').forEach(function (p) {
+        var show = p.id === 'panel-' + id;
+        p.classList.toggle('active', show);
+        if (show) p.removeAttribute('hidden'); else p.setAttribute('hidden', '');
+      });
+    });
+  });
+
+  $('humanOut').addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-page]');
+    if (!btn || btn.disabled || !lastPagedFetch || !lastPagination) return;
+    var dir = btn.getAttribute('data-page');
+    var p = lastPagination;
+    if (dir === 'prev') lastPagedFetch(Math.max(0, p.offset - p.limit));
+    else if (dir === 'next' && p.has_more) lastPagedFetch(p.offset + p.limit);
+  });
+
+  $('btnCases').onclick = function () {
+    lastPagedFetch = function (off) {
+      jget(casesQuery(off));
+    };
+    jget(casesQuery(0));
+  };
+  $('btnClusters').onclick = function () {
+    lastPagedFetch = function (off) {
+      jget(clustersPath(off));
+    };
+    jget(clustersPath(0));
+  };
+  $('btnRecs').onclick = function () {
+    lastPagedFetch = null;
+    lastPagination = null;
+    jget('/diag/intel/recommendations?sample=150');
+  };
+  $('btnSearch').onclick = function () {
+    var raw = ($('sq').value || '').trim();
+    if (raw.length < 2) { alert('Enter at least 2 characters'); return; }
+    lastPagedFetch = function (off) {
+      jget(searchPath(off));
+    };
+    jget(searchPath(0));
+  };
+  $('sq').onkeydown = function (e) {
+    if (e.key === 'Enter') $('btnSearch').click();
+  };
+  $('btnReg').onclick = function () {
+    lastPagedFetch = null;
+    lastPagination = null;
+    var bv = encodeURIComponent(($('bv').value || '').trim());
+    var tv = encodeURIComponent(($('tv').value || '').trim());
+    var pf = ($('pf').value || '').trim();
+    if (!bv || !tv) { alert('Baseline and target versions are required'); return; }
+    var u = '/diag/intel/regression?baseline_ver=' + bv + '&target_ver=' + tv;
+    if (pf) u += '&platform=' + encodeURIComponent(pf);
+    jget(u);
+  };
+
+  $('btnCopy').onclick = function () {
+    if (!lastText) return;
+    var btn = $('btnCopy');
+    navigator.clipboard.writeText(lastText).then(function () {
+      var prev = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(function () { btn.textContent = prev; }, 1400);
+    }).catch(function () { alert('Clipboard unavailable'); });
+  };
+  $('btnDl').onclick = function () {
+    if (!lastText) return;
+    var blob = new Blob([lastText], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'playshare-intel-' + (lastPath.replace(/[^a-z0-9]+/gi, '-').slice(0, 48) || 'response') + '.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  var tokEl = $('tok');
+  var remEl = $('rememberTok');
+  try {
+    var saved = sessionStorage.getItem(TOK_KEY);
+    if (saved) { tokEl.value = saved; remEl.checked = true; }
+  } catch (e) {}
+  function persistTok() {
+    try {
+      if (remEl.checked && tokEl.value.trim()) sessionStorage.setItem(TOK_KEY, tokEl.value.trim());
+      else sessionStorage.removeItem(TOK_KEY);
+    } catch (e) {}
+  }
+  tokEl.addEventListener('change', persistTok);
+  remEl.addEventListener('change', persistTok);
+})();
   </script>
 </body>
 </html>`;

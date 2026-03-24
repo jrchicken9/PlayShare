@@ -74,11 +74,17 @@ export function runPlayShareContent() {
     TIME_JUMP_THRESHOLD,
     PLAYBACK_ECHO_SUPPRESS_MS,
     PAUSE_SEEK_OUTBOUND_PLAY_SUPPRESS_MS,
-    SIDEBAR_WIDTH
+    SIDEBAR_WIDTH,
+    DEFAULT_DIAG_UPLOAD_BEARER
   } = PS_C;
   const DIAG_EVENTS = new Set(PS_C.DIAG_EVENT_NAMES);
-  /** Sync diagnostics overlay + floater; `false` in packaged builds via esbuild --define. */
-  const diagnosticsUiEnabled = PLAYSHARE_CONTENT_DIAGNOSTICS;
+  /** `true` only when the content bundle is built with `npm run build:content:dev`. */
+  const DIAGNOSTICS_BUILD = PLAYSHARE_CONTENT_DIAGNOSTICS;
+  /**
+   * Analytics overlay + uploads: dev build AND unpacked extension (`chrome.management` → development).
+   * Store installs never see it, even if a dev bundle were published by mistake.
+   */
+  let diagnosticsUiEnabled = false;
   const platform = PS_C.detectPlatform(hostname);
   const playbackProfile = getPlaybackProfile(hostname, location.pathname);
   const siteSync = getSiteSyncAdapter(hostname, location.pathname);
@@ -224,6 +230,60 @@ export function runPlayShareContent() {
   }
 
   // ── Diagnostic state ───────────────────────────────────────────────────────
+  const EXTENSION_OPS_DEFAULTS = {
+    syncStateInbound: 0,
+    syncStateApplied: 0,
+    syncStateDeferredNoVideo: 0,
+    syncStateDeferredStaleOrMissing: 0,
+    syncStateDeniedSyncLock: 0,
+    syncStateDeniedPlaybackDebounce: 0,
+    remoteApplyDeniedSyncLock: 0,
+    remoteApplyDeniedPlaybackDebounce: 0,
+    remoteApplyDeferredTabHidden: 0,
+    localControlBlockedHostOnly: 0,
+    syncStateFlushedOnVideoAttach: 0,
+    hostPlaybackPositionSent: 0,
+    viewerSyncRequestSent: 0,
+    countdownStartRemote: 0,
+    serverErrors: 0,
+    wsDisconnectEvents: 0,
+    chatReceived: 0,
+    systemMsgsReceived: 0,
+    playbackSystemMsgsDeduped: 0,
+    positionReportSent: 0,
+    positionSnapshotInbound: 0,
+    drmSyncPromptsShown: 0,
+    drmSyncConfirmed: 0,
+    drmSeekSkippedUnderThreshold: 0,
+    syncStateHeldForAd: 0,
+    remotePlayHeldForAd: 0,
+    remoteSeekHeldForAd: 0,
+    remoteApplyIgnoredLocalAd: 0,
+    syncStateIgnoredLocalAd: 0,
+    playbackOutboundSuppressedLocalAd: 0,
+    syncStateSkippedRedundant: 0,
+    remoteSeekSuppressedDecision: 0,
+    remoteSeekSuppressedVideoSeeking: 0,
+    syncDecisionRejectedReconnectSettle: 0,
+    syncDecisionRejectedCooldown: 0,
+    syncDecisionRejectedServerAdMode: 0,
+    syncDecisionRejectedConverging: 0,
+    syncDecisionNetflixSafetyNoop: 0,
+    softDriftPlaybackStarts: 0,
+    softDriftPlaybackResets: 0
+  };
+  const MESSAGING_DEFAULTS = {
+    runtimeSendFailures: 0,
+    runtimeLastErrorAt: null,
+    runtimeLastErrorMessage: null,
+    sendThrowCount: 0
+  };
+  const extensionOpsStore = { ...EXTENSION_OPS_DEFAULTS };
+  const messagingStore = { ...MESSAGING_DEFAULTS };
+
+  /** True while profiler is recording or until a successful upload clears the stopped session. */
+  let diagExportAccumulateActive = () => false;
+
   const diag = {
     connectionStatus: 'unknown',
     connectionMessage: '',
@@ -285,62 +345,16 @@ export function runPlayShareContent() {
     /** True when joiner is holding SYNC_STATE until <video> attaches. */
     pendingSyncStateQueued: false,
     /**
-     * Content-script bridge counters (this tab only): sync state handling, host/viewer keepalive sends, chat, etc.
+     * Content-script bridge counters (this tab only). Writes are ignored unless
+     * `diagExportAccumulateActive()` (profiler recording, or stopped session pending upload).
      */
-    extensionOps: {
-      syncStateInbound: 0,
-      syncStateApplied: 0,
-      syncStateDeferredNoVideo: 0,
-      syncStateDeferredStaleOrMissing: 0,
-      syncStateDeniedSyncLock: 0,
-      syncStateDeniedPlaybackDebounce: 0,
-      remoteApplyDeniedSyncLock: 0,
-      remoteApplyDeniedPlaybackDebounce: 0,
-      remoteApplyDeferredTabHidden: 0,
-      localControlBlockedHostOnly: 0,
-      syncStateFlushedOnVideoAttach: 0,
-      hostPlaybackPositionSent: 0,
-      viewerSyncRequestSent: 0,
-      countdownStartRemote: 0,
-      serverErrors: 0,
-      wsDisconnectEvents: 0,
-      chatReceived: 0,
-      systemMsgsReceived: 0,
-      playbackSystemMsgsDeduped: 0,
-      positionReportSent: 0,
-      positionSnapshotInbound: 0,
-      drmSyncPromptsShown: 0,
-      drmSyncConfirmed: 0,
-      drmSeekSkippedUnderThreshold: 0,
-      syncStateHeldForAd: 0,
-      remotePlayHeldForAd: 0,
-      remoteSeekHeldForAd: 0,
-      /** Inbound PLAY/PAUSE/SEEK/SYNC_STATE ignored while our detector says we’re in a local ad. */
-      remoteApplyIgnoredLocalAd: 0,
-      syncStateIgnoredLocalAd: 0,
-      /** Outbound play/pause/seek not sent during local ad (avoids pausing a peer who is also in an ad). */
-      playbackOutboundSuppressedLocalAd: 0,
-      /** Viewer: SYNC_STATE dropped — already within sync threshold and play state matches. */
-      syncStateSkippedRedundant: 0,
-      remoteSeekSuppressedDecision: 0,
-      remoteSeekSuppressedVideoSeeking: 0,
-      syncDecisionRejectedReconnectSettle: 0,
-      syncDecisionRejectedCooldown: 0,
-      syncDecisionRejectedServerAdMode: 0,
-      syncDecisionRejectedConverging: 0,
-      syncDecisionNetflixSafetyNoop: 0,
-      softDriftPlaybackStarts: 0,
-      softDriftPlaybackResets: 0
-    },
+    extensionOps: extensionOpsStore,
     /** Latest GET_DIAG.transport from the service worker (WebSocket lifecycle). */
     serviceWorkerTransport: null,
-    /** chrome.runtime.sendMessage failures (tab → service worker). */
-    messaging: {
-      runtimeSendFailures: 0,
-      runtimeLastErrorAt: null,
-      runtimeLastErrorMessage: null,
-      sendThrowCount: 0
-    },
+    /** chrome.runtime.sendMessage failures — gated like extensionOps. */
+    messaging: messagingStore,
+    /** After Stop until successful DB upload (or Clear); keeps export buffers warm for Send/auto-send. */
+    profilerExportPending: false,
     /**
      * `<video>` rebuffering signals (CDN / adaptive vs sync). Counts persist until reset.
      */
@@ -438,6 +452,8 @@ export function runPlayShareContent() {
 
   /** Floating HUD on Prime pages when enabled in extension popup (`primeSyncDebugHud`). */
   let primeSyncDebugHud = false;
+  /** Unpacked “Load unpacked” install only — gates Prime dev HUD and `window.__playsharePrime`. */
+  let playShareDevelopmentInstall = false;
   /** @type {ReturnType<typeof setInterval>|null} */
   let primeTelemetryTimer = null;
   /** @type {HTMLDivElement|null} */
@@ -555,6 +571,14 @@ export function runPlayShareContent() {
     }, PRIME_TELEMETRY_MS);
   }
 
+  function refreshPrimeDebugHudFromStorage() {
+    if (siteSync.key !== 'prime') return;
+    chrome.storage.local.get({ [PRIME_SYNC_DEBUG_STORAGE_KEY]: false }, (d) => {
+      primeSyncDebugHud = playShareDevelopmentInstall && !!d[PRIME_SYNC_DEBUG_STORAGE_KEY];
+      updatePrimeHudVisibility();
+    });
+  }
+
   let diagDebounceTimer = null;
   function scheduleDiagUpdate() {
     if (!diagVisible || diagDebounceTimer) return;
@@ -565,6 +589,7 @@ export function runPlayShareContent() {
   }
 
   function diagLog(event, detail) {
+    if (!diagExportAccumulateActive() && event !== 'ERROR') return;
     const entry = { t: Date.now(), event, detail };
     diag.lastEvent = entry;
     if (event === 'ERROR') {
@@ -583,6 +608,7 @@ export function runPlayShareContent() {
   }
 
   function syncDiagRecord(opts) {
+    if (!diagExportAccumulateActive()) return;
     const s = diag.sync;
     const entry = { t: Date.now(), ...opts };
     s.events.unshift(entry);
@@ -700,6 +726,11 @@ export function runPlayShareContent() {
    * @param {Record<string, unknown>} msg
    */
   function ingestPeerRecordingSample(msg) {
+    try {
+      if (!getVideoProfiler().isRecording()) return;
+    } catch {
+      return;
+    }
     if (!roomState || msg.collectorClientId !== roomState.clientId) return;
     const from = /** @type {string|undefined} */ (msg.fromClientId);
     if (!from || from === roomState.clientId) return;
@@ -726,7 +757,7 @@ export function runPlayShareContent() {
   function invalidateVideoCache() {
     cachedVideoEl = null;
     cachedVideoDoc = null;
-    diag.findVideo.invalidations++;
+    if (diagExportAccumulateActive()) diag.findVideo.invalidations++;
   }
 
   function findVideo() {
@@ -739,14 +770,14 @@ export function runPlayShareContent() {
           if (siteSync.shouldRefreshVideoCache?.(cachedVideoEl)) {
             invalidateVideoCache();
           } else {
-            diag.findVideo.cacheReturns++;
+            if (diagExportAccumulateActive()) diag.findVideo.cacheReturns++;
             return cachedVideoEl;
           }
         }
       } catch {}
       invalidateVideoCache();
     }
-    diag.findVideo.fullScans++;
+    if (diagExportAccumulateActive()) diag.findVideo.fullScans++;
     if (diag.primeSync) diag.primeSync.selectorThatMatched = null;
     function findInRoot(root, maxDepth = 3) {
       const v = root.querySelector?.('video');
@@ -881,7 +912,7 @@ export function runPlayShareContent() {
     video.addEventListener('waiting', onVideoWaiting);
     video.addEventListener('stalled', onVideoStalled);
     diag.videoAttached = true;
-    diag.findVideo.videoAttachCount++;
+    if (diagExportAccumulateActive()) diag.findVideo.videoAttachCount++;
     if (roomState?.isHost) {
       sendBg({ source: 'playshare', type: 'SET_ROOM_VIDEO_URL', videoUrl: location.href });
       roomState.videoUrl = location.href;
@@ -1117,6 +1148,51 @@ export function runPlayShareContent() {
       });
     }
     return videoProfilerController;
+  }
+
+  diagExportAccumulateActive = function diagExportAccumulateActiveImpl() {
+    try {
+      if (getVideoProfiler().isRecording()) return true;
+    } catch {
+      /* ignore */
+    }
+    return !!diag.profilerExportPending;
+  };
+
+  diag.extensionOps = new Proxy(extensionOpsStore, {
+    set(target, prop, value, receiver) {
+      if (!diagExportAccumulateActive()) return true;
+      return Reflect.set(target, prop, value, receiver);
+    },
+    get(target, prop, receiver) {
+      return Reflect.get(target, prop, receiver);
+    }
+  });
+
+  diag.messaging = new Proxy(messagingStore, {
+    set(target, prop, value, receiver) {
+      if (!diagExportAccumulateActive()) return true;
+      return Reflect.set(target, prop, value, receiver);
+    },
+    get(target, prop, receiver) {
+      return Reflect.get(target, prop, receiver);
+    }
+  });
+
+  function maybeSetPlaybackDiagRtt(ms, src) {
+    if (!diagExportAccumulateActive()) return;
+    diag.timing.lastRttMs = ms;
+    diag.timing.lastRttSource = src;
+  }
+
+  function maybeUpdateDriftEwm(sampleSec, alpha) {
+    if (!diagExportAccumulateActive()) return;
+    updateDriftEwm(diag.timing, sampleSec, alpha);
+  }
+
+  function recordDiagTimeline(timeline, entry, maxLen) {
+    if (!diagExportAccumulateActive()) return;
+    pushDiagTimeline(timeline, entry, maxLen);
   }
 
   function profilerIfRecording(fn) {
@@ -2126,6 +2202,7 @@ export function runPlayShareContent() {
   }
 
   function onVideoWaiting() {
+    if (!diagExportAccumulateActive()) return;
     const vb = diag.videoBuffering;
     vb.waiting++;
     vb.lastWaitingAt = Date.now();
@@ -2133,6 +2210,7 @@ export function runPlayShareContent() {
   }
 
   function onVideoStalled() {
+    if (!diagExportAccumulateActive()) return;
     const vb = diag.videoBuffering;
     vb.stalled++;
     vb.lastStalledAt = Date.now();
@@ -2200,7 +2278,12 @@ export function runPlayShareContent() {
         const rate = video.playbackRate || 1;
         const expectedAdvance = video.paused ? 0 : dtWallSec * rate;
         const dynamicTuThreshold = Math.max(tuJump, expectedAdvance + 0.5);
-        if (typeof prev === 'number' && prev >= 0 && Math.abs(tj - prev) > dynamicTuThreshold) {
+        if (
+          diagExportAccumulateActive() &&
+          typeof prev === 'number' &&
+          prev >= 0 &&
+          Math.abs(tj - prev) > dynamicTuThreshold
+        ) {
           diag.timeupdateJumps.unshift({ t: nowJ, from: prev, to: tj, deltaSec: +(tj - prev).toFixed(2) });
           if (diag.timeupdateJumps.length > 20) diag.timeupdateJumps.pop();
         }
@@ -2434,8 +2517,7 @@ export function runPlayShareContent() {
     }
     const recvAt = Date.now();
     if (typeof lastRtt === 'number' && lastRtt > 0) {
-      diag.timing.lastRttMs = lastRtt;
-      diag.timing.lastRttSource = 'playback';
+      maybeSetPlaybackDiagRtt(lastRtt, 'playback');
     }
     // Prefer RTT/2 (clock-skew safe) over recvAt-sentAt (assumes synced clocks)
     let targetTime = currentTime;
@@ -2484,7 +2566,7 @@ export function runPlayShareContent() {
       }
     }
     clearRemotePlaybackDebouncedQueue();
-    pushDiagTimeline(diag.timing.timeline, {
+    recordDiagTimeline(diag.timing.timeline, {
       kind: 'play_recv',
       correlationId: correlationId || null,
       targetTime,
@@ -2544,8 +2626,8 @@ export function runPlayShareContent() {
           const ok = v2 && !v2.paused;
           const latency = Date.now() - recvAt;
           const driftAfter = v2 ? Math.abs(v2.currentTime - targetTime) : null;
-          if (driftAfter != null) updateDriftEwm(diag.timing, driftAfter);
-          pushDiagTimeline(diag.timing.timeline, {
+          if (driftAfter != null) maybeUpdateDriftEwm( driftAfter);
+          recordDiagTimeline(diag.timing.timeline, {
             kind: ok ? 'play_apply_ok' : 'play_apply_fail',
             correlationId: correlationId || null,
             driftSec: driftAfter,
@@ -2614,8 +2696,7 @@ export function runPlayShareContent() {
       ingestHostAuthoritativeSync(currentTime, false, recvAt);
     }
     if (typeof lastRtt === 'number' && lastRtt > 0) {
-      diag.timing.lastRttMs = lastRtt;
-      diag.timing.lastRttSource = 'playback';
+      maybeSetPlaybackDiagRtt(lastRtt, 'playback');
     }
     profilerEmitDecision('remote_correction_received', {
       remoteKind: 'PAUSE',
@@ -2649,7 +2730,7 @@ export function runPlayShareContent() {
       }
     }
     clearRemotePlaybackDebouncedQueue();
-    pushDiagTimeline(diag.timing.timeline, { kind: 'pause_recv', correlationId: correlationId || null, currentTime, serverTime, recvAt, rttMs: lastRtt });
+    recordDiagTimeline(diag.timing.timeline, { kind: 'pause_recv', correlationId: correlationId || null, currentTime, serverTime, recvAt, rttMs: lastRtt });
     syncDiagRecord({ type: 'pause_recv', currentTime, fromUsername, drift: Math.abs(video.currentTime - currentTime), correlationId });
     lastAppliedState = { currentTime, playing: false };
     lastSentTime = currentTime;  // prevent echo when our pause event fires after apply
@@ -2704,8 +2785,8 @@ export function runPlayShareContent() {
         const ok = v2 && v2.paused;
         const latency = Date.now() - recvAt;
         const driftAfter = v2 ? Math.abs(v2.currentTime - currentTime) : null;
-        if (driftAfter != null) updateDriftEwm(diag.timing, driftAfter);
-        pushDiagTimeline(diag.timing.timeline, {
+        if (driftAfter != null) maybeUpdateDriftEwm( driftAfter);
+        recordDiagTimeline(diag.timing.timeline, {
           kind: ok ? 'pause_apply_ok' : 'pause_apply_fail',
           correlationId: correlationId || null,
           driftSec: driftAfter,
@@ -2790,15 +2871,14 @@ export function runPlayShareContent() {
     }
     const recvAt = Date.now();
     if (typeof lastRtt === 'number' && lastRtt > 0) {
-      diag.timing.lastRttMs = lastRtt;
-      diag.timing.lastRttSource = 'playback';
+      maybeSetPlaybackDiagRtt(lastRtt, 'playback');
     }
     profilerEmitDecision('remote_correction_received', {
       remoteKind: 'SEEK',
       driftSec: Math.abs(video.currentTime - currentTime),
       handlerKey: playbackProfile.handlerKey
     });
-    pushDiagTimeline(diag.timing.timeline, { kind: 'seek_recv', correlationId: correlationId || null, currentTime, serverTime, recvAt, rttMs: lastRtt });
+    recordDiagTimeline(diag.timing.timeline, { kind: 'seek_recv', correlationId: correlationId || null, currentTime, serverTime, recvAt, rttMs: lastRtt });
     syncDiagRecord({ type: 'seek_recv', currentTime, fromUsername, drift: Math.abs(video.currentTime - currentTime), correlationId });
     if (!roomState?.isHost) {
       ingestHostAuthoritativeSync(currentTime, lastAppliedState.playing, recvAt);
@@ -2891,8 +2971,8 @@ export function runPlayShareContent() {
         const ok = v2 && Math.abs(v2.currentTime - currentTime) < 1;
         const latency = Date.now() - recvAt;
         const driftAfter = v2 ? Math.abs(v2.currentTime - currentTime) : null;
-        if (driftAfter != null) updateDriftEwm(diag.timing, driftAfter);
-        pushDiagTimeline(diag.timing.timeline, {
+        if (driftAfter != null) maybeUpdateDriftEwm( driftAfter);
+        recordDiagTimeline(diag.timing.timeline, {
           kind: ok ? 'seek_apply_ok' : 'seek_apply_fail',
           correlationId: correlationId || null,
           driftSec: driftAfter,
@@ -3058,7 +3138,7 @@ export function runPlayShareContent() {
       if (state.playing) startViewerSyncInterval();
       else stopViewerSyncInterval();
       const driftW = Math.abs(video.currentTime - targetTime);
-      updateDriftEwm(diag.timing, driftW);
+      maybeUpdateDriftEwm( driftW);
       postSidebar({ type: 'SYNC_QUALITY', drift: driftW });
       diag.extensionOps.syncStateApplied++;
       profilerEmitDecision('remote_correction_applied', {
@@ -3093,7 +3173,7 @@ export function runPlayShareContent() {
     if (!playbackProfile.drmPassive && !roomState?.isHost && !playMismatch && driftBefore <= effectiveSyncThreshold) {
       if (state.playing) startViewerSyncInterval();
       else stopViewerSyncInterval();
-      updateDriftEwm(diag.timing, driftBefore);
+      maybeUpdateDriftEwm( driftBefore);
       postSidebar({ type: 'SYNC_QUALITY', drift: driftBefore });
       diag.extensionOps.syncStateSkippedRedundant++;
       profilerEmitDecision('no_op_selected', {
@@ -3116,8 +3196,8 @@ export function runPlayShareContent() {
       if (!playMismatch && driftBefore <= effectiveSyncThreshold) {
         if (state.playing) startViewerSyncInterval();
         else stopViewerSyncInterval();
-        updateDriftEwm(diag.timing, driftBefore);
-        pushDiagTimeline(diag.timing.timeline, {
+        maybeUpdateDriftEwm( driftBefore);
+        recordDiagTimeline(diag.timing.timeline, {
           kind: 'sync_state_passive_ok',
           computedAt: state.computedAt ?? null,
           sentAt: state.sentAt ?? null,
@@ -3161,8 +3241,8 @@ export function runPlayShareContent() {
           if (state.playing) startViewerSyncInterval();
           else stopViewerSyncInterval();
           const postDrift = Math.abs(v.currentTime - applyTarget);
-          updateDriftEwm(diag.timing, postDrift);
-          pushDiagTimeline(diag.timing.timeline, {
+          maybeUpdateDriftEwm( postDrift);
+          recordDiagTimeline(diag.timing.timeline, {
             kind: 'sync_state_applied',
             computedAt: state.computedAt ?? null,
             sentAt: state.sentAt ?? null,
@@ -3241,8 +3321,8 @@ export function runPlayShareContent() {
         }
       });
       const postDrift = Math.abs(v.currentTime - applyTarget);
-      updateDriftEwm(diag.timing, postDrift);
-      pushDiagTimeline(diag.timing.timeline, {
+      maybeUpdateDriftEwm( postDrift);
+      recordDiagTimeline(diag.timing.timeline, {
         kind: 'sync_state_applied',
         computedAt: state.computedAt ?? null,
         sentAt: state.sentAt ?? null,
@@ -3552,6 +3632,7 @@ export function runPlayShareContent() {
         break;
 
       case 'DIAG_SYNC_APPLY_RESULT': {
+        if (!diagExportAccumulateActive()) break;
         if (msg.targetClientId === roomState?.clientId) {
           const s = diag.sync;
           s.remoteApplyResults.unshift({
@@ -3570,6 +3651,7 @@ export function runPlayShareContent() {
       }
 
       case 'DIAG_ROOM_TRACE': {
+        if (!diagExportAccumulateActive()) break;
         if (msg.entries && Array.isArray(msg.entries)) {
           diag.serverRoomTrace = msg.entries.slice(-40);
           diag.serverRoomTraceAt = Date.now();
@@ -3583,6 +3665,7 @@ export function runPlayShareContent() {
         break;
 
       case 'DIAG_SYNC_REPORT': {
+        if (!diagExportAccumulateActive()) break;
         if (msg.clientId && msg.clientId !== roomState?.clientId) {
           diag.sync.peerReports[msg.clientId] = {
             username: msg.username,
@@ -4019,6 +4102,7 @@ export function runPlayShareContent() {
   }
 
   function recordMemberChronology(kind, detail) {
+    if (!diagExportAccumulateActive()) return;
     const s = diag.sync;
     const row = { t: Date.now(), kind, ...detail };
     s.memberTimeline.unshift(row);
@@ -4030,9 +4114,9 @@ export function runPlayShareContent() {
     if (res.connectionStatus) diag.connectionStatus = res.connectionStatus;
     if (typeof res.connectionMessage === 'string') diag.connectionMessage = res.connectionMessage;
     if (typeof res.transportPhase === 'string') diag.transportPhase = res.transportPhase;
+    if (!diagExportAccumulateActive()) return;
     if (typeof res.lastRttMs === 'number' && res.lastRttMs > 0) {
-      diag.timing.lastRttMs = res.lastRttMs;
-      diag.timing.lastRttSource = 'background_heartbeat';
+      maybeSetPlaybackDiagRtt(res.lastRttMs, 'background_heartbeat');
     }
     if (res.transport && typeof res.transport === 'object') {
       diag.serviceWorkerTransport = { ...res.transport };
@@ -4090,6 +4174,7 @@ export function runPlayShareContent() {
   }
 
   function resetSyncMetrics() {
+    diag.profilerExportPending = false;
     const s = diag.sync;
     s.events = [];
     s.metrics = { playSent: 0, playRecv: 0, playOk: 0, playFail: 0, pauseSent: 0, pauseRecv: 0, pauseOk: 0, pauseFail: 0, seekSent: 0, seekRecv: 0, seekOk: 0, seekFail: 0 };
@@ -4105,38 +4190,8 @@ export function runPlayShareContent() {
     s.testHistory = [];
     s.memberTimeline = [];
     diag.findVideo = { cacheReturns: 0, fullScans: 0, invalidations: 0, videoAttachCount: diag.findVideo.videoAttachCount };
-    diag.extensionOps = {
-      syncStateInbound: 0,
-      syncStateApplied: 0,
-      syncStateDeferredNoVideo: 0,
-      syncStateDeferredStaleOrMissing: 0,
-      syncStateDeniedSyncLock: 0,
-      syncStateDeniedPlaybackDebounce: 0,
-      remoteApplyDeniedSyncLock: 0,
-      remoteApplyDeniedPlaybackDebounce: 0,
-      remoteApplyDeferredTabHidden: 0,
-      localControlBlockedHostOnly: 0,
-      syncStateFlushedOnVideoAttach: 0,
-      hostPlaybackPositionSent: 0,
-      viewerSyncRequestSent: 0,
-      countdownStartRemote: 0,
-      serverErrors: 0,
-      wsDisconnectEvents: 0,
-      chatReceived: 0,
-      systemMsgsReceived: 0,
-      playbackSystemMsgsDeduped: 0,
-      positionReportSent: 0,
-      positionSnapshotInbound: 0,
-      drmSyncPromptsShown: 0,
-      drmSyncConfirmed: 0,
-      drmSeekSkippedUnderThreshold: 0
-    };
-    diag.messaging = {
-      runtimeSendFailures: 0,
-      runtimeLastErrorAt: null,
-      runtimeLastErrorMessage: null,
-      sendThrowCount: 0
-    };
+    Object.assign(extensionOpsStore, EXTENSION_OPS_DEFAULTS);
+    Object.assign(messagingStore, MESSAGING_DEFAULTS);
     diag.videoBuffering = {
       waiting: 0,
       stalled: 0,
@@ -4621,7 +4676,7 @@ export function runPlayShareContent() {
       includeVideoFrame: !!opts.includeProfilerVideoFrame
     });
     let primeSiteDebug = null;
-    if (siteSync.key === 'prime') {
+    if (siteSync.key === 'prime' && diagExportAccumulateActive()) {
       try {
         const bundle = await buildPrimePlayerSyncExportBundle();
         if (bundle) primeSiteDebug = bundle.payload;
@@ -4691,7 +4746,6 @@ export function runPlayShareContent() {
       showToast('Turn on “Allow uploads to my server” first, then try again.');
       return;
     }
-    await prepareDiagnosticSnapshotForExport();
     const payload = await getUnifiedPlayShareExportPayload({ compactProfiler: true });
     mergeEnrichmentForDiagUpload(payload);
     let ver = '1.0.0';
@@ -4734,6 +4788,7 @@ export function runPlayShareContent() {
               ? `Anonymized report uploaded · ${String(res.reportId).slice(0, 8)}…`
               : `Report accepted · ${String(res.reportId).slice(0, 8)}… (server storage not configured)`
           );
+          if (res.persisted === true) resetCapturedDiagnosticSessionAfterUpload();
         } else {
           diagLog('ERROR', {
             message: res?.error || res?.detail || 'Upload rejected',
@@ -4753,7 +4808,22 @@ export function runPlayShareContent() {
               : st === 503
                 ? ' Server misconfigured or unavailable (check Railway logs).'
                 : '';
-          showToast(`Upload failed${st ? ` (${st})` : ''}${errCode ? `: ${errCode}` : ''}.${u404}${u503}`);
+          const u401 =
+            st === 401 && /unauthorized/i.test(String(errCode))
+              ? ' Paste the same value as Railway PLAYSHARE_DIAG_UPLOAD_SECRET into Analytics → “Upload token”, or remove that env var on the server.'
+              : '';
+          const u500store =
+            st === 500 && /storage_failed|summary_failed/i.test(String(errCode))
+              ? ' In Supabase SQL editor, run migrations under supabase/migrations (diag_reports_raw, diag_reports_summary, …). Confirm Railway SUPABASE_URL matches that project. See Railway logs for the exact Postgres error.'
+              : '';
+          const detailStr = res?.detail != null ? String(res.detail).trim() : '';
+          const detailHint =
+            detailStr.length > 0
+              ? ` — ${detailStr.slice(0, 140)}${detailStr.length > 140 ? '…' : ''}`
+              : '';
+          showToast(
+            `Upload failed${st ? ` (${st})` : ''}${errCode ? `: ${errCode}` : ''}${detailHint}.${u404}${u503}${u401}${u500store}`
+          );
         }
       }
     );
@@ -4781,6 +4851,8 @@ export function runPlayShareContent() {
       diagLog('ERROR', { message: 'Video profiler: no <video> — start playback first' });
       return;
     }
+    resetSyncMetrics();
+    diag.profilerExportPending = false;
     diag.peerRecordingSamples.byClient = {};
     getVideoProfiler().start();
     broadcastProfilerCollectionState(true);
@@ -4791,10 +4863,29 @@ export function runPlayShareContent() {
   function stopVideoProfilerSession() {
     const wasRec = getVideoProfiler().isRecording();
     getVideoProfiler().stop();
+    if (wasRec) diag.profilerExportPending = true;
     if (wasRec) broadcastProfilerCollectionState(false);
     diagLog('DIAG', { videoProfiler: 'stopped' });
     updateDiagnosticOverlay();
     if (wasRec) void maybeAutoUploadAfterProfilerStop();
+  }
+
+  /**
+   * After the server persists the report (`persisted: true`), drop profiler snapshots, peer samples,
+   * and export snapshot context so the same recording is not uploaded again. If `persisted` is false
+   * (e.g. Supabase not configured), local capture is kept so you can fix the server and resend.
+   */
+  function resetCapturedDiagnosticSessionAfterUpload() {
+    diag.profilerExportPending = false;
+    const wasRec = getVideoProfiler().isRecording();
+    getVideoProfiler().clearSession();
+    if (wasRec) broadcastProfilerCollectionState(false);
+    stopPeerRecordingSampleLoop();
+    diag.profilerPeerCollection.remoteCollectorClientId = null;
+    diag.peerRecordingSamples.byClient = {};
+    diagExportCaptureContext = null;
+    diagLog('DIAG_UPLOAD', { clearedLocalCapture: true });
+    updateDiagnosticOverlay();
   }
 
   /** When opt-in + auto-upload are enabled, send compact anonymized bundle to server after stop. */
@@ -4811,11 +4902,14 @@ export function runPlayShareContent() {
   }
 
   function clearVideoProfilerSession() {
+    diag.profilerExportPending = false;
     const wasRec = getVideoProfiler().isRecording();
     getVideoProfiler().clearSession();
     if (wasRec) broadcastProfilerCollectionState(false);
     stopPeerRecordingSampleLoop();
     diag.profilerPeerCollection.remoteCollectorClientId = null;
+    diag.peerRecordingSamples.byClient = {};
+    diagExportCaptureContext = null;
     diagLog('DIAG', { videoProfiler: 'cleared' });
     updateDiagnosticOverlay();
   }
@@ -5080,6 +5174,24 @@ export function runPlayShareContent() {
           }
           if (!uploadOpt?.checked) auto = false;
           chrome.storage.local.set({ playshare_diag_auto_upload_on_stop: auto });
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const uploadBearerInp = diagPanel.querySelector('#diagUploadBearer');
+    if (uploadBearerInp && !uploadBearerInp.dataset.bound) {
+      uploadBearerInp.dataset.bound = '1';
+      try {
+        chrome.storage.local.get(['playshare_diag_upload_bearer'], (r) => {
+          const stored = r.playshare_diag_upload_bearer != null ? String(r.playshare_diag_upload_bearer).trim() : '';
+          uploadBearerInp.value = stored || DEFAULT_DIAG_UPLOAD_BEARER;
+        });
+        uploadBearerInp.addEventListener('change', () => {
+          const t = String(uploadBearerInp.value || '').trim();
+          if (!t || t === DEFAULT_DIAG_UPLOAD_BEARER) chrome.storage.local.remove('playshare_diag_upload_bearer');
+          else chrome.storage.local.set({ playshare_diag_upload_bearer: t });
         });
       } catch {
         /* ignore */
@@ -5604,6 +5716,51 @@ export function runPlayShareContent() {
     if (siteSync.key === 'prime') syncPrimeTelemetryPolling();
   }
 
+  function mountDeveloperDiagnosticsUi() {
+    if (diagToggleBtn) return;
+    diagToggleBtn = document.createElement('button');
+    diagToggleBtn.id = 'ws-diag-toggle';
+    diagToggleBtn.title = 'Analytics & intelligence (dev) — Ctrl+Shift+D';
+    diagToggleBtn.textContent = '◆';
+    diagToggleBtn.style.cssText = `
+    position:fixed;bottom:16px;left:16px;z-index:2147483646;
+    width:40px;height:40px;border-radius:12px;
+    background:linear-gradient(165deg, rgba(22,26,34,0.96) 0%, rgba(10,12,16,0.98) 100%);
+    border:1px solid rgba(34,211,238,0.28);
+    color:#22d3ee;font-size:14px;line-height:1;cursor:pointer;font-weight:700;
+    display:flex;align-items:center;justify-content:center;
+    transition:background 0.2s,border-color 0.2s,color 0.2s,transform 0.15s,box-shadow 0.2s;
+    box-shadow:0 4px 20px rgba(0,0,0,0.45),0 0 24px -6px rgba(34,211,238,0.25);
+  `;
+    diagToggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleDiagnostic();
+    });
+    diagToggleBtn.addEventListener('mouseenter', () => {
+      diagToggleBtn.style.background = 'linear-gradient(165deg, rgba(30,40,48,0.98) 0%, rgba(15,20,28,0.99) 100%)';
+      diagToggleBtn.style.borderColor = 'rgba(34,211,238,0.5)';
+      diagToggleBtn.style.color = '#67e8f9';
+      diagToggleBtn.style.transform = 'translateY(-2px)';
+      diagToggleBtn.style.boxShadow = '0 8px 28px rgba(0,0,0,0.5),0 0 32px -4px rgba(34,211,238,0.35)';
+    });
+    diagToggleBtn.addEventListener('mouseleave', () => {
+      diagToggleBtn.style.background = 'linear-gradient(165deg, rgba(22,26,34,0.96) 0%, rgba(10,12,16,0.98) 100%)';
+      diagToggleBtn.style.borderColor = 'rgba(34,211,238,0.28)';
+      diagToggleBtn.style.color = '#22d3ee';
+      diagToggleBtn.style.transform = 'translateY(0)';
+      diagToggleBtn.style.boxShadow = '0 4px 20px rgba(0,0,0,0.45),0 0 24px -6px rgba(34,211,238,0.25)';
+    });
+    document.body.appendChild(diagToggleBtn);
+    reparentPlayShareUiForFullscreen();
+
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'D') {
+        e.preventDefault();
+        toggleDiagnostic();
+      }
+    });
+  }
+
   function injectDiagnosticOverlay() {
     if (!diagnosticsUiEnabled || diagOverlay) return;
 
@@ -5664,6 +5821,11 @@ export function runPlayShareContent() {
           <div class="ws-diag-report-divider ws-diag-unified-divider" aria-hidden="true"></div>
           <label class="ws-diag-simple-check"><input type="checkbox" id="diagUploadOptIn" /><span>Allow uploads to my server</span></label>
           <label class="ws-diag-simple-check"><input type="checkbox" id="diagUploadAutoStop" /><span>Send automatically when I stop recording</span></label>
+          <div class="ws-diag-upload-token-block">
+            <label class="ws-diag-filter-label" for="diagUploadBearer">Upload token</label>
+            <input type="text" id="diagUploadBearer" class="ws-diag-filter" placeholder="Same as PLAYSHARE_DIAG_UPLOAD_SECRET on your server" autocomplete="off" spellcheck="false" />
+            <p class="ws-diag-simple-card-sub ws-diag-upload-token-hint">If your server has no upload secret, leave this empty.</p>
+          </div>
           <button type="button" class="ws-diag-btn ws-diag-btn-primary ws-diag-btn-sm ws-diag-unified-send-btn" id="diagUploadAnonymized">Send now</button>
         </div>
 
@@ -6924,6 +7086,9 @@ export function runPlayShareContent() {
         cursor:pointer;
       }
       .ws-diag-simple-check input { margin-top:2px; flex-shrink:0; }
+      .ws-diag-upload-token-block { margin-top:10px; }
+      .ws-diag-upload-token-block .ws-diag-filter { width:100%; max-width:100%; box-sizing:border-box; }
+      .ws-diag-upload-token-hint { margin:4px 0 0 !important; font-size:10px !important; }
       .ws-diag-code-inline {
         font-size:10px;
         padding:1px 4px;
@@ -6964,47 +7129,6 @@ export function runPlayShareContent() {
       .ws-diag-simple-more summary { font-size:11px; }
     `;
     document.head.appendChild(diagStyles);
-  }
-
-  if (diagnosticsUiEnabled) {
-    diagToggleBtn = document.createElement('button');
-    diagToggleBtn.id = 'ws-diag-toggle';
-    diagToggleBtn.title = 'Analytics & intelligence (dev) — Ctrl+Shift+D';
-    diagToggleBtn.textContent = '◆';
-    diagToggleBtn.style.cssText = `
-    position:fixed;bottom:16px;left:16px;z-index:2147483646;
-    width:40px;height:40px;border-radius:12px;
-    background:linear-gradient(165deg, rgba(22,26,34,0.96) 0%, rgba(10,12,16,0.98) 100%);
-    border:1px solid rgba(34,211,238,0.28);
-    color:#22d3ee;font-size:14px;line-height:1;cursor:pointer;font-weight:700;
-    display:flex;align-items:center;justify-content:center;
-    transition:background 0.2s,border-color 0.2s,color 0.2s,transform 0.15s,box-shadow 0.2s;
-    box-shadow:0 4px 20px rgba(0,0,0,0.45),0 0 24px -6px rgba(34,211,238,0.25);
-  `;
-    diagToggleBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleDiagnostic(); });
-    diagToggleBtn.addEventListener('mouseenter', () => {
-      diagToggleBtn.style.background = 'linear-gradient(165deg, rgba(30,40,48,0.98) 0%, rgba(15,20,28,0.99) 100%)';
-      diagToggleBtn.style.borderColor = 'rgba(34,211,238,0.5)';
-      diagToggleBtn.style.color = '#67e8f9';
-      diagToggleBtn.style.transform = 'translateY(-2px)';
-      diagToggleBtn.style.boxShadow = '0 8px 28px rgba(0,0,0,0.5),0 0 32px -4px rgba(34,211,238,0.35)';
-    });
-    diagToggleBtn.addEventListener('mouseleave', () => {
-      diagToggleBtn.style.background = 'linear-gradient(165deg, rgba(22,26,34,0.96) 0%, rgba(10,12,16,0.98) 100%)';
-      diagToggleBtn.style.borderColor = 'rgba(34,211,238,0.28)';
-      diagToggleBtn.style.color = '#22d3ee';
-      diagToggleBtn.style.transform = 'translateY(0)';
-      diagToggleBtn.style.boxShadow = '0 4px 20px rgba(0,0,0,0.45),0 0 24px -6px rgba(34,211,238,0.25)';
-    });
-    document.body.appendChild(diagToggleBtn);
-    reparentPlayShareUiForFullscreen();
-
-    document.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'D') {
-        e.preventDefault();
-        toggleDiagnostic();
-      }
-    });
   }
 
   // ── CSS animations ─────────────────────────────────────────────────────────
@@ -7105,7 +7229,8 @@ export function runPlayShareContent() {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
     if (siteSync.key === 'prime' && changes[PRIME_SYNC_DEBUG_STORAGE_KEY]) {
-      primeSyncDebugHud = !!changes[PRIME_SYNC_DEBUG_STORAGE_KEY].newValue;
+      primeSyncDebugHud =
+        playShareDevelopmentInstall && !!changes[PRIME_SYNC_DEBUG_STORAGE_KEY].newValue;
       updatePrimeHudVisibility();
     }
     if (!changes.roomState) return;
@@ -7162,12 +7287,9 @@ export function runPlayShareContent() {
     }
   });
 
-  if (siteSync.key === 'prime') {
+  function attachPrimeDevConsole() {
+    if (siteSync.key !== 'prime' || !playShareDevelopmentInstall || window.__playsharePrime) return;
     try {
-      chrome.storage.local.get({ [PRIME_SYNC_DEBUG_STORAGE_KEY]: false }, (d) => {
-        primeSyncDebugHud = !!d[PRIME_SYNC_DEBUG_STORAGE_KEY];
-        updatePrimeHudVisibility();
-      });
       window.__playsharePrime = {
         getStatus() {
           refreshPrimeSyncTelemetry();
@@ -7205,7 +7327,7 @@ export function runPlayShareContent() {
               : null,
             room: roomState ? { code: roomState.roomCode, isHost: roomState.isHost } : null,
             help:
-              'Prime: popup → “Prime sync HUD”. Dev diagnostics: Ctrl+Shift+D on the video tab (Sync tab = overview + snapshots).'
+              'Prime: popup → “Prime sync HUD” (unpacked extension only). Dev diagnostics: Ctrl+Shift+D.'
           };
         }
       };
@@ -7213,6 +7335,29 @@ export function runPlayShareContent() {
       /* ignore */
     }
   }
+
+  function runPlayShareDeveloperInstallGate() {
+    try {
+      chrome.management.getSelf((info) => {
+        if (chrome.runtime.lastError || !info) {
+          playShareDevelopmentInstall = false;
+        } else {
+          playShareDevelopmentInstall = info.installType === 'development';
+        }
+        diagnosticsUiEnabled = DIAGNOSTICS_BUILD && playShareDevelopmentInstall;
+        if (diagnosticsUiEnabled) mountDeveloperDiagnosticsUi();
+        refreshPrimeDebugHudFromStorage();
+        attachPrimeDevConsole();
+      });
+    } catch {
+      playShareDevelopmentInstall = false;
+      diagnosticsUiEnabled = false;
+      refreshPrimeDebugHudFromStorage();
+      attachPrimeDevConsole();
+    }
+  }
+
+  runPlayShareDeveloperInstallGate();
 
   const onFullscreenChange = () => reparentPlayShareUiForFullscreen();
   document.addEventListener('fullscreenchange', onFullscreenChange);

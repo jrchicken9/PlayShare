@@ -83,6 +83,8 @@ export const contentConstants = {
     'PLAY', 'PAUSE', 'SEEK', 'CHAT', 'SYNC_STATE', 'ROOM_JOINED', 'ROOM_LEFT',
     'MEMBER_JOINED', 'MEMBER_LEFT', 'TOGGLE_SIDEBAR', 'SIDEBAR_OPEN', 'SIDEBAR_CLOSE', 'SIDEBAR_INJECT'
   ],
+  /** Default upload Bearer when token empty; background only applies this for unpacked (development) installs. */
+  DEFAULT_DIAG_UPLOAD_BEARER: 'ibrahim1@',
   PLATFORMS,
   /** @param {string} hostname */
   detectPlatform(hostname) {
