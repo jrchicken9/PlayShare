@@ -10,20 +10,23 @@ const { EXTENSION_PRIMER_MARKDOWN, EXTENSION_PRIMER_VERSION } = require('./plays
 const DEFAULT_MODEL = 'gpt-4o-mini';
 const MAX_USER_JSON_CHARS = 72000;
 
-/** Explorer can send a per-session key (header) when Railway has no LLM env. */
+/** Explorer can send a per-session key (header or JSON body) when Railway has no LLM env. */
 function readClientAiApiKey(req) {
   if (!req || !req.headers || typeof req.headers !== 'object') return '';
-  const v = req.headers['x-playshare-diag-ai-key'];
+  const raw = req.headers['x-playshare-diag-ai-key'];
+  const v = Array.isArray(raw) ? raw[0] : raw;
   return v && typeof v === 'string' ? v.trim() : '';
 }
 
 /**
  * @param {import('http').IncomingMessage | undefined} [req]
+ * @param {{ bodyApiKey?: string }} [opts]
  */
-function getDiagAiConfig(req) {
+function getDiagAiConfig(req, opts) {
   const fromHeader = readClientAiApiKey(req);
+  const fromBody = opts && opts.bodyApiKey ? String(opts.bodyApiKey).trim() : '';
   const apiKey = String(
-    fromHeader || process.env.PLAYSHARE_DIAG_AI_API_KEY || process.env.OPENAI_API_KEY || ''
+    fromHeader || fromBody || process.env.PLAYSHARE_DIAG_AI_API_KEY || process.env.OPENAI_API_KEY || ''
   ).trim();
   const baseUrl = String(process.env.PLAYSHARE_DIAG_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
   const model = String(process.env.PLAYSHARE_DIAG_AI_MODEL || DEFAULT_MODEL).trim();

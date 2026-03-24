@@ -368,6 +368,8 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
       const persistLearning = body.persist_learning !== false;
       const priorLearningLimit =
         body.prior_learning_limit != null ? parseInt(body.prior_learning_limit, 10) : undefined;
+      const bodyLlmKey =
+        body.llm_api_key != null ? String(body.llm_api_key).trim().slice(0, 512) : '';
 
       const context = await gatherBriefContext(supabase, {
         focusPlatform,
@@ -388,19 +390,19 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
             architecture_primer_markdown: EXTENSION_PRIMER_MARKDOWN
           },
           fallback_markdown: fallbackMarkdown,
-          ai_configured: getDiagAiConfig(req).configured,
+          ai_configured: getDiagAiConfig(req, { bodyApiKey: bodyLlmKey }).configured,
           prior_runs_in_prompt: (context.prior_runs_from_database || []).length
         });
         return;
       }
 
-      const aiCfg = getDiagAiConfig(req);
+      const aiCfg = getDiagAiConfig(req, { bodyApiKey: bodyLlmKey });
       if (!aiCfg.configured) {
         json(res, 503, {
           ok: false,
           error: 'ai_not_configured',
           hint:
-            'Set PLAYSHARE_DIAG_AI_API_KEY (or OPENAI_API_KEY). Optional: PLAYSHARE_DIAG_AI_BASE_URL, PLAYSHARE_DIAG_AI_MODEL.',
+            'Set PLAYSHARE_DIAG_AI_API_KEY (or OPENAI_API_KEY) on the server, or reload /diag/intel/explorer and paste an OpenAI key at unlock (do not use “server LLM only” unless Railway has that env). The explorer sends the key in header X-PlayShare-Diag-AI-Key and JSON llm_api_key.',
           fallback_markdown: fallbackMarkdown
         });
         return;
@@ -1105,16 +1107,21 @@ function explorerHtml() {
     if (a) a.hidden = false;
   }
 
-  function attachClientAiHeaders(h) {
+  function getClientLlmKeyForBrief() {
     var skip = runtimeSkipServerLlm;
     try {
       if (sessionStorage.getItem(SKIP_LLM_STORAGE) === '1') skip = true;
     } catch (e0) {}
-    if (skip) return h;
+    if (skip) return '';
     var ak = runtimeAiKey;
     try {
       if (!ak) ak = sessionStorage.getItem(AI_KEY_STORAGE) || '';
     } catch (e1) {}
+    return String(ak || '').trim();
+  }
+
+  function attachClientAiHeaders(h) {
+    var ak = getClientLlmKeyForBrief();
     if (ak) h['X-PlayShare-Diag-AI-Key'] = ak;
     return h;
   }
@@ -1642,6 +1649,7 @@ function explorerHtml() {
     st.textContent = '';
     out.innerHTML = '<div class="empty">Gathering data' + ($('aiDryRun').checked ? '…' : ' and calling the model…') + '</div>';
     try {
+      var lk = getClientLlmKeyForBrief();
       var body = {
         dry_run: $('aiDryRun').checked,
         focus_platform: ($('aiFocusPlat').value || '').trim() || undefined,
@@ -1649,6 +1657,7 @@ function explorerHtml() {
         include_prior_learnings: $('aiIncludePrior').checked,
         persist_learning: !$('aiDryRun').checked && $('aiPersist').checked
       };
+      if (lk) body.llm_api_key = lk;
       var r = await fetch('/diag/intel/ai-brief', {
         method: 'POST',
         headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
@@ -1670,12 +1679,26 @@ function explorerHtml() {
             '<p class="muted" style="margin:8px 0 0">The value in <strong>1 · Access</strong> must match <code>PLAYSHARE_DIAG_INTEL_SECRET</code> or <code>PLAYSHARE_DIAG_UPLOAD_SECRET</code> on the server (Railway). Copy-paste the full secret, no extra spaces. This is not your OpenAI API key.</p></div>'
         );
       } else if (!j.ok && (j.error === 'ai_not_configured' || j.error === 'ai_request_failed')) {
+        var skipL = false;
+        try {
+          skipL = sessionStorage.getItem(SKIP_LLM_STORAGE) === '1';
+        } catch (eSk) {}
+        var extra =
+          j.error === 'ai_not_configured'
+            ? skipL
+              ? '<p class="muted" style="margin:8px 0 0">You enabled <strong>Use server LLM only</strong> at unlock, but this server has no <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code> in Railway. Add one of those env vars, <em>or</em> hard-refresh the page and unlock again with your OpenAI key.</p>'
+              : getClientLlmKeyForBrief()
+                ? '<p class="muted" style="margin:8px 0 0">A key was sent from this browser but the server still reported missing config. <strong>Redeploy</strong> the latest PlayShare server (needs <code>llm_api_key</code> body + header support). If you already deployed, check the server logs.</p>'
+                : '<p class="muted" style="margin:8px 0 0">Hard-refresh, complete the <strong>unlock</strong> step, and paste your OpenAI key (or set the key on Railway and choose “server LLM only”).</p>'
+            : '';
         parts.push(
           '<div class="alert warn"><strong>' +
             esc(j.error === 'ai_not_configured' ? 'LLM not configured' : 'LLM request failed') +
             '</strong><p class="muted" style="margin:8px 0 0">' +
             esc(j.hint || j.detail || '') +
-            '</p><p class="muted" style="margin:8px 0 0">Use the data pack below, or enable an API key on the server and try again.</p></div>'
+            '</p>' +
+            extra +
+            '<p class="muted" style="margin:8px 0 0">You can still use the <strong>data pack</strong> below without an LLM.</p></div>'
         );
       } else if (!j.ok && !j.fallback_markdown) {
         parts.push(
