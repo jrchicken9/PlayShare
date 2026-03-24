@@ -447,7 +447,7 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
           ok: false,
           error: 'ai_not_configured',
           hint:
-            'Set PLAYSHARE_DIAG_AI_API_KEY (or OPENAI_API_KEY) on the server, or reload /diag/intel/explorer and paste an OpenAI key at unlock (do not use “server LLM only” unless Railway has that env). The explorer sends the key in header X-PlayShare-Diag-AI-Key and JSON llm_api_key.',
+            'Set PLAYSHARE_DIAG_AI_API_KEY (or OPENAI_API_KEY) on the server, or reload /diag/intel/explorer and paste an OpenAI key at unlock. The explorer sends a browser key in header X-PlayShare-Diag-AI-Key and JSON llm_api_key when provided; otherwise the server uses its env key.',
           fallback_markdown: fallbackMarkdown
         });
         return;
@@ -999,20 +999,14 @@ function explorerHtml() {
       <p class="gate-lead">
         <strong>Railway does not put this secret into the page for you.</strong> Open Railway → your service → <strong>Variables</strong>, copy the
         <em>value</em> of <code>PLAYSHARE_DIAG_INTEL_SECRET</code> (or upload secret), and paste it in the first box. The server compares that header to the
-        variable; they must match exactly. Then set the LLM line (OpenAI key or “server LLM only”).
+        variable; they must match exactly. For the AI assistant, paste an OpenAI key below <em>or</em> leave it empty when this server has <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code> in Railway (the host will use that key).
       </p>
       <label class="lbl" for="gateBearer">1 · Paste Railway secret here (PLAYSHARE_DIAG_INTEL_SECRET value)</label>
       <input type="password" id="gateBearer" autocomplete="off" spellcheck="false" placeholder="Paste the full secret from Railway Variables" />
-      <label class="lbl" for="gateOpenAi">2 · OpenAI API key</label>
-      <input type="password" id="gateOpenAi" autocomplete="off" spellcheck="false" placeholder="sk-…" />
-      <div class="chk" style="margin-top: 12px">
-        <label><input type="checkbox" id="gateSkipOpenAi" /> Use server LLM only (<code>PLAYSHARE_DIAG_AI_API_KEY</code> or <code>OPENAI_API_KEY</code> on the host — skip key above)</label>
-      </div>
-      <p id="gateOwnKeyHint" class="muted" style="display: none; margin-top: 10px; font-size: 12px; line-height: 1.45">
-        To paste <strong>your</strong> OpenAI key, uncheck “Use server LLM only” first (that option disables the key field). While it stays checked, only the server’s env keys are used for the AI assistant.
-      </p>
+      <label class="lbl" for="gateOpenAi">2 · OpenAI API key (optional if the server already has an LLM key in env)</label>
+      <input type="password" id="gateOpenAi" autocomplete="off" spellcheck="false" placeholder="sk-… (leave empty only when Railway has PLAYSHARE_DIAG_AI_API_KEY or OPENAI_API_KEY)" />
       <p id="gateServerLlmHint" class="muted" style="display: none; margin-top: 10px; font-size: 13px; line-height: 1.5">
-        This host reports an LLM key in its environment (Railway variables or a local <code>.env</code> file). You can leave the OpenAI field empty and keep “Use server LLM only” checked.
+        This host reports an LLM key in its environment — you may leave the OpenAI field empty and the AI assistant will use the server’s key.
       </p>
       <p class="muted" style="margin-top: 12px; font-size: 12px; line-height: 1.45">Secrets are kept in this tab only until you close it or refresh; they are not written to sessionStorage.</p>
       <button type="button" id="gateSubmit">Continue</button>
@@ -1113,7 +1107,7 @@ function explorerHtml() {
             Uses <strong>live data</strong> from diagnostic recordings (<code>diag_cases</code> / clusters). Each successful AI run can be <strong>saved</strong> into <code>diag_intel_knowledge</code>; the next run automatically includes those excerpts so the tool <strong>accumulates context</strong> about the extension over time.
           </p>
           <p class="muted" style="margin:0 0 10px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);font-size:13px;line-height:1.5">
-            LLM access comes from the <strong>unlock screen</strong> (OpenAI key) or Railway <code>PLAYSHARE_DIAG_AI_API_KEY</code> if you chose “server LLM only.” If you see <strong>LLM not configured</strong>, reload the page and add a key at unlock, set the env on Railway, or use <strong>Data pack only</strong>. <strong>401</strong> on requests is almost always a wrong or missing unlock secret — use <strong>Change credentials</strong>.
+            LLM access comes from the <strong>OpenAI key you paste at unlock</strong> (sent with each request) or from Railway <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code> on the host when you leave that field empty. If you see <strong>LLM not configured</strong>, add a key at unlock or set one of those env vars, or use <strong>Data pack only</strong>. <strong>401</strong> on requests is almost always a wrong unlock secret — use <strong>Change credentials</strong>.
           </p>
           <p class="muted" style="margin:0 0 14px;font-size:12px">
             <strong>Supabase:</strong> apply migration <code>20260330120000_diag_intel_knowledge.sql</code>. Optional server env: <code>PLAYSHARE_DIAG_AI_BASE_URL</code>, <code>PLAYSHARE_DIAG_AI_MODEL</code> (default <code>gpt-4o-mini</code>). <strong>Primer:</strong> <code>npm run generate:primer</code> · <code>playshare-extension-primer.static.md</code> / <code>playshare-extension-primer.js</code>.
@@ -1183,10 +1177,9 @@ function explorerHtml() {
   var AI_KEY_STORAGE = 'playshare_diag_explorer_ai_key_v1';
   var SKIP_LLM_STORAGE = 'playshare_diag_explorer_skip_llm_v1';
   var runtimeAiKey = '';
-  var runtimeSkipServerLlm = false;
   /** Bearer from unlock gate (used when hidden #tok is empty until filled). */
   var runtimeDiagBearer = '';
-  /** Set from <code>/diag/intel/public-meta</code> — true when process.env has an LLM key (no browser paste needed). */
+  /** Set from <code>/diag/intel/public-meta</code> — true when process.env has an LLM key (OpenAI field optional at unlock). */
   var serverLlmConfigured = false;
   var lastText = '';
   var lastPath = '';
@@ -1227,7 +1220,6 @@ function explorerHtml() {
   }
 
   function getClientLlmKeyForBrief() {
-    if (runtimeSkipServerLlm) return '';
     return String(runtimeAiKey || '').trim();
   }
 
@@ -1253,7 +1245,6 @@ function explorerHtml() {
   async function validateAndEnterFromGate() {
     var bearer = normalizeTokInput($('gateBearer') && $('gateBearer').value) || '';
     var openai = ($('gateOpenAi') && $('gateOpenAi').value.trim()) || '';
-    var skipAi = $('gateSkipOpenAi') && $('gateSkipOpenAi').checked;
     var err = $('gateErr');
     var btn = $('gateSubmit');
     var working = $('gateWorking');
@@ -1268,10 +1259,10 @@ function explorerHtml() {
       }
       return;
     }
-    if (!skipAi && !openai && !serverLlmConfigured) {
+    if (!openai && !serverLlmConfigured) {
       if (err) {
         err.textContent =
-          'OpenAI API key is required, or enable “Use server LLM only” after setting PLAYSHARE_DIAG_AI_API_KEY (or OPENAI_API_KEY) on the server / in .env.';
+          'Paste an OpenAI API key, or set PLAYSHARE_DIAG_AI_API_KEY (or OPENAI_API_KEY) on this server so the AI assistant can run without a browser key.';
         err.style.display = 'block';
       }
       return;
@@ -1317,8 +1308,7 @@ function explorerHtml() {
         }
         return;
       }
-      runtimeAiKey = skipAi ? '' : openai;
-      runtimeSkipServerLlm = skipAi;
+      runtimeAiKey = openai;
       try {
         sessionStorage.removeItem(TOK_KEY);
         sessionStorage.removeItem(AI_KEY_STORAGE);
@@ -1333,16 +1323,6 @@ function explorerHtml() {
     }
   }
 
-  function syncGateOpenAiEnabled() {
-    var sk = $('gateSkipOpenAi');
-    var inp = $('gateOpenAi');
-    var hint = $('gateOwnKeyHint');
-    if (!inp) return;
-    var dis = !!(sk && sk.checked);
-    inp.disabled = dis;
-    if (hint) hint.style.display = dis ? 'block' : 'none';
-  }
-
   fetch(intelApi('/public-meta'))
     .then(function (r) {
       return r.json();
@@ -1350,11 +1330,8 @@ function explorerHtml() {
     .then(function (j) {
       if (j && j.ok && j.server_llm_configured) {
         serverLlmConfigured = true;
-        var gs = $('gateSkipOpenAi');
-        if (gs) gs.checked = true;
         var gh = $('gateServerLlmHint');
         if (gh) gh.style.display = 'block';
-        syncGateOpenAiEnabled();
       }
     })
     .catch(function () {});
@@ -1365,10 +1342,6 @@ function explorerHtml() {
       validateAndEnterFromGate();
     };
   }
-  var gateSkipEl = $('gateSkipOpenAi');
-  if (gateSkipEl) gateSkipEl.addEventListener('change', syncGateOpenAiEnabled);
-  syncGateOpenAiEnabled();
-
   function gateMaybeSubmit(e) {
     if (e.key !== 'Enter') return;
     e.preventDefault();
@@ -1389,12 +1362,9 @@ function explorerHtml() {
       } catch (eR) {}
       runtimeDiagBearer = '';
       runtimeAiKey = '';
-      runtimeSkipServerLlm = false;
       if ($('tok')) $('tok').value = '';
       if ($('gateBearer')) $('gateBearer').value = '';
       if ($('gateOpenAi')) $('gateOpenAi').value = '';
-      if ($('gateSkipOpenAi')) $('gateSkipOpenAi').checked = !!serverLlmConfigured;
-      syncGateOpenAiEnabled();
       var gr = $('gateRoot');
       var ap = $('playshareExplorerApp');
       if (ap) ap.hidden = true;
@@ -1859,14 +1829,11 @@ function explorerHtml() {
             '<p class="muted" style="margin:8px 0 0">The secret you entered at <strong>unlock</strong> must match the <em>exact</em> value of <code>PLAYSHARE_DIAG_INTEL_SECRET</code> or <code>PLAYSHARE_DIAG_UPLOAD_SECRET</code> from Railway Variables (copy-paste, no extra spaces). Use <strong>Change credentials</strong> to re-enter it. This is not your OpenAI API key.</p></div>'
         );
       } else if (!j.ok && (j.error === 'ai_not_configured' || j.error === 'ai_request_failed')) {
-        var skipL = runtimeSkipServerLlm;
         var extra =
           j.error === 'ai_not_configured'
-            ? skipL
-              ? '<p class="muted" style="margin:8px 0 0">You enabled <strong>Use server LLM only</strong> at unlock, but this server has no <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code> in Railway. Add one of those env vars, <em>or</em> hard-refresh the page and unlock again with your OpenAI key.</p>'
-              : getClientLlmKeyForBrief()
-                ? '<p class="muted" style="margin:8px 0 0">A key was sent from this browser but the server still reported missing config. <strong>Redeploy</strong> the latest PlayShare server (needs <code>llm_api_key</code> body + header support). If you already deployed, check the server logs.</p>'
-                : '<p class="muted" style="margin:8px 0 0">Hard-refresh, complete the <strong>unlock</strong> step, and paste your OpenAI key (or set the key on Railway and choose “server LLM only”).</p>'
+            ? getClientLlmKeyForBrief()
+              ? '<p class="muted" style="margin:8px 0 0">A key was sent from this browser but the server still reported missing config. <strong>Redeploy</strong> the latest PlayShare server (needs <code>llm_api_key</code> body + header support). If you already deployed, check the server logs.</p>'
+              : '<p class="muted" style="margin:8px 0 0">Use <strong>Change credentials</strong>, paste an OpenAI key at unlock, <em>or</em> set <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code> on Railway and leave the browser field empty.</p>'
             : '';
         parts.push(
           '<div class="alert warn"><strong>' +
