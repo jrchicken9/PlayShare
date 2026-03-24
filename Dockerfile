@@ -12,6 +12,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY server.js ./
+COPY server ./server/
 COPY shared ./shared/
 COPY public ./public/
 COPY --from=pack /app/public/install/playshare-extension.zip ./public/install/playshare-extension.zip
