@@ -688,6 +688,17 @@ function explorerHtml() {
       margin: 8px 0 0;
       line-height: 1.45;
     }
+    .access-panel--post-unlock {
+      padding: 12px 14px;
+    }
+    .access-panel--post-unlock .access-unlock-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px 14px;
+      font-size: 13px;
+      color: var(--muted);
+    }
     .tabs {
       display: flex;
       flex-wrap: wrap;
@@ -1000,7 +1011,7 @@ function explorerHtml() {
       <p id="gateServerLlmHint" class="muted" style="display: none; margin-top: 10px; font-size: 13px; line-height: 1.5">
         This host reports an LLM key in its environment (Railway variables or a local <code>.env</code> file). You can leave the OpenAI field empty and keep “Use server LLM only” checked.
       </p>
-      <div class="chk"><label><input type="checkbox" id="gateRemember" checked /> Remember on this browser tab (sessionStorage)</label></div>
+      <p class="muted" style="margin-top: 12px; font-size: 12px; line-height: 1.45">Secrets are kept in this tab only until you close it or refresh; they are not written to sessionStorage.</p>
       <button type="button" id="gateSubmit">Continue</button>
       <div id="gateErr" class="alert err" style="display: none; margin-top: 14px"></div>
     </div>
@@ -1010,7 +1021,7 @@ function explorerHtml() {
   <div class="wrap">
     <header class="topbar">
       <h1>Diagnostic intelligence</h1>
-      <p>Review anonymized sync diagnostics: recent uploads, repeating patterns (clusters), and version comparisons. Traffic stays on this server; paste the same Bearer secret you configured on the host (Railway).</p>
+      <p>Review anonymized sync diagnostics: recent uploads, repeating patterns (clusters), and version comparisons. You already entered access on the unlock screen — no second password is required unless you choose <strong>Change credentials</strong>.</p>
       <p class="ver">UI v2 · If this page still looks like three plain buttons in a row, redeploy the server so <code>diag-intel-http.js</code> is current.</p>
     </header>
 
@@ -1018,25 +1029,24 @@ function explorerHtml() {
       <aside class="side">
         <h2>1 · Access</h2>
         <p class="muted" style="margin: 0 0 10px; font-size: 12px; line-height: 1.45">
-          The <strong>Bearer secret</strong> you must type is in the <strong>panel above the tabs</strong> (or on the unlock screen first). It is the
-          <em>same string</em> as <code>PLAYSHARE_DIAG_INTEL_SECRET</code> in Railway — copy from Variables and paste; the browser never receives it from the server automatically.
+          The <strong>unlock screen</strong> is the only place you type the Railway Bearer secret for this tab. While the tab stays open, the browser keeps it in memory for API calls (including AI briefs and saving to the knowledge table). Refresh or a new tab requires unlocking again. Use <strong>Change credentials</strong> above the tabs to switch secret or LLM settings.
         </p>
         <ol class="steps">
-          <li>Complete unlock, then keep the access panel filled for all requests.</li>
-          <li>Open a tab below and run its primary action.</li>
+          <li>Use Cases / Clusters / AI assistant — no extra password prompts.</li>
           <li>Read the summary table; expand <em>Raw JSON</em> only if you need the full payload.</li>
         </ol>
-        <p class="muted" style="margin-top:12px">503 <code>supabase_not_configured</code> → set URL + service role on the server. 401 → wrong or empty Bearer above.</p>
+        <p class="muted" style="margin-top:12px">503 <code>supabase_not_configured</code> → set URL + service role on the server. 401 → use Change credentials and re-unlock.</p>
       </aside>
 
       <div class="main-col">
-        <div class="access-panel" id="accessPanel">
-          <label class="lbl" for="tok">Bearer secret — paste the <em>value</em> of <code>PLAYSHARE_DIAG_INTEL_SECRET</code> <strong>or</strong> <code>PLAYSHARE_DIAG_UPLOAD_SECRET</code> (whichever you use; if both exist in Railway, they may differ — either is accepted)</label>
-          <input type="password" id="tok" placeholder="Required on every visit unless Remember is checked" autocomplete="off" spellcheck="false" />
-          <div class="chk"><label><input type="checkbox" id="rememberTok" /> Remember for this tab (sessionStorage)</label></div>
-          <p class="access-panel-hint">
-            Setting the variable on Railway only tells the server what to expect; you still paste that value here so requests include
-            <code>Authorization: Bearer …</code>. If this box is empty, you will get 401.
+        <div class="access-panel access-panel--post-unlock" id="accessPanel">
+          <input type="hidden" id="tok" value="" autocomplete="off" />
+          <div class="access-unlock-row">
+            <span><strong style="color: var(--ok)">Unlocked</strong> — Bearer and LLM settings from the gateway apply to all requests in this tab.</span>
+            <button type="button" class="ghost" id="btnReunlock">Change credentials…</button>
+          </div>
+          <p class="access-panel-hint" style="margin-top: 8px">
+            The server never sends your secret to the page; after unlock the browser attaches <code>Authorization: Bearer …</code> and your LLM key (if any) on each request until you refresh or use <strong>Change credentials</strong>.
           </p>
         </div>
         <nav class="tabs" role="tablist" aria-label="Views">
@@ -1099,7 +1109,7 @@ function explorerHtml() {
             Uses <strong>live data</strong> from diagnostic recordings (<code>diag_cases</code> / clusters). Each successful AI run can be <strong>saved</strong> into <code>diag_intel_knowledge</code>; the next run automatically includes those excerpts so the tool <strong>accumulates context</strong> about the extension over time.
           </p>
           <p class="muted" style="margin:0 0 10px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);font-size:13px;line-height:1.5">
-            LLM access comes from the <strong>unlock screen</strong> (OpenAI key) or Railway <code>PLAYSHARE_DIAG_AI_API_KEY</code> if you chose “server LLM only.” If you see <strong>LLM not configured</strong>, reload the page and add a key at unlock, set the env on Railway, or use <strong>Data pack only</strong>. <strong>401</strong> on requests is almost always the Bearer box above the tabs.
+            LLM access comes from the <strong>unlock screen</strong> (OpenAI key) or Railway <code>PLAYSHARE_DIAG_AI_API_KEY</code> if you chose “server LLM only.” If you see <strong>LLM not configured</strong>, reload the page and add a key at unlock, set the env on Railway, or use <strong>Data pack only</strong>. <strong>401</strong> on requests is almost always a wrong or missing unlock secret — use <strong>Change credentials</strong>.
           </p>
           <p class="muted" style="margin:0 0 14px;font-size:12px">
             <strong>Supabase:</strong> apply migration <code>20260330120000_diag_intel_knowledge.sql</code>. Optional server env: <code>PLAYSHARE_DIAG_AI_BASE_URL</code>, <code>PLAYSHARE_DIAG_AI_MODEL</code> (default <code>gpt-4o-mini</code>). <strong>Primer:</strong> <code>npm run generate:primer</code> · <code>playshare-extension-primer.static.md</code> / <code>playshare-extension-primer.js</code>.
@@ -1170,6 +1180,8 @@ function explorerHtml() {
   var SKIP_LLM_STORAGE = 'playshare_diag_explorer_skip_llm_v1';
   var runtimeAiKey = '';
   var runtimeSkipServerLlm = false;
+  /** Bearer from unlock gate (used when hidden #tok is empty until filled). */
+  var runtimeDiagBearer = '';
   /** Set from <code>/diag/intel/public-meta</code> — true when process.env has an LLM key (no browser paste needed). */
   var serverLlmConfigured = false;
   var lastText = '';
@@ -1197,16 +1209,8 @@ function explorerHtml() {
   }
 
   function getClientLlmKeyForBrief() {
-    var skip = runtimeSkipServerLlm;
-    try {
-      if (sessionStorage.getItem(SKIP_LLM_STORAGE) === '1') skip = true;
-    } catch (e0) {}
-    if (skip) return '';
-    var ak = runtimeAiKey;
-    try {
-      if (!ak) ak = sessionStorage.getItem(AI_KEY_STORAGE) || '';
-    } catch (e1) {}
-    return String(ak || '').trim();
+    if (runtimeSkipServerLlm) return '';
+    return String(runtimeAiKey || '').trim();
   }
 
   function attachClientAiHeaders(h) {
@@ -1232,7 +1236,6 @@ function explorerHtml() {
     var bearer = normalizeTokInput($('gateBearer') && $('gateBearer').value) || '';
     var openai = ($('gateOpenAi') && $('gateOpenAi').value.trim()) || '';
     var skipAi = $('gateSkipOpenAi') && $('gateSkipOpenAi').checked;
-    var remember = $('gateRemember') && $('gateRemember').checked;
     var err = $('gateErr');
     var btn = $('gateSubmit');
     if (err) {
@@ -1283,24 +1286,12 @@ function explorerHtml() {
       runtimeAiKey = skipAi ? '' : openai;
       runtimeSkipServerLlm = skipAi;
       try {
-        if (remember) {
-          sessionStorage.setItem(TOK_KEY, bearer);
-          if (skipAi) {
-            sessionStorage.removeItem(AI_KEY_STORAGE);
-            sessionStorage.setItem(SKIP_LLM_STORAGE, '1');
-          } else {
-            sessionStorage.setItem(AI_KEY_STORAGE, openai);
-            sessionStorage.removeItem(SKIP_LLM_STORAGE);
-          }
-        } else {
-          sessionStorage.removeItem(TOK_KEY);
-          sessionStorage.removeItem(AI_KEY_STORAGE);
-          sessionStorage.removeItem(SKIP_LLM_STORAGE);
-        }
+        sessionStorage.removeItem(TOK_KEY);
+        sessionStorage.removeItem(AI_KEY_STORAGE);
+        sessionStorage.removeItem(SKIP_LLM_STORAGE);
       } catch (e2) {}
+      runtimeDiagBearer = bearer;
       $('tok').value = bearer;
-      var remTok = $('rememberTok');
-      if (remTok) remTok.checked = remember;
       enterExplorerApp();
     } finally {
       if (btn) btn.disabled = false;
@@ -1329,24 +1320,27 @@ function explorerHtml() {
     };
   }
 
-  (function tryAutoUnlockFromStorage() {
-    try {
-      var rawBearer = sessionStorage.getItem(TOK_KEY);
-      var bearer = normalizeTokInput(rawBearer);
-      var skip = sessionStorage.getItem(SKIP_LLM_STORAGE) === '1';
-      var ai = sessionStorage.getItem(AI_KEY_STORAGE) || '';
-      if (!bearer || (!skip && !ai)) return;
-      fetch('/diag/intel/cases?limit=1', { headers: { Authorization: 'Bearer ' + bearer } }).then(function (r) {
-        if (!r.ok) return;
-        $('tok').value = bearer;
-        var remTok2 = $('rememberTok');
-        if (remTok2) remTok2.checked = true;
-        runtimeSkipServerLlm = skip;
-        runtimeAiKey = ai;
-        enterExplorerApp();
-      });
-    } catch (e3) {}
-  })();
+  var btnReunlock = $('btnReunlock');
+  if (btnReunlock) {
+    btnReunlock.onclick = function () {
+      try {
+        sessionStorage.removeItem(TOK_KEY);
+        sessionStorage.removeItem(AI_KEY_STORAGE);
+        sessionStorage.removeItem(SKIP_LLM_STORAGE);
+      } catch (eR) {}
+      runtimeDiagBearer = '';
+      runtimeAiKey = '';
+      runtimeSkipServerLlm = false;
+      if ($('tok')) $('tok').value = '';
+      if ($('gateBearer')) $('gateBearer').value = '';
+      if ($('gateOpenAi')) $('gateOpenAi').value = '';
+      if ($('gateSkipOpenAi')) $('gateSkipOpenAi').checked = !!serverLlmConfigured;
+      var gr = $('gateRoot');
+      var ap = $('playshareExplorerApp');
+      if (ap) ap.hidden = true;
+      if (gr) gr.hidden = false;
+    };
+  }
 
   function esc(s) {
     if (s == null || s === '') return '';
@@ -1402,8 +1396,14 @@ function explorerHtml() {
     );
   }
 
+  function getResolvedBearer() {
+    var t = normalizeTokInput($('tok') && $('tok').value);
+    if (t) return t;
+    return normalizeTokInput(runtimeDiagBearer);
+  }
+
   function authHeaders() {
-    var t = normalizeTokInput($('tok').value);
+    var t = getResolvedBearer();
     var h = { 'Content-Type': 'application/json' };
     if (t) h.Authorization = 'Bearer ' + t;
     return attachClientAiHeaders(h);
@@ -1758,11 +1758,11 @@ function explorerHtml() {
     var btn = $('btnAiBrief');
     var out = $('aiBriefResult');
     var st = $('aiBriefStatus');
-    if (!normalizeTokInput($('tok').value)) {
+    if (!getResolvedBearer()) {
       st.textContent = '';
       out.innerHTML =
         '<div class="alert err"><strong>Missing server secret</strong>' +
-        '<p class="muted" style="margin:8px 0 0">Paste your Railway <code>PLAYSHARE_DIAG_INTEL_SECRET</code> (or upload secret) into the <strong>Bearer secret</strong> box <strong>above the Cases / Clusters tabs</strong>, then try again. Without it the server returns <strong>401</strong>.</p></div>';
+        '<p class="muted" style="margin:8px 0 0">Use <strong>Change credentials</strong> (above the tabs) to open the unlock screen and paste your Railway <code>PLAYSHARE_DIAG_INTEL_SECRET</code> (or upload secret). Without it the server returns <strong>401</strong>.</p></div>';
       return;
     }
     btn.disabled = true;
@@ -1796,13 +1796,10 @@ function explorerHtml() {
       if (!j.ok && (r.status === 401 || j.error === 'unauthorized')) {
         parts.push(
           '<div class="alert err"><strong>401 — wrong or missing Bearer token</strong>' +
-            '<p class="muted" style="margin:8px 0 0">The <strong>Bearer secret</strong> box above the tabs must contain the <em>exact</em> value of <code>PLAYSHARE_DIAG_INTEL_SECRET</code> or <code>PLAYSHARE_DIAG_UPLOAD_SECRET</code> from Railway Variables (copy-paste, no extra spaces). This is not your OpenAI API key.</p></div>'
+            '<p class="muted" style="margin:8px 0 0">The secret you entered at <strong>unlock</strong> must match the <em>exact</em> value of <code>PLAYSHARE_DIAG_INTEL_SECRET</code> or <code>PLAYSHARE_DIAG_UPLOAD_SECRET</code> from Railway Variables (copy-paste, no extra spaces). Use <strong>Change credentials</strong> to re-enter it. This is not your OpenAI API key.</p></div>'
         );
       } else if (!j.ok && (j.error === 'ai_not_configured' || j.error === 'ai_request_failed')) {
-        var skipL = false;
-        try {
-          skipL = sessionStorage.getItem(SKIP_LLM_STORAGE) === '1';
-        } catch (eSk) {}
+        var skipL = runtimeSkipServerLlm;
         var extra =
           j.error === 'ai_not_configured'
             ? skipL
@@ -2041,27 +2038,6 @@ function explorerHtml() {
     $('aiPersist').disabled = $('aiDryRun').checked;
     if ($('aiDryRun').checked) $('aiPersist').checked = false;
   });
-
-  var tokEl = $('tok');
-  var remEl = $('rememberTok');
-  try {
-    var saved = sessionStorage.getItem(TOK_KEY);
-    var gr = $('gateRoot');
-    var gateBlocking = gr && !gr.hidden;
-    if (saved && !gateBlocking) {
-      tokEl.value = normalizeTokInput(saved) || saved;
-      remEl.checked = true;
-    }
-  } catch (e) {}
-  function persistTok() {
-    try {
-      var nt = normalizeTokInput(tokEl.value);
-      if (remEl.checked && nt) sessionStorage.setItem(TOK_KEY, nt);
-      else sessionStorage.removeItem(TOK_KEY);
-    } catch (e) {}
-  }
-  tokEl.addEventListener('change', persistTok);
-  remEl.addEventListener('change', persistTok);
 })();
   </script>
 </body>
