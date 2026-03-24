@@ -153,6 +153,7 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
       const platform = url.searchParams.get('platform');
       const tag = url.searchParams.get('tag');
       const cluster = url.searchParams.get('cluster');
+      const extensionVersion = url.searchParams.get('extension_version');
       let q = supabase
         .from('diag_cases')
         .select(
@@ -163,6 +164,7 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
       if (platform) q = q.eq('platform', platform);
       if (cluster) q = q.eq('cluster_signature', cluster);
       if (tag) q = q.contains('derived_tags', [tag]);
+      if (extensionVersion) q = q.eq('extension_version', String(extensionVersion).slice(0, 32));
       const { data, error } = await q;
       if (error) throw error;
       json(res, 200, { ok: true, cases: data || [] });
@@ -354,6 +356,7 @@ function explorerHtml() {
     <input id="sq" placeholder="Keyword search on case summaries" />
     <button onclick="loadSearch()" class="secondary">Search</button>
   </p>
+  <p class="muted">Filter recent cases: add <code>?extension_version=1.0.0</code> (exact) to <code>/diag/intel/cases</code> alongside <code>platform</code> / <code>tag</code> / <code>cluster</code>.</p>
   <p class="muted">Regression (extension versions, exact match):</p>
   <p>
     <input id="bv" placeholder="baseline extension version e.g. 1.0.0" />

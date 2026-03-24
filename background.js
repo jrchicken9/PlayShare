@@ -49,6 +49,25 @@ let transportStallBroadcastTimer = null;
 
 const DEFAULT_SERVER_URL = typeof PLAYSHARE_SERVER_URL !== 'undefined' ? PLAYSHARE_SERVER_URL : 'wss://playshare-production.up.railway.app';
 
+/**
+ * HTTP origin for REST (e.g. POST /diag/upload). Uses only protocol + host (+ port);
+ * strips any path on the WebSocket URL so we do not POST to …/wrongpath/diag/upload (404).
+ */
+function playShareHttpOriginFromServerUrl(raw) {
+  if (raw == null || typeof raw !== 'string') return null;
+  let t = raw.trim();
+  if (!t) return null;
+  if (!/^wss?:\/\//i.test(t)) t = `wss://${t.replace(/^\/\//, '')}`;
+  try {
+    const u = new URL(t);
+    if (u.protocol !== 'ws:' && u.protocol !== 'wss:') return null;
+    const httpProto = u.protocol === 'ws:' ? 'http:' : 'https:';
+    return `${httpProto}//${u.host}`;
+  } catch {
+    return null;
+  }
+}
+
 function clearTransportStallTimer() {
   if (transportStallBroadcastTimer) {
     clearTimeout(transportStallBroadcastTimer);
@@ -548,8 +567,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         try {
           const data = await chrome.storage.local.get(['serverUrl']);
           const raw = (data.serverUrl && String(data.serverUrl).trim()) || DEFAULT_SERVER_URL;
-          const normalized = /^wss?:\/\//i.test(raw) ? raw : `wss://${raw.replace(/^\/\//, '')}`;
-          const httpBase = normalized.replace(/^wss/i, 'https').replace(/^ws/i, 'http').replace(/\/$/, '');
+          const httpOrigin = playShareHttpOriginFromServerUrl(raw) || playShareHttpOriginFromServerUrl(DEFAULT_SERVER_URL);
+          if (!httpOrigin) {
+            sendResponse({ ok: false, status: 0, error: 'invalid_server_url' });
+            return;
+          }
+          const uploadUrl = `${httpOrigin}/diag/upload`;
           const anon = await self.diagAnonymizePlayShareUnifiedExport(msg.payload, msg.hashSecrets || {});
           if (msg.enrichment && typeof msg.enrichment === 'object') {
             anon.enrichment = msg.enrichment;
@@ -569,13 +592,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           /** @type {Record<string, string>} */
           const headers = { 'Content-Type': 'application/json' };
           if (bearer) headers.Authorization = `Bearer ${bearer}`;
-          const r = await fetch(`${httpBase}/diag/upload`, {
+          const r = await fetch(uploadUrl, {
             method: 'POST',
             headers,
             body: JSON.stringify(envelope)
           });
           const j = await r.json().catch(() => ({}));
-          sendResponse({ ok: r.ok, status: r.status, ...j });
+          if (!r.ok) {
+            console.warn('[PlayShare] diag upload failed', r.status, uploadUrl, j && j.error ? j.error : '');
+          }
+          sendResponse({ ok: r.ok, status: r.status, uploadUrl, ...j });
         } catch (e) {
           sendResponse({ ok: false, error: e && e.message ? e.message : String(e) });
         }

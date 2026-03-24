@@ -10,13 +10,20 @@ const viewLobby    = document.getElementById('viewLobby');
 const viewRoom     = document.getElementById('viewRoom');
 const usernameInput  = document.getElementById('usernameInput');
 const roomCodeInput  = document.getElementById('roomCodeInput');
-/** wss/ws signaling URL → https/http origin for /join links (browsers cannot open wss:// as a page). */
+/** wss/ws signaling URL → https/http origin for /join links (path on WS URL is stripped). */
 function wsUrlToHttpBase(wsUrl) {
   if (!wsUrl || typeof wsUrl !== 'string') return null;
-  const t = wsUrl.trim();
-  if (/^wss:\/\//i.test(t)) return 'https://' + t.slice(6).replace(/\/+$/, '');
-  if (/^ws:\/\//i.test(t)) return 'http://' + t.slice(5).replace(/\/+$/, '');
-  return null;
+  let t = wsUrl.trim();
+  if (!t) return null;
+  if (!/^wss?:\/\//i.test(t)) t = `wss://${t.replace(/^\/\//, '')}`;
+  try {
+    const u = new URL(t);
+    if (u.protocol !== 'ws:' && u.protocol !== 'wss:') return null;
+    const httpProto = u.protocol === 'ws:' ? 'http:' : 'https:';
+    return `${httpProto}//${u.host}`;
+  } catch {
+    return null;
+  }
 }
 
 const btnPasteInvite = document.getElementById('btnPasteInvite');

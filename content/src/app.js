@@ -397,12 +397,13 @@ export function runPlayShareContent() {
       overview: true,
       alerts: true,
       prime: true,
-      actions: true,
       multiplayer: true,
       server: true,
       technical: true,
       logs: true
-    }
+    },
+    /** Resolved `/diag/intel/explorer` URL for the intelligence dashboard button. */
+    _intelExplorerUrl: ''
   };
 
   const DIAG_LS_CONSOLE_VIEW = 'playshare_diag_console_view';
@@ -4636,7 +4637,7 @@ export function runPlayShareContent() {
     const peerDiagLine = peerRecordingDiagnostics
       ? ` Peer profiler samples: ${peerRecordingDiagnostics.peers.length} peer(s), ${(peerRecordingDiagnostics.peers).reduce((a, p) => a + (typeof p.sampleCount === 'number' ? p.sampleCount : 0), 0)} row(s).`
       : '';
-    const appendix = `\n\n--- Unified JSON (Export report / Copy JSON) ---\nBundled: extension report (${extension.reportSchemaVersion || '?'} — sync metrics, extensionOps, service worker WS + connectionDetail, narrativeSummary), video profiler (${pSnap} snapshots in this file), ${
+    const appendix = `\n\n--- Unified JSON (server upload) ---\nClient extension version: ${extension.extensionVersion || 'unknown'} · report schema ${extension.reportSchemaVersion || '?'}\nBundled: extension report (${extension.reportSchemaVersion || '?'} — sync metrics, extensionOps, service worker WS + connectionDetail, narrativeSummary), video profiler (${pSnap} snapshots in this file), ${
       siteSync.key === 'prime'
         ? primeSiteDebug && !primeSiteDebug.captureError
           ? 'Prime player/site digest.'
@@ -4663,38 +4664,6 @@ export function runPlayShareContent() {
     };
   }
 
-  async function copyDiagExport() {
-    const payload = await getUnifiedPlayShareExportPayload();
-    const json = JSON.stringify(payload, null, 2);
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard
-        .writeText(json)
-        .then(() => diagLog('DIAG_EXPORT', { copied: true, unified: true }))
-        .catch(() => diagLog('ERROR', { message: 'Copy failed' }));
-    } else {
-      diagLog('ERROR', { message: 'Clipboard API unavailable' });
-    }
-  }
-
-  async function downloadDiagExport() {
-    const payload = await getUnifiedPlayShareExportPayload();
-    const json = JSON.stringify(payload, null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    const host =
-      (payload.extension && payload.extension.pageHost
-        ? String(payload.extension.pageHost)
-        : typeof location !== 'undefined'
-          ? location.hostname
-          : 'page'
-      ).replace(/[^a-z0-9.-]/gi, '_') || 'page';
-    a.download = `playshare-unified-report-${host}-${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-    diagLog('DIAG_EXPORT', { downloaded: true, unified: true });
-  }
-
   function mergeEnrichmentForDiagUpload(payload) {
     try {
       const th = syncDecision.getDriftThresholds();
@@ -4719,7 +4688,7 @@ export function runPlayShareContent() {
     const opt = await new Promise((r) => chrome.storage.local.get(['playshare_diag_upload_opt_in'], r));
     if (!opt.playshare_diag_upload_opt_in) {
       diagLog('ERROR', { message: 'Diagnostic upload: enable opt-in checkbox first', kind: 'diag_upload' });
-      showToast('Enable “Share anonymized diagnostics” below, then try again.');
+      showToast('Turn on “Allow uploads to my server” first, then try again.');
       return;
     }
     await prepareDiagnosticSnapshotForExport();
@@ -4731,6 +4700,10 @@ export function runPlayShareContent() {
     } catch {
       /* ignore */
     }
+    payload.uploadClient = {
+      extensionVersion: ver,
+      diagnosticReportSchema: DIAGNOSTIC_REPORT_SCHEMA
+    };
     const tr = await new Promise((r) => chrome.storage.local.get(['playshare_diag_test_run_id'], r));
     chrome.runtime.sendMessage(
       {
@@ -4765,9 +4738,15 @@ export function runPlayShareContent() {
           diagLog('ERROR', {
             message: res?.error || res?.detail || 'Upload rejected',
             status: res?.status,
+            uploadUrl: res?.uploadUrl,
             kind: 'diag_upload'
           });
-          showToast(`Upload failed${res?.status ? ` (${res.status})` : ''}`);
+          const st = res?.status;
+          const u404 =
+            st === 404
+              ? ' Server has no POST /diag/upload (deploy latest server) or the signaling URL included a path — use host only, e.g. wss://your.railway.app'
+              : '';
+          showToast(`Upload failed${st ? ` (${st})` : ''}.${u404}`);
         }
       }
     );
@@ -4808,38 +4787,20 @@ export function runPlayShareContent() {
     if (wasRec) broadcastProfilerCollectionState(false);
     diagLog('DIAG', { videoProfiler: 'stopped' });
     updateDiagnosticOverlay();
+    if (wasRec) void maybeAutoUploadAfterProfilerStop();
   }
 
-  async function copyUnifiedExportCompactProfiler() {
-    const payload = await getUnifiedPlayShareExportPayload({ compactProfiler: true });
-    const json = JSON.stringify(payload, null, 2);
-    if (navigator.clipboard?.writeText) {
-      try {
-        await navigator.clipboard.writeText(json);
-        diagLog('DIAG_EXPORT', { unified: true, copied: true, compactProfiler: true });
-      } catch {
-        diagLog('ERROR', { message: 'Unified compact copy failed' });
-      }
-    } else {
-      diagLog('ERROR', { message: 'Clipboard API unavailable' });
+  /** When opt-in + auto-upload are enabled, send compact anonymized bundle to server after stop. */
+  async function maybeAutoUploadAfterProfilerStop() {
+    try {
+      const r = await new Promise((resolve) =>
+        chrome.storage.local.get(['playshare_diag_upload_opt_in', 'playshare_diag_auto_upload_on_stop'], resolve)
+      );
+      if (!r.playshare_diag_upload_opt_in || !r.playshare_diag_auto_upload_on_stop) return;
+      await uploadAnonymizedDiagnosticExport();
+    } catch {
+      /* ignore */
     }
-  }
-
-  async function downloadUnifiedExportWithProfilerFrame() {
-    const payload = await getUnifiedPlayShareExportPayload({ includeProfilerVideoFrame: true });
-    const json = JSON.stringify(payload, null, 2);
-    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    const host =
-      (payload.extension && payload.extension.pageHost
-        ? String(payload.extension.pageHost)
-        : 'page'
-      ).replace(/[^a-z0-9.-]/gi, '_') || 'page';
-    a.download = `playshare-unified-report-${host}-videoframe-${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-    diagLog('DIAG_EXPORT', { downloaded: true, unified: true, withProfilerVideoFrame: true });
   }
 
   function clearVideoProfilerSession() {
@@ -4850,41 +4811,6 @@ export function runPlayShareContent() {
     diag.profilerPeerCollection.remoteCollectorClientId = null;
     diagLog('DIAG', { videoProfiler: 'cleared' });
     updateDiagnosticOverlay();
-  }
-
-  async function copyDiagNarrative() {
-    await prepareDiagnosticSnapshotForExport();
-    const extension = getDiagExportPayload();
-    const st = getVideoProfiler().getStatus();
-    const appendix = `\n\n--- Unified JSON ---\nUse **Export report** or **Copy JSON** for one file: extension report (${extension.reportSchemaVersion || '?'}), video profiler (${st.snapshotCount} snapshots), ${
-      siteSync.key === 'prime' ? 'Prime player/site digest (captured at export).' : 'no Prime site block.'
-    } Does not include the separate Prime missed-ad-only JSON.\n`;
-    const narrative = (extension.narrativeSummary || '') + appendix;
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard
-        .writeText(narrative)
-        .then(() => diagLog('DIAG_EXPORT', { narrativeCopied: true, unified: true }))
-        .catch(() => diagLog('ERROR', { message: 'Copy failed' }));
-    } else {
-      diagLog('ERROR', { message: 'Clipboard API unavailable' });
-    }
-  }
-
-  async function downloadDiagNarrativeTxt() {
-    await prepareDiagnosticSnapshotForExport();
-    const extension = getDiagExportPayload();
-    const st = getVideoProfiler().getStatus();
-    const appendix = `\n\n--- Unified JSON ---\nUse **Export report** or **Copy JSON** for one file: extension report (${extension.reportSchemaVersion || '?'}), video profiler (${st.snapshotCount} snapshots), ${
-      siteSync.key === 'prime' ? 'Prime player/site digest (captured at export).' : 'no Prime site block.'
-    } Does not include the separate Prime missed-ad-only JSON.\n`;
-    const narrative = (extension.narrativeSummary || '') + appendix;
-    const blob = new Blob([narrative], { type: 'text/plain;charset=utf-8' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `playshare-sync-summary-${Date.now()}.txt`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-    diagLog('DIAG_EXPORT', { narrativeDownloaded: true, unified: true });
   }
 
   /**
@@ -4947,8 +4873,8 @@ export function runPlayShareContent() {
 
   function applyDiagSectionVisibility(issues) {
     if (!diagPanel) return;
-    /** Full dashboard always shows metrics; compact strip uses category icons only. */
-    const showAllMetrics = diag.consoleView === 'detailed';
+    /** Advanced console always shows full metrics (compact strip removed from analytics panel). */
+    const showAllMetrics = true;
     const map = [
       ['multiplayer', issues.multiplayer],
       ['server', issues.server],
@@ -5078,18 +5004,75 @@ export function runPlayShareContent() {
     }
   }
 
+  function refreshIntelExplorerLink() {
+    if (!diagPanel) return;
+    const urlEl = diagPanel.querySelector('[data-diag-intel-url]');
+    const openBtn = diagPanel.querySelector('#diagOpenIntelExplorer');
+    if (!urlEl) return;
+    try {
+      chrome.storage.local.get(['serverUrl'], (d) => {
+        const raw = (d.serverUrl && String(d.serverUrl).trim()) || '';
+        let httpBase = null;
+        if (raw) {
+          const normalized = /^wss?:\/\//i.test(raw) ? raw : `wss://${raw.replace(/^\/\//, '')}`;
+          httpBase = wsUrlToHttpBase(normalized);
+        }
+        const full = httpBase ? `${String(httpBase).replace(/\/+$/, '')}/diag/intel/explorer` : '';
+        diag._intelExplorerUrl = full;
+        urlEl.textContent = full || 'Set server URL in the extension (same as sync).';
+        if (openBtn) {
+          openBtn.disabled = !full;
+          openBtn.title = full ? 'Open intelligence dashboard in a new tab' : 'Set server URL in the extension first';
+        }
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
   function updateDiagnosticOverlay() {
     if (!diagPanel || !diagVisible) return;
+    refreshIntelExplorerLink();
 
     const uploadOpt = diagPanel.querySelector('#diagUploadOptIn');
+    const uploadAutoStop = diagPanel.querySelector('#diagUploadAutoStop');
     if (uploadOpt && !uploadOpt.dataset.bound) {
       uploadOpt.dataset.bound = '1';
       try {
-        chrome.storage.local.get(['playshare_diag_upload_opt_in'], (r) => {
+        chrome.storage.local.get(['playshare_diag_upload_opt_in', 'playshare_diag_auto_upload_on_stop'], (r) => {
           uploadOpt.checked = !!r.playshare_diag_upload_opt_in;
+          if (uploadAutoStop) {
+            uploadAutoStop.checked = !!r.playshare_diag_auto_upload_on_stop;
+            uploadAutoStop.disabled = !uploadOpt.checked;
+          }
         });
         uploadOpt.addEventListener('change', () => {
-          chrome.storage.local.set({ playshare_diag_upload_opt_in: !!uploadOpt.checked });
+          const on = !!uploadOpt.checked;
+          chrome.storage.local.set({ playshare_diag_upload_opt_in: on });
+          if (uploadAutoStop) {
+            if (!on) {
+              uploadAutoStop.checked = false;
+              chrome.storage.local.set({ playshare_diag_auto_upload_on_stop: false });
+            }
+            uploadAutoStop.disabled = !on;
+          }
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+    if (uploadAutoStop && !uploadAutoStop.dataset.bound) {
+      uploadAutoStop.dataset.bound = '1';
+      try {
+        uploadAutoStop.addEventListener('change', () => {
+          let auto = !!uploadAutoStop.checked;
+          if (auto && uploadOpt && !uploadOpt.checked) {
+            uploadOpt.checked = true;
+            chrome.storage.local.set({ playshare_diag_upload_opt_in: true });
+            uploadAutoStop.disabled = false;
+          }
+          if (!uploadOpt?.checked) auto = false;
+          chrome.storage.local.set({ playshare_diag_auto_upload_on_stop: auto });
         });
       } catch {
         /* ignore */
@@ -5320,59 +5303,14 @@ export function runPlayShareContent() {
           : `<div class="ws-diag-row ws-diag-muted">No video element</div>
              <div class="ws-diag-row ws-diag-muted"><code>waiting</code>×${vb.waiting} <code>stalled</code>×${vb.stalled}</div>`;
       }
-      const videoProfilerStatusEl = diagPanel.querySelector('[data-diag="video-profiler-status"]');
-      if (videoProfilerStatusEl) {
-        try {
-          const st = getVideoProfiler().getStatus();
-          const endMs = st.recording ? Date.now() : st.endedAtMs;
-          const durSec =
-            st.startedAtMs != null && endMs != null
-              ? Math.max(0, Math.round((endMs - st.startedAtMs) / 1000))
-              : null;
-          const dur = durSec != null ? `${durSec}s` : '—';
-          const rec = st.recording ? 'Recording' : st.startedAtMs != null ? 'Stopped' : 'Idle';
-          const err = st.lastMediaError ? `${st.lastMediaError.name}` : 'none';
-          const topCounts = Object.entries(st.eventTypeCounts)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 5)
-            .map(([k, n]) => `${k}×${n}`)
-            .join(' · ');
-          const um = st.userMarkerCount != null ? st.userMarkerCount : 0;
-          const lim = st.recordingLimits;
-          const capLine =
-            lim && typeof lim.approxMaxWallMinutes === 'number'
-              ? `Every ${lim.snapshotIntervalMs / 1000}s · keeps last <strong>${lim.maxSnapshots}</strong> snaps (~<strong>${lim.approxMaxWallMinutes}</strong> min wall if full) · max <strong>${lim.maxEvents}</strong> events (ring buffer).`
-              : '';
-          videoProfilerStatusEl.innerHTML = `<strong>${rec}</strong> · elapsed ${dur} · snapshots <strong>${st.snapshotCount}</strong> · events <strong>${st.eventCount}</strong> · markers <strong>${um}</strong><br/>
-            <span class="ws-diag-muted">${capLine} Timeline is merged into the <strong>unified</strong> Export report / Copy JSON; stop recording to freeze samples. v3 — EME/PiP, frame callback sample, long tasks. Stall hints: ${st.playheadStallMarkers} · last media error: ${err}${topCounts ? ` · top events: ${topCounts}` : ''}</span>`;
-        } catch {
-          videoProfilerStatusEl.textContent = 'Profiler unavailable.';
-        }
-      }
       const recToggle = diagPanel.querySelector('#diagCompactRecordToggle');
       const recLabel = diagPanel.querySelector('[data-diag="compact-rec-label"]');
-      const profilerStartBtn = diagPanel.querySelector('#diagVideoProfilerStart');
-      const profilerStopBtn = diagPanel.querySelector('#diagVideoProfilerStop');
       const profilerMarkerBtn = diagPanel.querySelector('#diagVideoProfilerMarker');
       try {
         const recording = getVideoProfiler().isRecording();
         const v = findVideo() || video;
         const canStart = !!v;
 
-        if (profilerStartBtn) {
-          profilerStartBtn.disabled = recording || !canStart;
-          profilerStartBtn.title = recording
-            ? 'Already recording — use Stop when finished'
-            : !canStart
-              ? 'Start playback first — recording needs a video element'
-              : 'Start capturing profiler snapshots into the unified export';
-        }
-        if (profilerStopBtn) {
-          profilerStopBtn.disabled = !recording;
-          profilerStopBtn.title = recording
-            ? 'Stop capturing (freeze profiler timeline for export)'
-            : 'Not recording — nothing to stop';
-        }
         if (profilerMarkerBtn) {
           profilerMarkerBtn.disabled = !recording;
           profilerMarkerBtn.title = recording
@@ -5386,14 +5324,12 @@ export function runPlayShareContent() {
           recLabel.textContent = recording ? 'Stop' : 'Record';
           recToggle.disabled = recording ? false : !canStart;
           recToggle.title = recording
-            ? 'Stop profiler recording'
+            ? 'Stop recording (may trigger auto-upload to intelligence pipeline)'
             : !canStart
               ? 'Start playback first — then record'
-              : 'Start profiler recording (included in unified export)';
+              : 'Start profiler recording for export + optional server intelligence';
         }
       } catch {
-        if (profilerStartBtn) profilerStartBtn.disabled = false;
-        if (profilerStopBtn) profilerStopBtn.disabled = true;
         if (profilerMarkerBtn) profilerMarkerBtn.disabled = true;
         if (recToggle) recToggle.disabled = false;
         if (recLabel) recLabel.textContent = 'Record';
@@ -5679,7 +5615,7 @@ export function runPlayShareContent() {
     diagPanel = document.createElement('div');
     diagPanel.className = 'ws-diag-panel';
     diagPanel.setAttribute('role', 'dialog');
-    diagPanel.setAttribute('aria-label', 'PlayShare sync analytics console');
+    diagPanel.setAttribute('aria-label', 'PlayShare analytics and diagnostic intelligence');
     diagPanel.innerHTML = `
       <div class="ws-diag-header">
         <div class="ws-diag-header-accent" aria-hidden="true"></div>
@@ -5687,14 +5623,12 @@ export function runPlayShareContent() {
           <button type="button" class="ws-diag-drag" title="Drag panel"><span class="ws-diag-drag-grip" aria-hidden="true"></span></button>
           <div class="ws-diag-header-center ws-diag-header-brand">
             <div class="ws-diag-header-title-row">
-              <span class="ws-diag-title">Sync analytics</span>
+              <span class="ws-diag-title">Analytics</span>
               <span class="ws-diag-dev-badge">DEV</span>
             </div>
           </div>
           <div class="ws-diag-header-aside">
             <div class="ws-diag-header-icon-rail" role="toolbar" aria-label="Panel">
-              <button type="button" class="ws-diag-icon-btn ws-diag-icon-customize" id="diagDashCustomizeOpen" title="Customize visible sections"></button>
-              <button type="button" class="ws-diag-icon-btn" id="diagConsoleViewToggle" title="Dashboard ↔ compact strip" aria-pressed="true"><span class="ws-diag-icon-console-view" aria-hidden="true"></span></button>
               <button type="button" class="ws-diag-icon-btn" id="diagWideToggle" title="Wider panel"><span class="ws-diag-icon-wide" aria-hidden="true"></span></button>
               <button type="button" class="ws-diag-icon-btn ws-diag-minimize-btn" title="Minimize"><span class="ws-diag-icon-min" aria-hidden="true"></span></button>
               <button type="button" class="ws-diag-icon-btn ws-diag-close" title="Close (⌃⇧D)"><span class="ws-diag-icon-x" aria-hidden="true"></span></button>
@@ -5702,37 +5636,56 @@ export function runPlayShareContent() {
           </div>
         </div>
       </div>
-      <div class="ws-diag-compact-root ws-diag-body-scroll">
-        <div class="ws-diag-compact-components" role="group" aria-label="Sync, ad detection, video">
-          <button type="button" class="ws-diag-comp-tile ws-diag-comp-ok" data-diag-comp="sync" title="Sync — open multiplayer &amp; transport in dashboard">
-            <span class="ws-diag-comp-ic" aria-hidden="true"><svg class="ws-diag-comp-svg" viewBox="0 0 24 24"><path fill="currentColor" d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.96 7.96 0 0020 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.96 7.96 0 004 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg></span>
-            <span class="ws-diag-comp-name">Sync</span>
-            <span class="ws-diag-comp-line" data-diag-comp-line="sync"></span>
-          </button>
-          <button type="button" class="ws-diag-comp-tile ws-diag-comp-ok" data-diag-comp="ad" title="Ad detection — open Prime or technical in dashboard">
-            <span class="ws-diag-comp-ic" aria-hidden="true"><svg class="ws-diag-comp-svg" viewBox="0 0 24 24"><path fill="currentColor" d="M18 4H6a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2zm0 14H6V6h12v12zm-8-9v6l4-3-4-3z"/></svg></span>
-            <span class="ws-diag-comp-name">Ad</span>
-            <span class="ws-diag-comp-line" data-diag-comp-line="ad"></span>
-          </button>
-          <button type="button" class="ws-diag-comp-tile ws-diag-comp-ok" data-diag-comp="video" title="Video — open technical in dashboard">
-            <span class="ws-diag-comp-ic" aria-hidden="true"><svg class="ws-diag-comp-svg" viewBox="0 0 24 24"><path fill="currentColor" d="M17 10.5V7a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h12a1 1 0 001-1v-3.5l4 4v-11l-4 4z"/></svg></span>
-            <span class="ws-diag-comp-name">Video</span>
-            <span class="ws-diag-comp-line" data-diag-comp-line="video"></span>
-          </button>
+      <div class="ws-diag-simplified-body ws-diag-body-scroll">
+        <div class="ws-diag-simple-card ws-diag-simple-card-unified">
+          <div class="ws-diag-simple-card-title">Record &amp; send</div>
+          <p class="ws-diag-simple-card-sub ws-diag-simple-card-sub-tight">Capture a session and upload anonymized diagnostics to your PlayShare server (same host as sync).</p>
+          <div class="ws-diag-unified-record-row">
+            <button type="button" class="ws-diag-btn ws-diag-btn-hero-rec ws-diag-unified-rec" id="diagCompactRecordToggle" aria-pressed="false" title="Start or stop session recording">
+              <span class="ws-diag-rec-dot" aria-hidden="true"></span><span data-diag="compact-rec-label">Record</span>
+            </button>
+          </div>
+          <div class="ws-diag-simple-inline-tools ws-diag-unified-tools">
+            <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerMarker" title="Add a marker while recording">Mark</button>
+            <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerClear" title="Discard captured data without saving">Clear</button>
+            ${
+              siteSync.key === 'prime'
+                ? `<button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm ws-diag-btn-missed-ad diag-prime-missed-ad-btn" title="Prime ad-debug JSON (separate file)">Ad snap</button>`
+                : ''
+            }
+          </div>
+          <div class="ws-diag-report-divider ws-diag-unified-divider" aria-hidden="true"></div>
+          <label class="ws-diag-simple-check"><input type="checkbox" id="diagUploadOptIn" /><span>Allow uploads to my server</span></label>
+          <label class="ws-diag-simple-check"><input type="checkbox" id="diagUploadAutoStop" /><span>Send automatically when I stop recording</span></label>
+          <button type="button" class="ws-diag-btn ws-diag-btn-primary ws-diag-btn-sm ws-diag-unified-send-btn" id="diagUploadAnonymized">Send now</button>
         </div>
-        <div class="ws-diag-compact-snaps">
-          <button type="button" class="ws-diag-btn ws-diag-btn-sm ws-diag-compact-rec" id="diagCompactRecordToggle" aria-pressed="false" title="Start or stop session recording (video profiler — included in unified export)">
-            <span class="ws-diag-rec-dot" aria-hidden="true"></span><span data-diag="compact-rec-label">Record</span>
-          </button>
-          ${
-            siteSync.key === 'prime'
-              ? `<button type="button" class="ws-diag-btn ws-diag-btn-sm ws-diag-btn-missed-ad diag-prime-missed-ad-btn" title="Missed-ad investigation only (not in unified export)">Ad snap</button>
-            <button type="button" class="ws-diag-btn ws-diag-btn-sm ws-diag-btn-primary-compact" id="diagCompactUnifiedExport" title="Download full report: extension + recording + Prime">Export</button>`
-              : '<button type="button" class="ws-diag-btn ws-diag-btn-sm ws-diag-btn-primary-compact" id="diagCompactExport" title="Download full report: extension + recording">Export</button>'
-          }
+
+        <div class="ws-diag-simple-card ws-diag-simple-card-intel">
+          <div class="ws-diag-simple-card-title">Intelligence</div>
+          <div class="ws-diag-simple-btn-row">
+            <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagOpenIntelExplorer" disabled>Open dashboard</button>
+            <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagCopyIntelUrl">Copy link</button>
+          </div>
+          <details class="ws-diag-details ws-diag-details-more ws-diag-intel-url-details">
+            <summary class="ws-diag-more-summary">Show URL</summary>
+            <div class="ws-diag-intel-url-box" style="margin-top:8px"><code class="ws-diag-intel-url" data-diag-intel-url>…</code></div>
+          </details>
         </div>
-      </div>
-      <div class="ws-diag-detailed-root ws-diag-body-scroll">
+
+        <div id="ws-diag-advanced-gate" class="ws-diag-advanced-gate">
+          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagRevealAdvancedConsole" title="Detailed multiplayer, server, and sync metrics">Live sync console…</button>
+        </div>
+        <div class="ws-diag-advanced-details" id="ws-diag-advanced-console" hidden>
+          <div class="ws-diag-advanced-inner">
+            <div class="ws-diag-advanced-toolbar">
+              <button type="button" class="ws-diag-btn ws-diag-btn-ghost ws-diag-btn-sm" id="diagHideAdvancedConsole" title="Hide live sync console">Hide</button>
+              <button type="button" class="ws-diag-btn ws-diag-btn-ghost ws-diag-btn-sm" id="diagDashCustomizeOpen">Section layout…</button>
+              <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagSyncTest">Sync test</button>
+              <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagSyncTestSoak">Test ×5</button>
+              <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagSyncReport">Peer report</button>
+              <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagSyncReset">Reset</button>
+              <button type="button" class="ws-diag-btn ws-diag-btn-ghost ws-diag-btn-sm" id="diagThemeToggle">Theme</button>
+            </div>
         <div data-diag="sync-stale" class="ws-diag-stale-banner" aria-live="polite"></div>
 
         <div data-diag-dash-block="overview">
@@ -5741,72 +5694,6 @@ export function runPlayShareContent() {
         </div>
         <div data-diag-dash-block="alerts">
         <div data-diag="dash-alerts" class="ws-diag-dash-alerts" aria-live="polite"></div>
-        </div>
-
-        <div data-diag-dash-block="actions" class="ws-diag-dash-actions-wrap">
-        <div class="ws-diag-section-label">Record &amp; export</div>
-        <div class="ws-diag-record-export-card">
-          <p class="ws-diag-record-export-lead">Capture a <strong>single JSON</strong> for support: sync analytics, server connectivity, optional Prime digest, and <strong>video profiler snapshots</strong> from this session. Optional: <strong>Stop</strong> recording first to freeze the profiler timeline; export still works while recording.</p>
-          <div class="ws-diag-workflow-steps">
-            <div class="ws-diag-workflow-step">
-              <div class="ws-diag-step-badge" aria-hidden="true">1</div>
-              <div class="ws-diag-step-body">
-                <div class="ws-diag-step-title">Record session</div>
-                <div data-diag="video-profiler-status" class="ws-diag-row ws-diag-muted ws-diag-profiler-status-compact">Idle — press Start when the video is playing.</div>
-                <div class="ws-diag-step-actions-row">
-                  <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerStart">Start recording</button>
-                  <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerStop">Stop</button>
-                  <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerMarker" title="Add a labeled point in the JSON timeline. On Netflix, the extra snapshot includes domHints (data-uia, aria, shell class) for ad-debug — use during a missed ad.">Mark moment</button>
-                  <button type="button" class="ws-diag-btn ws-diag-btn-ghost ws-diag-btn-sm" id="diagVideoProfilerClear" title="Discard captured snapshots and events">Clear session</button>
-                </div>
-              </div>
-            </div>
-            <div class="ws-diag-workflow-step">
-              <div class="ws-diag-step-badge" aria-hidden="true">2</div>
-              <div class="ws-diag-step-body">
-                <div class="ws-diag-step-title">Save full report</div>
-                <p class="ws-diag-step-hint ws-diag-muted">Refreshes RTT and server trace, then bundles everything into one file.</p>
-                <div class="ws-diag-step-export-row">
-                  <button type="button" class="ws-diag-btn" id="diagExportDownload" title="Unified JSON: extension + connectivity + profiler + Prime (on Prime)">Export report</button>
-                  <details class="ws-diag-details ws-diag-details-more ws-diag-details-more-inline">
-                    <summary class="ws-diag-more-summary">More formats &amp; tools</summary>
-                    <div class="ws-diag-more-inner">
-                      <div class="ws-diag-more-group">
-                        <span class="ws-diag-more-label">Export</span>
-                        <div class="ws-diag-actions ws-diag-actions-col">
-                          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagExportCopy" title="Same unified bundle as Export report">Copy JSON</button>
-                          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagExportCopyCompactProfiler" title="Unified JSON with trimmed profiler snapshots">Copy JSON (compact profiler)</button>
-                          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagExportDownloadWithProfilerFrame" title="Large file: embeds profiler JPEG when canvas is not DRM-blocked">Download + video frame</button>
-                          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagExportNarrativeCopy">Copy text summary</button>
-                          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagExportNarrativeDownload">Download .txt</button>
-                        </div>
-                      </div>
-                      <div class="ws-diag-more-group">
-                        <span class="ws-diag-more-label">Diagnostics</span>
-                        <div class="ws-diag-actions ws-diag-actions-col">
-                          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagSyncTest">Sync test</button>
-                          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagSyncTestSoak">Sync test ×5</button>
-                          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagSyncReport">Request peer report</button>
-                          <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagSyncReset">Reset metrics</button>
-                          <button type="button" class="ws-diag-btn ws-diag-btn-ghost ws-diag-btn-sm" id="diagThemeToggle">Toggle theme</button>
-                        </div>
-                      </div>
-                    </div>
-                  </details>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="ws-diag-upload-panel" style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(148,163,184,0.22)">
-            <label class="ws-diag-row" style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:11px;line-height:1.45;color:var(--ws-diag-muted)">
-              <input type="checkbox" id="diagUploadOptIn" style="margin-top:2px;flex-shrink:0" />
-              <span>Opt in: upload <strong>anonymized</strong> report to your configured PlayShare server (<code style="font-size:10px">/diag/upload</code>). Same bundle as export (compact profiler); room/username hashed; narrative omitted. Requires Supabase on the server for persistence.</span>
-            </label>
-            <div class="ws-diag-step-export-row" style="margin-top:10px">
-              <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagUploadAnonymized" title="POST anonymized JSON to the server">Upload anonymized report</button>
-            </div>
-          </div>
-        </div>
         </div>
 
         ${
@@ -5824,13 +5711,13 @@ export function runPlayShareContent() {
             <button type="button" class="ws-diag-btn ws-diag-btn-sm ws-diag-btn-missed-ad diag-prime-missed-ad-btn" id="diagPrimeMissedAdCapture" title="Missed-ad investigation only — separate from unified export">Ad snapshot</button>
           </div>
           <div class="ws-diag-prime-status-compact ws-diag-muted" aria-live="polite">
-            <span data-diag="prime-missed-ad-status"></span><span class="ws-diag-status-sep"> · </span><span>Prime player digest is included in <strong>Export report</strong> / <strong>Copy JSON</strong>.</span>
+            <span data-diag="prime-missed-ad-status"></span><span class="ws-diag-status-sep"> · </span><span>Prime digest is included in <strong>Send now</strong> / auto-send uploads.</span>
           </div>
         </div>`
             : ''
         }
 
-        <div class="ws-diag-section-label ws-diag-section-label-tight">Categories</div>
+        <div class="ws-diag-section-label ws-diag-section-label-tight">Live metrics</div>
 
         <details class="ws-diag-details" data-diag-sec="multiplayer" data-diag-dash-block="multiplayer" open>
           <summary class="ws-diag-sec-sum">
@@ -5888,7 +5775,7 @@ export function runPlayShareContent() {
               <span class="ws-diag-inline-label">Video</span>
               <div data-diag="sync-video-health" class="ws-diag-sync-block"></div>
               <div class="ws-diag-sync-block ws-diag-muted" style="font-size:11px;line-height:1.45;margin-bottom:8px">
-                <strong>Video profiler</strong> — use <strong>Record &amp; export</strong> above (steps 1–2). With other dev clients in the room, peer samples during recording show under <strong>Multiplayer → Peers</strong>.
+                <strong>Video profiler</strong> — use <strong>Record</strong> at the top of this panel. Peer samples during recording appear under <strong>Multiplayer → Peers</strong> below.
               </div>
               <span class="ws-diag-inline-label">Device &amp; cluster</span>
               <div data-diag="sync-this-device" class="ws-diag-sync-block"></div>
@@ -5924,6 +5811,8 @@ export function runPlayShareContent() {
             </div>
           </div>
         </details>
+          </div>
+        </div>
       </div>
       <div id="diagDashModalRoot" class="ws-diag-dash-modal-root" hidden aria-hidden="true">
         <div class="ws-diag-dash-modal-backdrop" data-diag-dash-modal-dismiss tabindex="-1" aria-hidden="true"></div>
@@ -5932,12 +5821,11 @@ export function runPlayShareContent() {
             <h2 id="diagDashModalTitle" class="ws-diag-dash-modal-title">Customize dashboard</h2>
             <button type="button" class="ws-diag-dash-modal-x" id="diagDashCustomizeClose" aria-label="Close">×</button>
           </div>
-          <p class="ws-diag-dash-modal-lead">Turn sections on or off in the detailed view. You can always reopen this from the header.</p>
+          <p class="ws-diag-dash-modal-lead">Show or hide sections inside the <strong>live sync console</strong>.</p>
           <div class="ws-diag-dash-toggles ws-diag-dash-modal-toggles" data-diag-dash-customize>
             <label class="ws-diag-dash-toggle"><input type="checkbox" data-dash-toggle="overview" checked /> Session overview</label>
             <label class="ws-diag-dash-toggle"><input type="checkbox" data-dash-toggle="alerts" checked /> Alerts</label>
             ${siteSync.key === 'prime' ? '<label class="ws-diag-dash-toggle"><input type="checkbox" data-dash-toggle="prime" checked /> Prime</label>' : ''}
-            <label class="ws-diag-dash-toggle"><input type="checkbox" data-dash-toggle="actions" checked /> Record &amp; export</label>
             <label class="ws-diag-dash-toggle"><input type="checkbox" data-dash-toggle="multiplayer" checked /> Multiplayer</label>
             <label class="ws-diag-dash-toggle"><input type="checkbox" data-dash-toggle="server" checked /> Server &amp; timeline</label>
             <label class="ws-diag-dash-toggle"><input type="checkbox" data-dash-toggle="technical" checked /> Technical</label>
@@ -5977,16 +5865,21 @@ export function runPlayShareContent() {
       diagPanel.classList.toggle('ws-diag-wide', diag.overlayWide);
     });
 
-    diagPanel.querySelector('#diagConsoleViewToggle')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      setDiagConsoleView(diag.consoleView === 'compact' ? 'detailed' : 'compact');
+    diagPanel.querySelector('#diagOpenIntelExplorer')?.addEventListener('click', () => {
+      const u = diag._intelExplorerUrl;
+      if (u) window.open(u, '_blank', 'noopener,noreferrer');
     });
-
-    diagPanel.querySelector('#diagCompactExport')?.addEventListener('click', () => {
-      downloadDiagExport().catch(() => diagLog('ERROR', { message: 'Export failed' }));
-    });
-    diagPanel.querySelector('#diagCompactUnifiedExport')?.addEventListener('click', () => {
-      downloadDiagExport().catch(() => diagLog('ERROR', { message: 'Export failed' }));
+    diagPanel.querySelector('#diagCopyIntelUrl')?.addEventListener('click', async () => {
+      const u = diag._intelExplorerUrl;
+      if (!u) return;
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(u);
+          showToast('Intelligence link copied');
+        }
+      } catch {
+        /* ignore */
+      }
     });
     diagPanel.querySelector('#diagCompactRecordToggle')?.addEventListener('click', () => {
       try {
@@ -5996,6 +5889,21 @@ export function runPlayShareContent() {
         diagLog('ERROR', { message: 'Profiler toggle failed' });
       }
       updateDiagnosticOverlay();
+    });
+
+    diagPanel.querySelector('#diagRevealAdvancedConsole')?.addEventListener('click', () => {
+      const shell = diagPanel.querySelector('#ws-diag-advanced-console');
+      const gate = diagPanel.querySelector('#ws-diag-advanced-gate');
+      shell?.removeAttribute('hidden');
+      gate?.setAttribute('hidden', '');
+      updateDiagnosticOverlay();
+      queueMicrotask(() => shell?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+    });
+    diagPanel.querySelector('#diagHideAdvancedConsole')?.addEventListener('click', () => {
+      const shell = diagPanel.querySelector('#ws-diag-advanced-console');
+      const gate = diagPanel.querySelector('#ws-diag-advanced-gate');
+      shell?.setAttribute('hidden', '');
+      gate?.removeAttribute('hidden');
     });
 
     diagPanel.querySelector('#diagDashCustomizeOpen')?.addEventListener('click', (e) => {
@@ -6145,28 +6053,10 @@ export function runPlayShareContent() {
       b.addEventListener('click', primeMissedAdCaptureHandler);
     });
 
-    diagPanel.querySelector('#diagExportCopy')?.addEventListener('click', () => {
-      copyDiagExport().catch(() => diagLog('ERROR', { message: 'Export failed' }));
-    });
-    diagPanel.querySelector('#diagExportDownload')?.addEventListener('click', () => {
-      downloadDiagExport().catch(() => diagLog('ERROR', { message: 'Export failed' }));
-    });
     diagPanel.querySelector('#diagUploadAnonymized')?.addEventListener('click', () => {
       uploadAnonymizedDiagnosticExport().catch((e) =>
         diagLog('ERROR', { message: e && e.message ? e.message : String(e), kind: 'diag_upload' })
       );
-    });
-    diagPanel.querySelector('#diagExportCopyCompactProfiler')?.addEventListener('click', () => {
-      copyUnifiedExportCompactProfiler().catch(() => diagLog('ERROR', { message: 'Export failed' }));
-    });
-    diagPanel.querySelector('#diagExportDownloadWithProfilerFrame')?.addEventListener('click', () => {
-      downloadUnifiedExportWithProfilerFrame().catch(() => diagLog('ERROR', { message: 'Export failed' }));
-    });
-    diagPanel.querySelector('#diagExportNarrativeCopy')?.addEventListener('click', () => {
-      copyDiagNarrative().catch(() => diagLog('ERROR', { message: 'Export failed' }));
-    });
-    diagPanel.querySelector('#diagExportNarrativeDownload')?.addEventListener('click', () => {
-      downloadDiagNarrativeTxt().catch(() => diagLog('ERROR', { message: 'Export failed' }));
     });
     diagPanel.querySelector('#diagThemeToggle')?.addEventListener('click', () => {
       diag.theme = diag.theme === 'dark' ? 'light' : 'dark';
@@ -6182,12 +6072,6 @@ export function runPlayShareContent() {
     const diagSyncReset = diagPanel.querySelector('#diagSyncReset');
     if (diagSyncReset) diagSyncReset.addEventListener('click', resetSyncMetrics);
 
-    diagPanel.querySelector('#diagVideoProfilerStart')?.addEventListener('click', () => {
-      startVideoProfilerSession();
-    });
-    diagPanel.querySelector('#diagVideoProfilerStop')?.addEventListener('click', () => {
-      stopVideoProfilerSession();
-    });
     diagPanel.querySelector('#diagVideoProfilerMarker')?.addEventListener('click', () => {
       if (!getVideoProfiler().isRecording()) return;
       const raw = typeof window !== 'undefined' && window.prompt ? window.prompt('Marker label (optional):', '') : '';
@@ -6203,7 +6087,11 @@ export function runPlayShareContent() {
     diagPanel.classList.toggle('ws-diag-light', diag.theme === 'light');
     diagPanel.classList.toggle('ws-diag-minimized', diag.panelMinimized);
     diagPanel.classList.toggle('ws-diag-wide', diag.overlayWide);
-    setDiagConsoleView(diag.consoleView);
+    diagPanel.classList.add('ws-diag-simplified');
+    diagPanel.classList.remove('ws-diag-view-compact');
+    diagPanel.classList.add('ws-diag-view-detailed');
+    diag.consoleView = 'detailed';
+    setDiagConsoleView('detailed');
     document.body.appendChild(diagOverlay);
     reparentPlayShareUiForFullscreen();
 
@@ -6363,7 +6251,6 @@ export function runPlayShareContent() {
       .ws-diag-step-actions-row, .ws-diag-step-export-row {
         display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;
       }
-      .ws-diag-profiler-status-compact { font-size:11px;line-height:1.45;margin-bottom:2px; }
       .ws-diag-details-more-inline { flex:1;min-width:160px;max-width:100%; }
       .ws-diag-dash-modal-root[hidden] { display:none !important; }
       .ws-diag-dash-modal-root:not([hidden]) {
@@ -6800,6 +6687,10 @@ export function runPlayShareContent() {
         background:linear-gradient(165deg, rgba(238,242,255,0.9) 0%, #fff 50%, #f8fafc 100%);
         border-color:#e2e8f0;box-shadow:0 2px 12px rgba(99,102,241,0.08);
       }
+      .ws-diag-panel.ws-diag-light .ws-diag-simple-card-unified {
+        background:linear-gradient(180deg, rgba(224,242,254,0.55) 0%, #fff 50%);
+        border-color:rgba(6,182,212,0.28);
+      }
       .ws-diag-panel.ws-diag-light .ws-diag-record-export-lead strong { color:#0f172a; }
       .ws-diag-panel.ws-diag-light .ws-diag-step-badge {
         background:#eef2ff;border-color:#c7d2fe;color:#4338ca;
@@ -6915,6 +6806,155 @@ export function runPlayShareContent() {
         color:#fff;
         box-shadow:0 2px 8px rgba(8,145,178,0.35);
       }
+      .ws-diag-panel.ws-diag-simplified {
+        width:min(400px,calc(100vw - 20px));
+        max-height:min(82vh,760px);
+      }
+      .ws-diag-panel.ws-diag-simplified.ws-diag-wide {
+        width:min(520px,calc(100vw - 20px));
+      }
+      .ws-diag-simplified-body {
+        padding:14px 16px 16px;
+        display:flex;
+        flex-direction:column;
+        gap:10px;
+      }
+      .ws-diag-simple-lead {
+        margin:0;
+        font-size:12px;
+        line-height:1.5;
+        color:var(--ws-diag-muted);
+      }
+      .ws-diag-simple-lead-min {
+        font-size:11px;
+        line-height:1.4;
+      }
+      .ws-diag-simple-card-unified {
+        border-color:rgba(34,211,238,0.22);
+        background:linear-gradient(180deg, rgba(34,211,238,0.06) 0%, var(--ws-diag-surface) 48%);
+      }
+      .ws-diag-simple-card-sub-tight {
+        margin:0 0 8px !important;
+      }
+      .ws-diag-unified-record-row { width:100%; }
+      .ws-diag-unified-rec {
+        width:100%;
+        box-sizing:border-box;
+        justify-content:center;
+        min-height:44px;
+      }
+      .ws-diag-btn-hero-rec {
+        display:inline-flex;
+        align-items:center;
+        gap:8px;
+        padding:10px 16px;
+        font-weight:600;
+        font-size:13px;
+        border-radius:10px;
+        background:linear-gradient(165deg, rgba(34,211,238,0.22), rgba(34,211,238,0.08));
+        border:1px solid rgba(34,211,238,0.35);
+        color:#ecfeff;
+      }
+      .ws-diag-btn-hero-rec.ws-diag-compact-rec-active {
+        background:linear-gradient(165deg, rgba(248,113,113,0.25), rgba(239,68,68,0.12));
+        border-color:rgba(248,113,113,0.45);
+      }
+      .ws-diag-simple-inline-tools {
+        display:flex;
+        flex-wrap:wrap;
+        gap:6px;
+        align-items:center;
+        margin-top:4px;
+      }
+      .ws-diag-unified-tools { margin-top:6px;margin-bottom:0; }
+      .ws-diag-report-divider {
+        height:1px;
+        margin:12px 0 8px;
+        background:rgba(148,163,184,0.15);
+      }
+      .ws-diag-unified-divider { margin:8px 0 6px; }
+      .ws-diag-unified-send-btn { margin-top:8px; }
+      .ws-diag-intel-url-details { margin-top:8px; }
+      .ws-diag-simple-card {
+        background:var(--ws-diag-surface);
+        border:1px solid rgba(148,163,184,0.12);
+        border-radius:12px;
+        padding:12px 14px;
+      }
+      .ws-diag-simple-card-intel {
+        border-color:rgba(167,139,250,0.25);
+        background:rgba(167,139,250,0.06);
+      }
+      .ws-diag-simple-card-intel .ws-diag-simple-btn-row { margin-top:8px; }
+      .ws-diag-simple-card-title {
+        font-size:12px;
+        font-weight:700;
+        letter-spacing:0.04em;
+        text-transform:uppercase;
+        color:#cbd5e1;
+        margin:0 0 4px;
+      }
+      .ws-diag-simple-card-sub {
+        margin:0 0 10px;
+        font-size:11px;
+        line-height:1.45;
+        color:var(--ws-diag-muted);
+      }
+      .ws-diag-simple-btn-row {
+        display:flex;
+        flex-wrap:wrap;
+        gap:6px;
+        align-items:center;
+      }
+      .ws-diag-simple-check {
+        display:flex;
+        align-items:flex-start;
+        gap:8px;
+        font-size:11px;
+        line-height:1.45;
+        color:var(--ws-diag-muted);
+        margin:6px 0 0;
+        cursor:pointer;
+      }
+      .ws-diag-simple-check input { margin-top:2px; flex-shrink:0; }
+      .ws-diag-code-inline {
+        font-size:10px;
+        padding:1px 4px;
+        border-radius:4px;
+        background:rgba(0,0,0,0.25);
+      }
+      .ws-diag-intel-url-box {
+        padding:8px 10px;
+        border-radius:8px;
+        background:rgba(0,0,0,0.28);
+        border:1px solid rgba(148,163,184,0.15);
+        overflow:hidden;
+      }
+      .ws-diag-intel-url {
+        display:block;
+        font-size:10px;
+        line-height:1.4;
+        word-break:break-all;
+        color:#94a3b8;
+      }
+      .ws-diag-advanced-gate { margin-top:2px; }
+      .ws-diag-advanced-details {
+        border-radius:10px;
+        border:1px dashed rgba(148,163,184,0.22);
+        padding:2px 10px 10px;
+        margin-top:8px;
+        background:rgba(0,0,0,0.12);
+      }
+      .ws-diag-advanced-inner { padding-top:4px; }
+      .ws-diag-advanced-toolbar {
+        display:flex;
+        flex-wrap:wrap;
+        gap:6px;
+        margin-bottom:12px;
+        padding-bottom:10px;
+        border-bottom:1px solid rgba(148,163,184,0.12);
+      }
+      .ws-diag-simple-more summary { font-size:11px; }
     `;
     document.head.appendChild(diagStyles);
   }
@@ -6922,7 +6962,7 @@ export function runPlayShareContent() {
   if (diagnosticsUiEnabled) {
     diagToggleBtn = document.createElement('button');
     diagToggleBtn.id = 'ws-diag-toggle';
-    diagToggleBtn.title = 'Sync analytics (dev) — Ctrl+Shift+D';
+    diagToggleBtn.title = 'Analytics & intelligence (dev) — Ctrl+Shift+D';
     diagToggleBtn.textContent = '◆';
     diagToggleBtn.style.cssText = `
     position:fixed;bottom:16px;left:16px;z-index:2147483646;

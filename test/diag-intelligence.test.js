@@ -43,6 +43,8 @@ async function run() {
   const text = buildCaseSummaryText(s, tags);
   assert.ok(/prime/i.test(text), 'summary mentions platform');
   assert.ok(text.includes('tags:'), 'summary lists tags');
+  const textWithExt = buildCaseSummaryText(s, tags, '2.4.1');
+  assert.ok(textWithExt.startsWith('Extension 2.4.1.'), 'version prefix for intel search');
 
   const stamped = { enrichment: { syncConfigSnapshot: { handlerKey: 'prime', viewerReconcileIntervalMs: 5000 } } };
   const intel = buildCaseIntelRecord(stamped, s, tags, {
@@ -53,18 +55,23 @@ async function run() {
     schemaVersion: '2.5'
   });
   assert.strictEqual(intel.report_id, '00000000-0000-4000-8000-000000000001');
+  assert.ok(intel.case_summary_text.startsWith('Extension 1.0.0.'), 'case summary includes client version');
   assert.ok(intel.config_snapshot && intel.config_snapshot.handlerKey === 'prime');
   assert.ok(intel._cluster_summary_for_rollup);
 
   const expl = explainCase(
     {
       report_id: intel.report_id,
+      extension_version: '1.0.0',
+      schema_version: '2.5',
+      server_version: '1.0.0',
       derived_tags: tags,
       normalized_metrics: intel.normalized_metrics
     },
     [{ report_id: 'b', case_summary_text: 'other', cluster_signature: sig, uploaded_at: 'x' }]
   );
   assert.ok(expl.likely_issue);
+  assert.ok(expl.client && expl.client.extension_version === '1.0.0');
   assert.ok(Array.isArray(expl.reasoning));
   assert.strictEqual(expl.similar_cases.length, 1);
 

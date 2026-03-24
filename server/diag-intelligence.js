@@ -61,8 +61,9 @@ function computeClusterSignature(summary, derived_tags) {
  * Short factual summary for search / review (no PII).
  * @param {Record<string, unknown>} summary
  * @param {string[]} derived_tags
+ * @param {string|null|undefined} extensionVersion — client manifest version (searchable in intel UI)
  */
-function buildCaseSummaryText(summary, derived_tags) {
+function buildCaseSummaryText(summary, derived_tags, extensionVersion) {
   const platform = String(summary.platform || 'unknown');
   const handler = String(summary.handler_key || platform);
   const role = String(summary.role || 'solo');
@@ -98,6 +99,8 @@ function buildCaseSummaryText(summary, derived_tags) {
   ].filter(Boolean);
 
   let text = bits.join('. ') + '.';
+  const extV = extensionVersion != null && String(extensionVersion).trim() ? String(extensionVersion).trim().slice(0, 24) : '';
+  if (extV) text = `Extension ${extV}. ${text}`;
   if (text.length > 520) text = text.slice(0, 517) + '…';
   return text;
 }
@@ -167,7 +170,8 @@ function pickNormalizedMetricsForStorage(summary) {
     'video_element_rebounds',
     'handler_key',
     'platform',
-    'role'
+    'role',
+    'extension_version'
   ];
   /** @type {Record<string, unknown>} */
   const o = {};
@@ -185,7 +189,11 @@ function pickNormalizedMetricsForStorage(summary) {
  */
 function buildCaseIntelRecord(stamped, summary, derived_tags, meta) {
   const cluster_signature = computeClusterSignature(summary, derived_tags);
-  const case_summary_text = buildCaseSummaryText(summary, derived_tags);
+  const extVer =
+    meta.extensionVersion ||
+    (summary.extension_version != null ? String(summary.extension_version) : '') ||
+    '';
+  const case_summary_text = buildCaseSummaryText(summary, derived_tags, extVer);
   const cluster_summary = buildClusterSummaryText(summary, derived_tags);
   return {
     report_id: meta.reportId,
@@ -326,6 +334,11 @@ function explainCase(caseRow, similar) {
 
   return {
     report_id: caseRow.report_id,
+    client: {
+      extension_version: caseRow.extension_version != null ? String(caseRow.extension_version) : null,
+      schema_version: caseRow.schema_version != null ? String(caseRow.schema_version) : null,
+      server_version: caseRow.server_version != null ? String(caseRow.server_version) : null
+    },
     likely_issue: likely[0],
     secondary_factors: likely.slice(1),
     reasoning: reasons,

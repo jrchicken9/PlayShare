@@ -136,6 +136,7 @@ async function run() {
     assert.strictEqual(ev.text, undefined);
 
     const norm = normalizeDiagnosticReport({ payload: p6.scrubbed });
+    assert.strictEqual(norm.summary.extension_version, '9.9.9', 'summary carries extension_version from export');
     assert.strictEqual(norm.summary.max_rtt_ms, null, 'max_rtt_ms not used for apply latency');
     assert.strictEqual(norm.summary.max_peer_apply_latency_ms, 200);
     assert.strictEqual(norm.summary.avg_transport_rtt_ms, 42);
@@ -187,6 +188,7 @@ async function run() {
     assert.strictEqual(inserts.raw.payload_json.ingestMeta.reportId, bundle.json.reportId);
     assert.strictEqual(inserts.summary.max_peer_apply_latency_ms, 200);
     assert.strictEqual(inserts.summary.max_rtt_ms, null);
+    assert.strictEqual(inserts.summary.extension_version, '9.9.9');
     assert.ok(Array.isArray(inserts.summary.derived_tags));
 
     const badIngest = await ingestDiagnosticBundle(

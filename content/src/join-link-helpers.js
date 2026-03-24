@@ -3,15 +3,22 @@
  */
 
 /**
- * @param {string} wsUrl e.g. wss://playshare.example.com or ws://127.0.0.1:8765
- * @returns {string|null} https:// or http:// origin (no trailing slash)
+ * @param {string} wsUrl e.g. wss://playshare.example.com or ws://127.0.0.1:8765 (optional path is stripped)
+ * @returns {string|null} https:// or http:// origin only (protocol + host + port, no path)
  */
 export function wsUrlToHttpBase(wsUrl) {
   if (!wsUrl || typeof wsUrl !== 'string') return null;
-  const t = wsUrl.trim();
-  if (/^wss:\/\//i.test(t)) return 'https://' + t.slice(6).replace(/\/+$/, '');
-  if (/^ws:\/\//i.test(t)) return 'http://' + t.slice(5).replace(/\/+$/, '');
-  return null;
+  let t = wsUrl.trim();
+  if (!t) return null;
+  if (!/^wss?:\/\//i.test(t)) t = `wss://${t.replace(/^\/\//, '')}`;
+  try {
+    const u = new URL(t);
+    if (u.protocol !== 'ws:' && u.protocol !== 'wss:') return null;
+    const httpProto = u.protocol === 'ws:' ? 'http:' : 'https:';
+    return `${httpProto}//${u.host}`;
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -77,7 +77,15 @@ function normalizeDiagnosticReport(args) {
   const progMaxTuGap = num(prog.maxTimeupdateGapMs, null);
   const videoRebounds = num(rollup.videoElementRebounds, null);
 
+  const extensionVersionNorm = String(
+    unified.ingestMeta?.extensionVersionDeclared ||
+      unified.uploadClient?.extensionVersion ||
+      ext.extensionVersion ||
+      ''
+  ).slice(0, 32);
+
   const summary = {
+    extension_version: extensionVersionNorm || null,
     test_run_id: args.testRunId || unified.anonymization?.testRunId || null,
     device_id_hash: unified.anonymization?.deviceIdHash || null,
     room_id_hash: unified.anonymization?.roomIdHash || ext.room?.roomIdHash || null,

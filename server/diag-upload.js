@@ -119,7 +119,12 @@ async function ingestDiagnosticBundle(body, deps = {}) {
 
   const receivedAt = new Date().toISOString();
   const reportId = randomUUID();
-  const extensionVersion = String(body.extensionVersion || payload.extension?.extensionVersion || '').slice(0, 32);
+  const extensionVersion = String(
+    body.extensionVersion ||
+      payload.uploadClient?.extensionVersion ||
+      payload.extension?.extensionVersion ||
+      ''
+  ).slice(0, 32);
   const platform = String(
     body.platformHandlerKey || payload.extension?.platform?.key || payload.enrichment?.syncConfigSnapshot?.handlerKey || ''
   ).slice(0, 48);
@@ -151,6 +156,14 @@ async function ingestDiagnosticBundle(body, deps = {}) {
     };
   }
 
+  const uc =
+    privacy.scrubbed.uploadClient && typeof privacy.scrubbed.uploadClient === 'object'
+      ? {
+          extensionVersion: String(privacy.scrubbed.uploadClient.extensionVersion || '').slice(0, 32),
+          diagnosticReportSchema: String(privacy.scrubbed.uploadClient.diagnosticReportSchema || '').slice(0, 16)
+        }
+      : null;
+
   const stamped = {
     ...privacy.scrubbed,
     ingestMeta: {
@@ -161,7 +174,8 @@ async function ingestDiagnosticBundle(body, deps = {}) {
       extensionVersionDeclared: extensionVersion,
       platformHandlerKey: platform,
       diagnosticReportSchema: schemaVersion,
-      reportKind
+      reportKind,
+      uploadClient: uc
     }
   };
 
@@ -197,6 +211,7 @@ async function ingestDiagnosticBundle(body, deps = {}) {
       test_run_id: summary.test_run_id,
       device_id_hash: summary.device_id_hash,
       room_id_hash: summary.room_id_hash,
+      extension_version: summary.extension_version || null,
       role: summary.role,
       platform: summary.platform,
       member_count: summary.member_count,
