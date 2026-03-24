@@ -48,14 +48,20 @@ function diagIntelSlicePage(rows, limit) {
   return { data, hasMore, returned: data.length };
 }
 
+/** Trim, strip UTF-8 BOM, and trailing CR/LF (common when copying from Railway / .env). */
+function scrubDiagSecret(s) {
+  let t = String(s || '').trim();
+  if (t.charCodeAt(0) === 0xfeff) t = t.slice(1).trim();
+  return t.replace(/\r$/g, '').trim();
+}
+
 /**
  * Unique non-empty secrets that authorize /diag/intel/*.
- * If both PLAYSHARE_DIAG_INTEL_SECRET and PLAYSHARE_DIAG_UPLOAD_SECRET are set, either value is accepted
- * (extension uploads often use UPLOAD only; explorer docs mention INTEL — mismatch caused 401).
+ * If both env vars are set to the same string, only one entry is used. If they differ, either value is accepted.
  */
 function getDiagIntelAcceptedSecrets() {
-  const intel = String(process.env.PLAYSHARE_DIAG_INTEL_SECRET || '').trim();
-  const upload = String(process.env.PLAYSHARE_DIAG_UPLOAD_SECRET || '').trim();
+  const intel = scrubDiagSecret(process.env.PLAYSHARE_DIAG_INTEL_SECRET);
+  const upload = scrubDiagSecret(process.env.PLAYSHARE_DIAG_UPLOAD_SECRET);
   const out = [];
   if (intel) out.push(intel);
   if (upload && upload !== intel) out.push(upload);
@@ -81,7 +87,7 @@ function parseBearerToken(authHeader) {
   let t = String(authHeader || '').trim();
   if (t.toLowerCase().startsWith('bearer ')) t = t.slice(7).trim();
   if (t.toLowerCase().startsWith('bearer ')) t = t.slice(7).trim();
-  return t;
+  return scrubDiagSecret(t);
 }
 
 function checkAuth(req) {
@@ -1209,14 +1215,16 @@ function explorerHtml() {
     return h;
   }
 
-  /** Strip wrapping quotes and accidental leading "Bearer " from pasted secrets. */
+  /** Strip wrapping quotes, BOM, CR, and accidental leading "Bearer " from pasted secrets. */
   function normalizeTokInput(raw) {
     var t = String(raw || '').trim();
+    if (t.charCodeAt(0) === 0xfeff) t = t.slice(1).trim();
     if ((t.charAt(0) === '"' && t.charAt(t.length - 1) === '"') || (t.charAt(0) === "'" && t.charAt(t.length - 1) === "'")) {
       t = t.slice(1, -1).trim();
     }
     if (t.toLowerCase().indexOf('bearer ') === 0) t = t.slice(7).trim();
     if (t.toLowerCase().indexOf('bearer ') === 0) t = t.slice(7).trim();
+    t = t.replace(/\r$/g, '').trim();
     return t;
   }
 
