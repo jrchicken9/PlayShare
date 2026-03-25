@@ -1046,6 +1046,33 @@ function explorerHtml() {
       opacity: 0.55;
       cursor: not-allowed;
     }
+    .gate-diag {
+      margin-top: 16px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: var(--surface2);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .gate-diag summary {
+      cursor: pointer;
+      color: var(--muted);
+      user-select: none;
+      font-weight: 600;
+    }
+    .gate-diag-pre {
+      margin: 10px 0 0;
+      padding: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+      line-height: 1.55;
+      color: #cbd5e1;
+      border: 0;
+      background: transparent;
+    }
   </style>
 </head>
 <body>
@@ -1068,6 +1095,13 @@ function explorerHtml() {
       <div id="gateErr" class="alert err" style="display: none" tabindex="-1"></div>
       <button type="button" id="gateSubmit">Continue</button>
       <p id="gateWorking" class="muted" style="display: none; margin-top: 12px; font-size: 13px; line-height: 1.45" aria-live="polite"></p>
+      <details class="gate-diag" id="gateDiag">
+        <summary>Authentication diagnostic (developers)</summary>
+        <pre id="gateDiagBody" class="gate-diag-pre"></pre>
+        <p class="muted" style="margin: 10px 0 0; font-size: 11px; line-height: 1.45">
+          Never shares your secret or API key — only lengths, HTTP status, and server messages. Updates each time you press Continue.
+        </p>
+      </details>
     </div>
   </div>
 
@@ -1347,6 +1381,26 @@ function explorerHtml() {
     } catch (e) {}
   }
 
+  function clearGateDiag() {
+    var pre = $('gateDiagBody');
+    var det = $('gateDiag');
+    if (pre) pre.textContent = '';
+    if (det) det.open = false;
+  }
+
+  /** @param {string[]} lines Plain lines: no secrets — lengths & server text only. */
+  function recordGateAuthDiag(lines) {
+    var pre = $('gateDiagBody');
+    var det = $('gateDiag');
+    if (!pre || !det) return;
+    var when = new Date().toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'medium' });
+    pre.textContent = when + '\n\n' + lines.filter(Boolean).join('\n');
+    try {
+      det.open = true;
+      det.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    } catch (e) {}
+  }
+
   /** @param {Response} res */
   async function readGateErrorDetail(res) {
     var raw = '';
@@ -1376,14 +1430,23 @@ function explorerHtml() {
     var working = $('gateWorking');
     clearGateErr();
     clearGateFieldHighlights();
+    clearGateDiag();
 
     if (!bearer) {
       highlightGateField('bearer');
+      recordGateAuthDiag([
+        'Client validation failed.',
+        'Railway secret: empty after trim / normalize — paste the variable value only (no label text).'
+      ]);
       showGateErr('Paste the Railway diagnostic secret (PLAYSHARE_DIAG_INTEL_SECRET or upload secret). It cannot be empty.');
       return;
     }
     if (openai && openai.length < 12) {
       highlightGateField('openai');
+      recordGateAuthDiag([
+        'Client validation failed.',
+        'OpenAI field: ' + openai.length + ' characters (minimum 12 expected for a real key) — paste full key or leave empty for server LLM.'
+      ]);
       showGateErr('That OpenAI key looks too short. Copy the full key from OpenAI (usually starts with sk- or similar).');
       return;
     }
@@ -1420,12 +1483,24 @@ function explorerHtml() {
       } catch (eFetch) {
         var aborted = eFetch && (eFetch.name === 'AbortError' || (String(eFetch.message || '').indexOf('abort') >= 0));
         if (aborted) {
+          recordGateAuthDiag([
+            'No HTTP response — request aborted (timeout ' + Math.round(timeoutMs / 1000) + 's).',
+            'Target: POST ' + intelApi('/auth-check'),
+            'Normalized Railway secret length: ' + bearer.length + ' chars',
+            'If the host is cold-starting, wait and retry.'
+          ]);
           showGateErr(
             'Request timed out after ' +
               Math.round(timeoutMs / 1000) +
               's. Your server may be sleeping (cold start), overloaded, or unreachable. Wait and try again, or check Railway / hosting logs.'
           );
         } else {
+          recordGateAuthDiag([
+            'No HTTP response — network / wrong page origin.',
+            'Target: POST ' + intelApi('/auth-check'),
+            'Detail: ' + (eFetch && eFetch.message ? eFetch.message : String(eFetch)),
+            'Open this page from the same host as your PlayShare server (…/diag/intel/explorer).'
+          ]);
           showGateErr(
             'Could not reach the diagnostics API. Open this page from your PlayShare server (…/diag/intel/explorer), not a saved file. If you use a reverse proxy, keep the same path prefix. ' +
               (eFetch && eFetch.message ? 'Technical detail: ' + eFetch.message : '')
@@ -1439,6 +1514,13 @@ function explorerHtml() {
       if (r.status === 401) {
         highlightGateField('bearer');
         var d401 = await readGateErrorDetail(r);
+        recordGateAuthDiag([
+          'HTTP 401 — Railway secret rejected by this server.',
+          'Meaning: pasted value ≠ PLAYSHARE_DIAG_INTEL_SECRET / PLAYSHARE_DIAG_UPLOAD_SECRET in this deployment’s env.',
+          'Normalized secret length: ' + bearer.length + ' chars (compare character count to the value in Railway for the same service).',
+          'OpenAI field (not validated until unlock succeeds): ' + (openai ? openai.length + ' chars' : 'empty'),
+          'Server detail: ' + (d401 || '(empty body)')
+        ]);
         showGateErr(
           d401 ||
             'Invalid or wrong Railway secret (401). Paste the exact value of PLAYSHARE_DIAG_INTEL_SECRET or PLAYSHARE_DIAG_UPLOAD_SECRET from Variables. Do not add the word Bearer, quotes, or extra spaces.'
@@ -1448,12 +1530,22 @@ function explorerHtml() {
       if (r.status === 403) {
         highlightGateField('bearer');
         var d403 = await readGateErrorDetail(r);
+        recordGateAuthDiag([
+          'HTTP 403 — forbidden.',
+          'Normalized Railway secret length: ' + bearer.length + ' chars',
+          'Server detail: ' + (d403 || '(empty)')
+        ]);
         showGateErr(
           'Access denied (403).' + (d403 ? ' ' + d403 : ' Check that the secret matches the variable on this server.')
         );
         return;
       }
       if (r.status === 404) {
+        recordGateAuthDiag([
+          'HTTP 404 — path not found on this host.',
+          'Requested: POST ' + intelApi('/auth-check'),
+          'You are probably not on the PlayShare server (wrong domain or path prefix).'
+        ]);
         showGateErr(
           'Diagnostics URL not found (404). You may be on the wrong host or path. Use the live /diag/intel/explorer URL from the machine running PlayShare.'
         );
@@ -1461,6 +1553,12 @@ function explorerHtml() {
       }
       if (r.status === 503) {
         var j503t = await readGateErrorDetail(r);
+        recordGateAuthDiag([
+          'HTTP 503 — service unavailable.',
+          'Often: intel_secret_not_configured (no PLAYSHARE_DIAG_INTEL_SECRET on this process) or upstream misconfiguration.',
+          'Normalized Railway secret length sent: ' + bearer.length + ' chars',
+          'Server detail: ' + (j503t || '(empty)')
+        ]);
         showGateErr(
           j503t ||
             'Service unavailable (503). If this says intel_secret_not_configured, set PLAYSHARE_DIAG_INTEL_SECRET on this Railway service and redeploy.'
@@ -1469,6 +1567,11 @@ function explorerHtml() {
       }
       if (r.status >= 500) {
         var d5 = await readGateErrorDetail(r);
+        recordGateAuthDiag([
+          'HTTP ' + r.status + ' — server error.',
+          'Normalized Railway secret length: ' + bearer.length + ' chars',
+          'Server detail: ' + (d5 || '(empty)')
+        ]);
         showGateErr(
           'Server error (' +
             r.status +
@@ -1479,13 +1582,38 @@ function explorerHtml() {
       }
       if (!r.ok) {
         var dx = await readGateErrorDetail(r);
+        recordGateAuthDiag([
+          'HTTP ' + r.status + ' ' + (r.statusText || '') + ' — unexpected.',
+          'Normalized Railway secret length: ' + bearer.length + ' chars',
+          'Server detail: ' + (dx || '(empty)')
+        ]);
         showGateErr(
           'Unexpected response ' + r.status + ' ' + (r.statusText || '') + '.' + (dx ? ' ' + dx : ' Try again or redeploy the server.')
         );
         return;
       }
 
-      await r.text().catch(function () {});
+      var okBody = await r.text().catch(function () {
+        return '';
+      });
+      var supLine = '';
+      try {
+        var jOk = JSON.parse(okBody || '{}');
+        if (jOk.supabase_configured === false) {
+          supLine =
+            'Supabase: server reports not configured — after unlock, "Load cases" may return 503 until SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY are set.';
+        } else if (jOk.supabase_configured === true) {
+          supLine = 'Supabase: server reports configured.';
+        }
+      } catch (eJ) {}
+      recordGateAuthDiag([
+        'HTTP ' + r.status + ' — authentication accepted.',
+        'POST ' + intelApi('/auth-check'),
+        'Normalized Railway secret length: ' + bearer.length + ' chars',
+        'OpenAI field: ' + (openai ? openai.length + ' chars (stored for AI requests)' : 'empty (use server LLM env if set)'),
+        okBody ? 'Response JSON: ' + okBody : '(empty body)',
+        supLine
+      ].filter(Boolean));
 
       try {
         runtimeAiKey = openai;
@@ -1500,6 +1628,10 @@ function explorerHtml() {
         clearGateFieldHighlights();
         enterExplorerApp();
       } catch (eDone) {
+        recordGateAuthDiag([
+          'Server returned success but a browser step failed after unlock.',
+          String(eDone && eDone.message ? eDone.message : eDone)
+        ]);
         showGateErr('Unlocked locally but something failed in the page: ' + (eDone && eDone.message ? eDone.message : String(eDone)));
       }
     } finally {
@@ -1531,10 +1663,18 @@ function explorerHtml() {
         var pr = validateAndEnterFromGate();
         if (pr && typeof pr.catch === 'function') {
           pr.catch(function (eUnhandled) {
+            recordGateAuthDiag([
+              'Uncaught async error in unlock handler.',
+              String(eUnhandled && eUnhandled.message ? eUnhandled.message : eUnhandled)
+            ]);
             showGateErr('Unexpected error: ' + (eUnhandled && eUnhandled.message ? eUnhandled.message : String(eUnhandled)));
           });
         }
       } catch (eSync) {
+        recordGateAuthDiag([
+          'Uncaught synchronous error in Continue click.',
+          String(eSync && eSync.message ? eSync.message : eSync)
+        ]);
         showGateErr('Unexpected error: ' + (eSync && eSync.message ? eSync.message : String(eSync)));
       }
     };
@@ -1546,10 +1686,18 @@ function explorerHtml() {
       var pr = validateAndEnterFromGate();
       if (pr && typeof pr.catch === 'function') {
         pr.catch(function (eUnhandled) {
+          recordGateAuthDiag([
+            'Uncaught async error in unlock handler (Enter key).',
+            String(eUnhandled && eUnhandled.message ? eUnhandled.message : eUnhandled)
+          ]);
           showGateErr('Unexpected error: ' + (eUnhandled && eUnhandled.message ? eUnhandled.message : String(eUnhandled)));
         });
       }
     } catch (eSync) {
+      recordGateAuthDiag([
+        'Uncaught synchronous error (Enter key).',
+        String(eSync && eSync.message ? eSync.message : eSync)
+      ]);
       showGateErr('Unexpected error: ' + (eSync && eSync.message ? eSync.message : String(eSync)));
     }
   }
@@ -1571,6 +1719,8 @@ function explorerHtml() {
       if ($('tok')) $('tok').value = '';
       if ($('gateBearer')) $('gateBearer').value = '';
       if ($('gateOpenAi')) $('gateOpenAi').value = '';
+      clearGateErr();
+      clearGateDiag();
       var gr = $('gateRoot');
       var ap = $('playshareExplorerApp');
       if (ap) ap.setAttribute('hidden', '');
