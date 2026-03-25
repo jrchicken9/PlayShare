@@ -1085,12 +1085,40 @@ function explorerHtml() {
       border: 0;
       background: transparent;
     }
+    #gateInitFail {
+      display: none;
+      margin: 0 0 14px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid rgba(248, 113, 113, 0.55);
+      background: rgba(248, 113, 113, 0.12);
+      color: #fecaca;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    #gateBootStatus {
+      margin: 0 0 14px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+      line-height: 1.5;
+      color: #94a3b8;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 120px;
+      overflow-y: auto;
+    }
   </style>
 </head>
 <body>
   <div id="gateRoot" class="gate-screen">
     <div class="gate-card">
       <h1>Unlock diagnostic intelligence</h1>
+      <div id="gateInitFail" role="alert"></div>
+      <div id="gateBootStatus" aria-live="polite"></div>
       <p class="gate-lead">
         <strong>Railway does not put this secret into the page for you.</strong> Open Railway → your service → <strong>Variables</strong>, copy the
         <em>value</em> of <code>PLAYSHARE_DIAG_INTEL_SECRET</code> (or upload secret), and paste it in the first box. The server compares that header to the
@@ -1275,6 +1303,61 @@ function explorerHtml() {
 
   <script>
 (function () {
+  console.log('[PlayShare diag explorer] inline script executing');
+  var gateBootEl = document.getElementById('gateBootStatus');
+  var gateInitFailEl = document.getElementById('gateInitFail');
+  function gateBootLine(msg) {
+    var ts = new Date().toISOString();
+    var line = ts + ' ' + msg;
+    try {
+      console.log('[PlayShare diag explorer]', msg);
+    } catch (eL) {}
+    try {
+      if (gateBootEl) {
+        gateBootEl.textContent = (gateBootEl.textContent ? gateBootEl.textContent + '\n' : '') + line;
+        gateBootEl.scrollTop = gateBootEl.scrollHeight;
+      }
+    } catch (e2) {}
+  }
+  function showGateInitFail(detail) {
+    var t = 'Explorer gate failed to initialize. Open console.';
+    if (detail) t += ' ' + String(detail);
+    try {
+      console.error('[PlayShare diag explorer] INIT FAIL', detail);
+    } catch (e) {}
+    try {
+      if (gateInitFailEl) {
+        gateInitFailEl.textContent = t;
+        gateInitFailEl.style.display = 'block';
+      }
+    } catch (e2) {}
+    try {
+      var pre = document.getElementById('gateDiagBody');
+      var det = document.getElementById('gateDiag');
+      if (pre) pre.textContent = (pre.textContent ? pre.textContent + '\n\n' : '') + 'INIT FAIL: ' + String(detail || '');
+      if (det) det.open = true;
+    } catch (e3) {}
+  }
+  try {
+    window.addEventListener(
+      'error',
+      function (ev) {
+        try {
+          gateBootLine('window.error: ' + (ev && ev.message ? ev.message : 'unknown'));
+        } catch (e) {}
+      },
+      true
+    );
+    window.addEventListener('unhandledrejection', function (ev) {
+      try {
+        var r = ev.reason;
+        gateBootLine('unhandledrejection: ' + (r && r.message ? r.message : String(r)));
+      } catch (e) {}
+    });
+  } catch (eWin) {}
+
+  gateBootLine('Explorer script loaded');
+
   var TOK_KEY = 'playshare_diag_intel_token_v1';
   var AI_KEY_STORAGE = 'playshare_diag_explorer_ai_key_v1';
   var SKIP_LLM_STORAGE = 'playshare_diag_explorer_skip_llm_v1';
@@ -1313,6 +1396,9 @@ function explorerHtml() {
   }
 
   function enterExplorerApp() {
+    try {
+      console.log('[PlayShare diag explorer] enterExplorerApp called');
+    } catch (eL) {}
     var g = $('gateRoot');
     var a = $('playshareExplorerApp');
     if (g) {
@@ -1392,11 +1478,35 @@ function explorerHtml() {
     } catch (e) {}
   }
 
+  /** Full reset when returning to the gate (e.g. Change credentials). */
   function clearGateDiag() {
     var pre = $('gateDiagBody');
     var det = $('gateDiag');
     if (pre) pre.textContent = '';
     if (det) det.open = false;
+  }
+
+  /** Append one timestamped line and open the diagnostic panel (sync, before any await). */
+  function gateAppendDiagImmediate(line) {
+    var pre = $('gateDiagBody');
+    var det = $('gateDiag');
+    if (!pre || !det) return;
+    var stamp = '[' + new Date().toISOString() + '] ';
+    pre.textContent = (pre.textContent ? pre.textContent + '\n\n' : '') + stamp + String(line || '');
+    try {
+      det.open = true;
+    } catch (e) {}
+  }
+
+  /** Sync UI before validate: visible loading + boot log (no async). */
+  function gateImmediateUnlockFeedback() {
+    var working = $('gateWorking');
+    if (working) {
+      working.style.display = 'block';
+      working.textContent = 'Checking credentials…';
+    }
+    gateBootLine('Unlock attempt started');
+    gateAppendDiagImmediate('Unlock attempt started');
   }
 
   /** @param {string[]} lines Plain lines: no secrets — lengths & server text only. */
@@ -1405,7 +1515,11 @@ function explorerHtml() {
     var det = $('gateDiag');
     if (!pre || !det) return;
     var when = new Date().toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'medium' });
-    pre.textContent = when + '\n\n' + lines.filter(Boolean).join('\n');
+    var block = when + '\n\n' + lines.filter(Boolean).join('\n');
+    pre.textContent = (pre.textContent ? pre.textContent + '\n\n' : '') + block;
+    try {
+      det.open = true;
+    } catch (e0) {}
     setTimeout(function () {
       try {
         det.open = true;
@@ -1476,13 +1590,17 @@ function explorerHtml() {
   }
 
   async function validateAndEnterFromGate() {
+    try {
+      console.log('[PlayShare diag explorer] validateAndEnterFromGate entered');
+    } catch (eL) {}
     var bearer = normalizeTokInput($('gateBearer') && $('gateBearer').value) || '';
     var openai = ($('gateOpenAi') && $('gateOpenAi').value.trim()) || '';
     var btn = $('gateSubmit');
     var working = $('gateWorking');
+    var hadBearerReadyForFetch = false;
+    var unlockFetchStarted = false;
     clearGateErr();
     clearGateFieldHighlights();
-    clearGateDiag();
 
     if (!bearer) {
       highlightGateField('bearer');
@@ -1503,6 +1621,7 @@ function explorerHtml() {
       return;
     }
 
+    hadBearerReadyForFetch = true;
     if (btn) btn.disabled = true;
     if (working) {
       working.style.display = 'block';
@@ -1521,7 +1640,14 @@ function explorerHtml() {
           },
           body: '{}'
         };
+        try {
+          console.log('[PlayShare diag explorer] fetch about to start', intelApi('/auth-check'));
+        } catch (eLog) {}
+        unlockFetchStarted = true;
         r = await gateFetchAuthCheck(intelApi('/auth-check'), fetchOpts, timeoutMs);
+        try {
+          console.log('[PlayShare diag explorer] fetch completed', r && r.status);
+        } catch (eLog2) {}
       } catch (eFetch) {
         var aborted =
           eFetch &&
@@ -1674,6 +1800,9 @@ function explorerHtml() {
         if ($('tok')) $('tok').value = bearer;
         clearGateErr();
         clearGateFieldHighlights();
+        try {
+          console.log('[PlayShare diag explorer] calling enterExplorerApp');
+        } catch (eL3) {}
         enterExplorerApp();
       } catch (eDone) {
         recordGateAuthDiag([
@@ -1683,6 +1812,13 @@ function explorerHtml() {
         showGateErr('Unlocked locally but something failed in the page: ' + (eDone && eDone.message ? eDone.message : String(eDone)));
       }
     } finally {
+      if (hadBearerReadyForFetch && !unlockFetchStarted) {
+        gateAppendDiagImmediate('Unlock request did not start (stopped before network request).');
+        showGateErr('Unlock request did not start. See Authentication diagnostic or the browser console.');
+        try {
+          console.warn('[PlayShare diag explorer] unlockFetchStarted never set true');
+        } catch (eW) {}
+      }
       if (working) working.style.display = 'none';
       if (btn) btn.disabled = false;
     }
@@ -1703,38 +1839,58 @@ function explorerHtml() {
     })
     .catch(function () {});
 
-  var gateBtn = $('gateSubmit');
-  if (gateBtn) {
-    function onGateContinueClick(ev) {
-      if (ev) {
-        ev.preventDefault();
-        ev.stopPropagation();
-      }
-      try {
-        var pr = validateAndEnterFromGate();
-        if (pr && typeof pr.catch === 'function') {
-          pr.catch(function (eUnhandled) {
-            recordGateAuthDiag([
-              'Uncaught async error in unlock handler.',
-              String(eUnhandled && eUnhandled.message ? eUnhandled.message : eUnhandled)
-            ]);
-            showGateErr('Unexpected error: ' + (eUnhandled && eUnhandled.message ? eUnhandled.message : String(eUnhandled)));
-          });
+  gateBootLine('DOM ready (end-of-body script)');
+
+  try {
+    var gateBtn = $('gateSubmit');
+    if (!gateBtn) {
+      gateBootLine('ERROR: #gateSubmit not found');
+      showGateInitFail('#gateSubmit (Continue) not found in page HTML.');
+    } else {
+      gateBootLine('Continue button found');
+      function onGateContinueClick(ev) {
+        if (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
         }
-      } catch (eSync) {
-        recordGateAuthDiag([
-          'Uncaught synchronous error in Continue click.',
-          String(eSync && eSync.message ? eSync.message : eSync)
-        ]);
-        showGateErr('Unexpected error: ' + (eSync && eSync.message ? eSync.message : String(eSync)));
+        try {
+          console.log('[PlayShare diag explorer] Continue clicked');
+          gateImmediateUnlockFeedback();
+          var pr = validateAndEnterFromGate();
+          if (pr && typeof pr.catch === 'function') {
+            pr.catch(function (eUnhandled) {
+              var msg = String(eUnhandled && eUnhandled.message ? eUnhandled.message : eUnhandled);
+              recordGateAuthDiag(['Uncaught async error in unlock handler.', msg]);
+              showGateErr('Unexpected error: ' + msg);
+              gateBootLine('async unlock error: ' + msg);
+            });
+          }
+        } catch (eSync) {
+          var msgS = String(eSync && eSync.message ? eSync.message : eSync);
+          gateAppendDiagImmediate('Continue click handler error: ' + msgS);
+          recordGateAuthDiag(['Uncaught synchronous error in Continue click.', msgS]);
+          showGateErr('Unexpected error: ' + msgS);
+          gateBootLine('click handler error: ' + msgS);
+          try {
+            console.error('[PlayShare diag explorer] Continue click', eSync);
+          } catch (eC) {}
+        }
       }
+      gateBtn.addEventListener('click', onGateContinueClick);
+      gateBootLine('click handler attached');
+      gateBootLine('Unlock handler ready');
     }
-    gateBtn.addEventListener('click', onGateContinueClick);
+  } catch (eGateInit) {
+    showGateInitFail(eGateInit && eGateInit.message ? eGateInit.message : String(eGateInit));
+    gateBootLine('gate init exception: ' + (eGateInit && eGateInit.message ? eGateInit.message : String(eGateInit)));
   }
+
   function gateMaybeSubmit(e) {
     if (e.key !== 'Enter') return;
     e.preventDefault();
     try {
+      console.log('[PlayShare diag explorer] Enter key submit');
+      gateImmediateUnlockFeedback();
       var pr = validateAndEnterFromGate();
       if (pr && typeof pr.catch === 'function') {
         pr.catch(function (eUnhandled) {
