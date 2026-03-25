@@ -80,6 +80,16 @@ function getDiagIntelAcceptedSecrets() {
   return out;
 }
 
+/**
+ * @param {string} token
+ */
+function isDiagIntelTokenAccepted(token) {
+  const accepted = getDiagIntelAcceptedSecrets();
+  if (accepted.length === 0) return null;
+  if (!token) return false;
+  return accepted.some((secret) => token === secret);
+}
+
 /** @deprecated Use getDiagIntelAcceptedSecrets; kept for module export compatibility (first configured secret). */
 function getIntelSecret() {
   const a = getDiagIntelAcceptedSecrets();
@@ -138,12 +148,28 @@ function extractDiagIntelToken(req) {
   return scrubDiagSecret(alt);
 }
 
+/**
+ * Optional POST fallback: some hosts/proxies may drop auth headers on JSON POST requests.
+ * @param {unknown} body
+ */
+function extractDiagIntelTokenFromBody(body) {
+  if (!body || typeof body !== 'object') return '';
+  const b = /** @type {Record<string, unknown>} */ (body);
+  const candidate =
+    b.diag_intel_secret != null
+      ? b.diag_intel_secret
+      : b.intel_secret != null
+        ? b.intel_secret
+        : b.auth_token != null
+          ? b.auth_token
+          : b.bearer != null
+            ? b.bearer
+            : b.token;
+  return parseBearerToken(candidate);
+}
+
 function checkAuth(req) {
-  const accepted = getDiagIntelAcceptedSecrets();
-  if (accepted.length === 0) return null;
-  const token = extractDiagIntelToken(req);
-  if (!token) return false;
-  return accepted.some((secret) => token === secret);
+  return isDiagIntelTokenAccepted(extractDiagIntelToken(req));
 }
 
 /**
@@ -191,6 +217,11 @@ async function readJsonBody(req, maxBytes = 65536) {
 async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
   const url = new URL(req.url || '/', hostBase);
   const path = url.pathname.replace(/\/$/, '') || '/';
+  const canTryBodyAuthFallback =
+    req.method === 'POST' &&
+    (path === '/diag/intel/ai-brief' || path === '/diag/intel/knowledge' || path === '/diag/intel/auth-check');
+  let cachedPostJsonBody = null;
+  let hasCachedPostJsonBody = false;
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
@@ -240,7 +271,18 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
     return;
   }
 
-  const authed = checkAuth(req);
+  let authed = checkAuth(req);
+  if (!authed && canTryBodyAuthFallback) {
+    try {
+      const maxBodyBytes = path === '/diag/intel/knowledge' ? 131072 : 65536;
+      cachedPostJsonBody = await readJsonBody(req, maxBodyBytes);
+      hasCachedPostJsonBody = true;
+      const bodyToken = extractDiagIntelTokenFromBody(cachedPostJsonBody);
+      if (bodyToken) authed = isDiagIntelTokenAccepted(bodyToken);
+    } catch {
+      /* keep header-based auth verdict */
+    }
+  }
   if (authed === null) {
     jsonAuth(res, 503, {
       ok: false,
@@ -256,7 +298,7 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
   }
 
   if (path === '/diag/intel/auth-check' && (req.method === 'POST' || req.method === 'GET')) {
-    if (req.method === 'POST') {
+    if (req.method === 'POST' && !hasCachedPostJsonBody) {
       await drainRequestBody(req);
     }
     jsonAuth(res, 200, {
@@ -453,12 +495,14 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
         return;
       }
       if (req.method === 'POST') {
-        let body;
-        try {
-          body = await readJsonBody(req, 131072);
-        } catch {
-          json(res, 400, { ok: false, error: 'invalid_json' });
-          return;
+        let body = cachedPostJsonBody;
+        if (!hasCachedPostJsonBody) {
+          try {
+            body = await readJsonBody(req, 131072);
+          } catch {
+            json(res, 400, { ok: false, error: 'invalid_json' });
+            return;
+          }
         }
         const digest = String(body.digest_markdown || '').trim();
         if (digest.length < 20) {
@@ -491,12 +535,14 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
         json(res, 405, { ok: false, error: 'method_not_allowed' });
         return;
       }
-      let body = {};
-      try {
-        body = await readJsonBody(req, 65536);
-      } catch {
-        json(res, 400, { ok: false, error: 'invalid_json' });
-        return;
+      let body = cachedPostJsonBody;
+      if (!hasCachedPostJsonBody) {
+        try {
+          body = await readJsonBody(req, 65536);
+        } catch {
+          json(res, 400, { ok: false, error: 'invalid_json' });
+          return;
+        }
       }
       const dryRun = Boolean(body.dry_run);
       const focusRaw = body.focus_platform != null ? String(body.focus_platform).trim().slice(0, 64) : '';

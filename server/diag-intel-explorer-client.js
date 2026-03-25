@@ -765,6 +765,14 @@
     return attachClientAiHeaders(h);
   }
 
+  /** POST fallback for hosts that strip auth headers on JSON requests. */
+  function withDiagAuthBody(body) {
+    var b = body && typeof body === 'object' ? body : {};
+    var t = getResolvedBearer();
+    if (t) b.diag_intel_secret = t;
+    return b;
+  }
+
   function setPill(text, kind) {
     var el = $('statusPill');
     el.textContent = text;
@@ -1126,13 +1134,13 @@
     out.innerHTML = '<div class="empty">Gathering data' + ($('aiDryRun').checked ? '…' : ' and calling the model…') + '</div>';
     try {
       var lk = getClientLlmKeyForBrief();
-      var body = {
+      var body = withDiagAuthBody({
         dry_run: $('aiDryRun').checked,
         focus_platform: ($('aiFocusPlat').value || '').trim() || undefined,
         engineer_notes: ($('aiNotes').value || '').trim() || undefined,
         include_prior_learnings: $('aiIncludePrior').checked,
         persist_learning: !$('aiDryRun').checked && $('aiPersist').checked
-      };
+      });
       if (lk) body.llm_api_key = lk;
       var r = await fetch(intelApi('/ai-brief'), {
         method: 'POST',
@@ -1371,10 +1379,10 @@
       var r = await fetch(intelApi('/knowledge'), {
         method: 'POST',
         headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
-        body: JSON.stringify({
+        body: JSON.stringify(withDiagAuthBody({
           digest_markdown: t,
           focus_platform: ($('aiFocusPlat').value || '').trim() || undefined
-        })
+        }))
       });
       var j = await r.json();
       if (j.ok && j.learning_id) {
