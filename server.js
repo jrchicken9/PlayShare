@@ -17,8 +17,9 @@ const fs = require('fs');
 const os = require('os');
 const { WebSocketServer, WebSocket } = require('ws');
 const { v4: uuidv4 } = require('uuid');
-const { handleDiagUpload } = require('./server/diag-upload');
+const { handleDiagUpload, getSupabaseAdmin } = require('./server/diag-upload');
 const { handleDiagIntel } = require('./server/diag-intel-http');
+const { startDiagAiWorkerLoop } = require('./server/diag-ai-worker');
 
 const rawPort = String(process.env.PORT ?? '').trim();
 const parsedPort = Number.parseInt(rawPort, 10);
@@ -1464,6 +1465,18 @@ function finishListen() {
   const a = httpServer.address();
   if (a && typeof a === 'object') {
     console.log(`✅ Listening ${a.address}:${a.port} (${a.family})`);
+  }
+  const workerEnabled = String(process.env.PLAYSHARE_DIAG_AI_INLINE_WORKER || '1').trim().toLowerCase() !== '0';
+  if (workerEnabled) {
+    const supabase = getSupabaseAdmin();
+    if (supabase) {
+      const loop = startDiagAiWorkerLoop(supabase);
+      console.log('[PlayShare/diag-ai-worker] inline loop started', loop.workerId);
+    } else {
+      console.log('[PlayShare/diag-ai-worker] inline loop skipped (Supabase not configured)');
+    }
+  } else {
+    console.log('[PlayShare/diag-ai-worker] inline loop disabled via PLAYSHARE_DIAG_AI_INLINE_WORKER=0');
   }
   logStartupBanner();
 }

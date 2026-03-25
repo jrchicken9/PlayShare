@@ -1130,10 +1130,261 @@
     });
   }
 
+  function stopAiBriefPolling() {
+    if (window.__playshareAiBriefPollTimer) {
+      clearTimeout(window.__playshareAiBriefPollTimer);
+      window.__playshareAiBriefPollTimer = null;
+    }
+  }
+
+  function renderAiBriefPayload(j) {
+    var out = $('aiBriefResult');
+    var parts = [];
+
+    if (j.queued && j.job) {
+      var queuedLabel = j.job.status === 'running' ? 'Running' : j.job.status === 'cancelled' ? 'Cancelled' : 'Queued';
+      parts.push(
+        '<div class="alert ok" style="background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.35);color:#dbeafe;padding:12px 14px;border-radius:10px;margin-bottom:12px">' +
+          '<strong>' + esc(queuedLabel) + '</strong>' +
+          '<p class="muted" style="margin:8px 0 0">Job <code>' + esc(j.job.id || '') + '</code> is being processed on the server. You can leave this page open; status will refresh automatically.</p>' +
+          '<p class="muted" style="margin:8px 0 0">Model: <code>' + esc(j.model || j.job.model || 'server-managed') + '</code></p>' +
+          '<div class="row" style="margin-top:10px;align-items:center;gap:8px;flex-wrap:wrap">' +
+          '<button type="button" class="ghost" id="btnRefreshAiJob">Refresh status</button>' +
+          (j.job.status === 'queued' || j.job.status === 'running'
+            ? '<button type="button" class="ghost" id="btnCancelAiJob">Cancel job</button>'
+            : '') +
+          '</div></div>'
+      );
+    }
+
+    if (!j.ok && !j.queued && (j.error === 'ai_not_configured' || j.error === 'ai_request_failed' || j.error === 'job_failed')) {
+      var extra =
+        j.error === 'ai_not_configured'
+          ? getClientLlmKeyForBrief()
+            ? '<p class="muted" style="margin:8px 0 0">A browser key is no longer enough for async jobs. Set <code>PLAYSHARE_DIAG_AI_API_KEY</code> or <code>OPENAI_API_KEY</code> on the deployed server/worker.</p>'
+            : '<p class="muted" style="margin:8px 0 0">Set <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code> on Railway so the background worker can run jobs without this browser staying involved.</p>'
+          : '';
+      parts.push(
+        '<div class="alert warn"><strong>' +
+          esc(j.error === 'ai_not_configured' ? 'IntelPro not configured' : 'IntelPro job failed') +
+          '</strong><p class="muted" style="margin:8px 0 0">' +
+          esc(j.hint || j.detail || '') +
+          '</p>' +
+          extra +
+          '<p class="muted" style="margin:8px 0 0">You can still use the <strong>data pack</strong> below without an LLM.</p></div>'
+      );
+    } else if (!j.ok && !j.queued && (j.status === 401 || j.error === 'unauthorized')) {
+      parts.push(
+        '<div class="alert err"><strong>401 — session missing or expired</strong>' +
+          '<p class="muted" style="margin:8px 0 0">Return to <strong>Change credentials</strong> and unlock again to refresh the server session. IntelPro reads stored diagnostics on the server and does not require the extension to be in a live room.</p></div>'
+      );
+    } else if (!j.ok && !j.queued) {
+      parts.push(
+        '<div class="alert err"><strong>' + esc(j.error || 'request_failed') + '</strong><p class="muted">' + esc(j.detail || '') + '</p></div>'
+      );
+    }
+
+    if (j.fallback_markdown) {
+      parts.push(
+        '<h3 class="muted" style="margin:16px 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em">Data pack (markdown)</h3>' +
+          '<p class="muted" style="margin:0 0 8px;font-size:12px">Safe to paste into Cursor as context together with the Cursor message.</p>' +
+          '<textarea id="aiFallbackTa" class="brief-ta" readonly></textarea>' +
+          '<div class="row" style="margin-top:8px;align-items:center">' +
+          '<button type="button" class="ghost" id="btnCopyFallback">Copy data pack</button>' +
+          '<span id="copyFbHint" class="path"></span></div>'
+      );
+    }
+
+    if (j.ok && j.assistant_markdown) {
+      var cursorMsg = extractCursorBlock(j.assistant_markdown) || j.assistant_markdown;
+      window.__playshareCursorBrief = cursorMsg;
+      window.__playshareAiBriefFull = j.assistant_markdown;
+      parts.unshift(
+        '<h3 class="muted" style="margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em">IntelPro report</h3>' +
+          '<p class="muted" style="margin:0 0 8px;font-size:12px">Model: <code>' +
+          esc(j.model || '') +
+          '</code> · Use <strong>Copy Cursor message</strong> for the short paste; the section <code>COPY_PASTE_FOR_CURSOR_AI</code> in the text is the same.</p>' +
+          '<textarea id="aiMainTa" class="brief-ta" readonly></textarea>' +
+          '<div class="row" style="margin-top:8px;align-items:center;flex-wrap:wrap;gap:8px">' +
+          '<button type="button" class="primary" id="btnCopyCursor">Copy Cursor message</button> ' +
+          '<button type="button" class="ghost" id="btnCopyAiFull">Copy full IntelPro report</button>' +
+          '<span id="copyAiHint" class="path"></span></div>'
+      );
+      var metaBits = [];
+      if (j.prior_runs_in_prompt != null) {
+        metaBits.push('Prior briefs included in this prompt: <strong>' + esc(String(j.prior_runs_in_prompt)) + '</strong>');
+      }
+      if (j.learning_id) {
+        metaBits.push('Saved to knowledge table <code class="mono-sm">' + esc(j.learning_id) + '</code> — future runs will use it.');
+      }
+      if (metaBits.length) {
+        parts.unshift(
+          '<div style="margin-bottom:12px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);font-size:13px;line-height:1.5">' +
+            metaBits.join('<br/>') +
+            '</div>'
+        );
+      }
+    } else if (j.ok && j.dry_run) {
+      window.__playshareDryContext = j.context;
+      var pr = j.prior_runs_in_prompt != null ? esc(String(j.prior_runs_in_prompt)) : '?';
+      parts.unshift(
+        '<div class="alert ok" style="background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.35);color:#a7f3d0;padding:12px 14px;border-radius:10px;margin-bottom:12px">' +
+          '<strong>Dry run</strong> — no LLM. Prior briefs that would be injected: <strong>' +
+          pr +
+          '</strong>. JSON context: <strong>Download context.json</strong>.</div>' +
+          '<div class="row" style="margin-bottom:12px"><button type="button" class="ghost" id="btnDlContext">Download context.json</button></div>'
+      );
+    }
+
+    out.innerHTML = parts.join('');
+    var fb = $('aiFallbackTa');
+    if (fb && j.fallback_markdown) fb.value = j.fallback_markdown;
+    var main = $('aiMainTa');
+    if (main && j.assistant_markdown) main.value = j.assistant_markdown;
+
+    var dl = $('btnDlContext');
+    if (dl) {
+      dl.onclick = function () {
+        var ctx = window.__playshareDryContext;
+        if (!ctx) return;
+        var blob = new Blob([JSON.stringify(ctx, null, 2)], { type: 'application/json' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'playshare-diag-context.json';
+        a.click();
+        URL.revokeObjectURL(a.href);
+      };
+    }
+    var cf = $('btnCopyFallback');
+    if (cf) {
+      cf.onclick = function () {
+        var ta = $('aiFallbackTa');
+        copyText(ta && ta.value, $('copyFbHint'));
+      };
+    }
+    var cc = $('btnCopyCursor');
+    if (cc) {
+      cc.onclick = function () {
+        copyText(window.__playshareCursorBrief, $('copyAiHint'));
+      };
+    }
+    var caf = $('btnCopyAiFull');
+    if (caf) {
+      caf.onclick = function () {
+        copyText(window.__playshareAiBriefFull, $('copyAiHint'));
+      };
+    }
+    var rf = $('btnRefreshAiJob');
+    if (rf && j.job && j.job.id) {
+      rf.onclick = function () {
+        pollAiBriefJob(j.job.id, { immediate: true });
+      };
+    }
+    var cancel = $('btnCancelAiJob');
+    if (cancel && j.job && j.job.id) {
+      cancel.onclick = async function () {
+        cancel.disabled = true;
+        try {
+          var r = await authFetch(intelApi('/ai-brief/jobs/' + encodeURIComponent(j.job.id) + '/cancel'), {
+            method: 'POST',
+            headers: buildAuthHeaders({ json: true, csrf: true }),
+            body: JSON.stringify({})
+          });
+          var x = await r.json();
+          if (x && x.ok && x.job) {
+            stopAiBriefPolling();
+            renderAiBriefPayload({
+              ok: false,
+              queued: false,
+              job: x.job,
+              error: 'job_cancelled',
+              detail: 'The AI job was cancelled.',
+              fallback_markdown: j.fallback_markdown,
+              model: j.model
+            });
+            $('aiBriefStatus').textContent = 'cancelled';
+          } else {
+            alert((x && (x.detail || x.error)) || String(r.status));
+            cancel.disabled = false;
+          }
+        } catch (err) {
+          alert(err && err.message ? err.message : String(err));
+          cancel.disabled = false;
+        }
+      };
+    }
+  }
+
+  async function pollAiBriefJob(jobId, opts) {
+    stopAiBriefPolling();
+    var st = $('aiBriefStatus');
+    var out = $('aiBriefResult');
+    var immediate = !opts || opts.immediate !== false;
+    async function tick() {
+      try {
+        var r = await authFetch(intelApi('/ai-brief/jobs/' + encodeURIComponent(jobId)), {
+          headers: buildAuthHeaders({})
+        });
+        var j = await r.json();
+        if (!j.ok || !j.job) {
+          st.textContent = r.status + ' ' + r.statusText;
+          renderAiBriefPayload({
+            ok: false,
+            status: r.status,
+            error: j.error || 'job_lookup_failed',
+            detail: j.detail || ''
+          });
+          return;
+        }
+        var job = j.job;
+        st.textContent = job.status + (job.worker_id ? ' · ' + job.worker_id : '');
+        if (job.status === 'succeeded') {
+          renderAiBriefPayload({
+            ok: true,
+            assistant_markdown: job.assistant_markdown,
+            fallback_markdown: job.fallback_markdown,
+            model: job.model,
+            prior_runs_in_prompt: job.prior_runs_in_prompt,
+            learning_id: job.learning_id
+          });
+          refreshKnowledgeList();
+          return;
+        }
+        if (job.status === 'failed' || job.status === 'cancelled') {
+          renderAiBriefPayload({
+            ok: false,
+            error: job.error_code || (job.status === 'cancelled' ? 'job_cancelled' : 'job_failed'),
+            detail: job.error_detail || (job.status === 'cancelled' ? 'The AI job was cancelled.' : ''),
+            fallback_markdown: job.fallback_markdown,
+            job: job,
+            queued: false,
+            model: job.model
+          });
+          return;
+        }
+        renderAiBriefPayload({
+          ok: false,
+          queued: true,
+          job: job,
+          fallback_markdown: job.fallback_markdown,
+          model: job.model
+        });
+        window.__playshareAiBriefPollTimer = setTimeout(tick, 2500);
+      } catch (e2) {
+        st.textContent = 'Network error';
+        out.innerHTML =
+          '<div class="alert err">' + esc(e2 && e2.message ? e2.message : String(e2)) + '</div>';
+      }
+    }
+    if (immediate) tick();
+    else window.__playshareAiBriefPollTimer = setTimeout(tick, 2500);
+  }
+
   $('btnAiBrief').onclick = async function () {
     var btn = $('btnAiBrief');
     var out = $('aiBriefResult');
     var st = $('aiBriefStatus');
+    stopAiBriefPolling();
     if (!hasActiveIntelSession()) {
       st.textContent = '';
       out.innerHTML =
@@ -1143,7 +1394,7 @@
     }
     btn.disabled = true;
     st.textContent = '';
-    out.innerHTML = '<div class="empty">Gathering data' + ($('aiDryRun').checked ? '…' : ' and calling the model…') + '</div>';
+    out.innerHTML = '<div class="empty">Gathering data' + ($('aiDryRun').checked ? '…' : ' and queueing the AI job…') + '</div>';
     try {
       var lk = getClientLlmKeyForBrief();
       var body = {
@@ -1167,132 +1418,30 @@
         j = { ok: false, error: 'bad_json', detail: raw.slice(0, 400) };
       }
       st.textContent = r.status + ' ' + r.statusText;
-
-      var parts = [];
-      if (!j.ok && (r.status === 401 || j.error === 'unauthorized')) {
-        parts.push(
-          '<div class="alert err"><strong>401 — session missing or expired</strong>' +
-            '<p class="muted" style="margin:8px 0 0">Return to <strong>Change credentials</strong> and unlock again to refresh the server session. This AI tool reads stored diagnostics on the server and does not require the extension to be in a live room.</p></div>'
-        );
-      } else if (!j.ok && (j.error === 'ai_not_configured' || j.error === 'ai_request_failed')) {
-        var extra =
-          j.error === 'ai_not_configured'
-            ? getClientLlmKeyForBrief()
-              ? '<p class="muted" style="margin:8px 0 0">A key was sent from this browser but the server still reported missing config. <strong>Redeploy</strong> the latest PlayShare server (needs <code>llm_api_key</code> body + header support). If you already deployed, check the server logs.</p>'
-              : '<p class="muted" style="margin:8px 0 0">Use <strong>Change credentials</strong>, paste an OpenAI key at unlock, <em>or</em> set <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code> on Railway and leave the browser field empty.</p>'
-            : '';
-        parts.push(
-          '<div class="alert warn"><strong>' +
-            esc(j.error === 'ai_not_configured' ? 'LLM not configured' : 'LLM request failed') +
-            '</strong><p class="muted" style="margin:8px 0 0">' +
-            esc(j.hint || j.detail || '') +
-            '</p>' +
-            extra +
-            '<p class="muted" style="margin:8px 0 0">You can still use the <strong>data pack</strong> below without an LLM.</p></div>'
-        );
-      } else if (!j.ok && !j.fallback_markdown) {
-        parts.push(
-          '<div class="alert err"><strong>' + esc(j.error || 'request_failed') + '</strong><p class="muted">' + esc(j.detail || '') + '</p></div>'
-        );
+      renderAiBriefPayload({
+        ok: Boolean(j.ok),
+        dry_run: Boolean(j.dry_run),
+        context: j.context,
+        fallback_markdown: j.fallback_markdown,
+        assistant_markdown: j.assistant_markdown,
+        model: j.model,
+        prior_runs_in_prompt: j.prior_runs_in_prompt,
+        learning_id: j.learning_id,
+        learning_persist_error: j.learning_persist_error,
+        error: j.error,
+        detail: j.detail,
+        hint: j.hint,
+        queued: Boolean(j.queued),
+        job: j.job,
+        status: r.status
+      });
+      if (j.ok && j.queued && j.job && j.job.id) {
+        pollAiBriefJob(j.job.id, { immediate: false });
       }
-
-      if (j.fallback_markdown) {
-        parts.push(
-          '<h3 class="muted" style="margin:16px 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em">Data pack (markdown)</h3>' +
-            '<p class="muted" style="margin:0 0 8px;font-size:12px">Safe to paste into Cursor as context together with the Cursor message.</p>' +
-            '<textarea id="aiFallbackTa" class="brief-ta" readonly></textarea>' +
-            '<div class="row" style="margin-top:8px;align-items:center">' +
-            '<button type="button" class="ghost" id="btnCopyFallback">Copy data pack</button>' +
-            '<span id="copyFbHint" class="path"></span></div>'
-        );
-      }
-
-      if (j.ok && j.assistant_markdown) {
-        var cursorMsg = extractCursorBlock(j.assistant_markdown) || j.assistant_markdown;
-        window.__playshareCursorBrief = cursorMsg;
-        window.__playshareAiBriefFull = j.assistant_markdown;
-        parts.unshift(
-          '<h3 class="muted" style="margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em">AI-written brief</h3>' +
-            '<p class="muted" style="margin:0 0 8px;font-size:12px">Model: <code>' +
-            esc(j.model || '') +
-            '</code> · Use <strong>Copy Cursor message</strong> for the short paste; the section <code>COPY_PASTE_FOR_CURSOR_AI</code> in the text is the same.</p>' +
-            '<textarea id="aiMainTa" class="brief-ta" readonly></textarea>' +
-            '<div class="row" style="margin-top:8px;align-items:center;flex-wrap:wrap;gap:8px">' +
-            '<button type="button" class="primary" id="btnCopyCursor">Copy Cursor message</button> ' +
-            '<button type="button" class="ghost" id="btnCopyAiFull">Copy full AI brief</button>' +
-            '<span id="copyAiHint" class="path"></span></div>'
-        );
-        var metaBits = [];
-        if (j.prior_runs_in_prompt != null) {
-          metaBits.push('Prior briefs included in this prompt: <strong>' + esc(String(j.prior_runs_in_prompt)) + '</strong>');
-        }
-        if (j.learning_id) {
-          metaBits.push('Saved to knowledge table <code class="mono-sm">' + esc(j.learning_id) + '</code> — future runs will use it.');
-        }
-        if (j.learning_persist_error) {
-          metaBits.push('<span style="color:#fbbf24">Brief not saved: ' + esc(j.learning_persist_error) + '</span>');
-        }
-        if (metaBits.length) {
-          parts.unshift(
-            '<div style="margin-bottom:12px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);font-size:13px;line-height:1.5">' +
-              metaBits.join('<br/>') +
-              '</div>'
-          );
-        }
-      } else if (j.ok && j.dry_run) {
-        window.__playshareDryContext = j.context;
-        var pr = j.prior_runs_in_prompt != null ? esc(String(j.prior_runs_in_prompt)) : '?';
-        parts.unshift(
-          '<div class="alert ok" style="background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.35);color:#a7f3d0;padding:12px 14px;border-radius:10px;margin-bottom:12px">' +
-            '<strong>Dry run</strong> — no LLM. Prior briefs that would be injected: <strong>' +
-            pr +
-            '</strong>. JSON context: <strong>Download context.json</strong>.</div>' +
-            '<div class="row" style="margin-bottom:12px"><button type="button" class="ghost" id="btnDlContext">Download context.json</button></div>'
-        );
-      }
-
-      out.innerHTML = parts.join('');
-      var fb = $('aiFallbackTa');
-      if (fb && j.fallback_markdown) fb.value = j.fallback_markdown;
-      var main = $('aiMainTa');
-      if (main && j.assistant_markdown) main.value = j.assistant_markdown;
-
-      var dl = $('btnDlContext');
-      if (dl) {
-        dl.onclick = function () {
-          var ctx = window.__playshareDryContext;
-          if (!ctx) return;
-          var blob = new Blob([JSON.stringify(ctx, null, 2)], { type: 'application/json' });
-          var a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = 'playshare-diag-context.json';
-          a.click();
-          URL.revokeObjectURL(a.href);
-        };
-      }
-      var cf = $('btnCopyFallback');
-      if (cf) {
-        cf.onclick = function () {
-          var ta = $('aiFallbackTa');
-          copyText(ta && ta.value, $('copyFbHint'));
-        };
-      }
-      var cc = $('btnCopyCursor');
-      if (cc) {
-        cc.onclick = function () {
-          copyText(window.__playshareCursorBrief, $('copyAiHint'));
-        };
-      }
-      var caf = $('btnCopyAiFull');
-      if (caf) {
-        caf.onclick = function () {
-          copyText(window.__playshareAiBriefFull, $('copyAiHint'));
-        };
-      }
-    } catch (e2) {
+    } catch (e3) {
       st.textContent = 'Error';
       out.innerHTML =
-        '<div class="alert err">' + esc(e2 && e2.message ? e2.message : String(e2)) + '</div>';
+        '<div class="alert err">' + esc(e3 && e3.message ? e3.message : String(e3)) + '</div>';
     } finally {
       btn.disabled = false;
     }
@@ -1320,7 +1469,7 @@
   function renderKnowledgeTable(entries) {
     var box = $('aiKnowledgeList');
     if (!entries || !entries.length) {
-      box.innerHTML = '<p class="muted">No rows in <code>diag_intel_knowledge</code> yet. Run a successful AI brief with save enabled, or add a manual note.</p>';
+      box.innerHTML = '<p class="muted">No rows in <code>diag_intel_knowledge</code> yet. Run a successful IntelPro report with save enabled, or add a manual note.</p>';
       return;
     }
     var h =

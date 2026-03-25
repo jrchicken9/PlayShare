@@ -33,6 +33,13 @@ function getDiagAiConfig(req, opts) {
   return { apiKey, baseUrl, model, configured: Boolean(apiKey) };
 }
 
+function getServerDiagAiConfig() {
+  const apiKey = String(process.env.PLAYSHARE_DIAG_AI_API_KEY || process.env.OPENAI_API_KEY || '').trim();
+  const baseUrl = String(process.env.PLAYSHARE_DIAG_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+  const model = String(process.env.PLAYSHARE_DIAG_AI_MODEL || DEFAULT_MODEL).trim();
+  return { apiKey, baseUrl, model, configured: Boolean(apiKey) };
+}
+
 /**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {{
@@ -146,7 +153,7 @@ function slimCaseRow(c) {
  */
 function buildFallbackMarkdown(ctx) {
   const lines = [
-    '# PlayShare diagnostic pack (no AI — paste into your coding assistant)',
+    '# PlayShare IntelPro data pack (no LLM run — paste into your coding assistant)',
     '',
     `_Generated ${ctx.generated_at}${ctx.focus_platform ? ` · platform filter: ${ctx.focus_platform}` : ''}_ · primer **v${EXTENSION_PRIMER_VERSION}**`,
     '',
@@ -293,6 +300,7 @@ async function generateAssistantBrief(aiCfg, context, engineerNotes) {
 
 module.exports = {
   getDiagAiConfig,
+  getServerDiagAiConfig,
   gatherBriefContext,
   buildFallbackMarkdown,
   generateAssistantBrief,

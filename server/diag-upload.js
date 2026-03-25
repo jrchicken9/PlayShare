@@ -12,6 +12,8 @@ const {
 } = require('./diag-privacy-enforce');
 const { buildCaseIntelRecord, upsertClusterRollup } = require('./diag-intelligence');
 const { authenticateUploadRequest } = require('./diag-auth');
+const { createAiBriefJob } = require('./diag-ai-jobs');
+const { getServerDiagAiConfig } = require('./diag-ai-brief');
 
 const ENVELOPE_SCHEMA = 'playshare.diagUploadEnvelope.v1';
 const UNIFIED_VERSION = '1.0';
@@ -67,6 +69,42 @@ function serverPackageVersion() {
   } catch {
     return '1.0.0';
   }
+}
+
+function autoQueueAiOnUploadEnabled() {
+  const v = String(process.env.PLAYSHARE_DIAG_AI_AUTO_QUEUE_ON_UPLOAD || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
+async function maybeQueueAutomaticAiBrief(supabase, options) {
+  if (!supabase || !autoQueueAiOnUploadEnabled()) return null;
+  const aiCfg = getServerDiagAiConfig();
+  if (!aiCfg.configured) return null;
+  const focusPlatform = options.focus_platform ? String(options.focus_platform).slice(0, 64) : null;
+  const engineerNote =
+    'Auto-generated after diagnostic upload' +
+    (options.report_id ? ' ' + String(options.report_id).slice(0, 36) : '') +
+    '. Summarize the most actionable extension work from the latest telemetry and note whether this run reinforces or changes prior findings.';
+  const row = await createAiBriefJob(supabase, {
+    trigger_source: 'upload_auto',
+    focus_platform: focusPlatform,
+    engineer_notes: engineerNote,
+    include_prior_learnings: true,
+    persist_learning: true,
+    auto_triggered: true,
+    source_report_id: options.report_id || null,
+    request_options_json: {
+      focus_platform: focusPlatform,
+      engineer_notes: engineerNote,
+      include_prior_learnings: true,
+      persist_learning: true,
+      case_limit: 30,
+      cluster_limit: 12,
+      metrics_sample: 120,
+      prior_learning_limit: 10
+    }
+  });
+  return row ? row.id : null;
 }
 
 /**
@@ -188,6 +226,8 @@ async function ingestDiagnosticBundle(body, deps = {}) {
   summary.room_id_hash = stamped.anonymization?.roomIdHash || summary.room_id_hash;
 
   const supabase = getSb();
+  /** @type {string|null} */
+  let autoAiJobId = null;
   if (supabase) {
     const { error: rawErr } = await supabase.from('diag_reports_raw').insert({
       id: reportId,
@@ -264,6 +304,13 @@ async function ingestDiagnosticBundle(body, deps = {}) {
         await upsertClusterRollup(supabase, intel).catch((e) =>
           console.warn('[PlayShare/diag/intel] cluster rollup failed', e && e.message)
         );
+        autoAiJobId = await maybeQueueAutomaticAiBrief(supabase, {
+          report_id: reportId,
+          focus_platform: intel.platform || summary.platform || null
+        }).catch((e) => {
+          console.warn('[PlayShare/diag/intel] auto AI job enqueue failed', e && e.message);
+          return null;
+        });
       }
     } catch (e) {
       console.warn('[PlayShare/diag/intel] case build failed', e && e.message);
@@ -280,7 +327,8 @@ async function ingestDiagnosticBundle(body, deps = {}) {
       reportId,
       receivedAt,
       persisted: !!supabase,
-      derivedTags: derived_tags
+      derivedTags: derived_tags,
+      autoAiJobId
     }
   };
 }

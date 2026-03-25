@@ -8,9 +8,19 @@ const pathMod = require('path');
 const { URL } = require('url');
 const { getSupabaseAdmin } = require('./diag-upload');
 const { explainCase, buildRecommendationsFromCases, regressionCompare } = require('./diag-intelligence');
-const { getDiagAiConfig, gatherBriefContext, buildFallbackMarkdown, generateAssistantBrief } = require('./diag-ai-brief');
+const { getDiagAiConfig, getServerDiagAiConfig, gatherBriefContext, buildFallbackMarkdown } = require('./diag-ai-brief');
 const { EXTENSION_PRIMER_MARKDOWN } = require('./playshare-extension-primer');
 const { saveBriefAsLearning, listKnowledge, getKnowledgeOne } = require('./diag-intel-knowledge');
+const {
+  normalizeAiBriefRequest,
+  queueRequestOptions,
+  createAiBriefJob,
+  getAiBriefJob,
+  listAiBriefJobs,
+  cancelAiBriefJob,
+  jobSummaryRow,
+  jobDetailRow
+} = require('./diag-ai-jobs');
 const {
   getDiagIntelAcceptedSecrets,
   getIntelSecret,
@@ -90,7 +100,7 @@ function unauthorized(res) {
     ok: false,
     error: 'unauthorized',
     hint:
-      'Unlock again to refresh your diagnostic session, or provide the exact PLAYSHARE_DIAG_INTEL_SECRET / PLAYSHARE_DIAG_UPLOAD_SECRET value. AI access does not depend on being in a live room.'
+      'Unlock again to refresh your diagnostic session, or provide the exact PLAYSHARE_DIAG_INTEL_SECRET / PLAYSHARE_DIAG_UPLOAD_SECRET value. IntelPro access does not depend on being in a live room.'
   });
 }
 
@@ -156,6 +166,16 @@ function establishSessionFromAuthCandidates(req, res, body) {
     if (!result.configured || result.ok) return result;
   }
   return { configured: getDiagIntelAcceptedSecrets().length > 0, ok: false, session: null };
+}
+
+function parseAiBriefJobId(pathname) {
+  const m = String(pathname || '').match(/^\/diag\/intel\/ai-brief\/jobs\/([0-9a-f-]{36})$/i);
+  return m ? m[1] : '';
+}
+
+function parseAiBriefJobCancelId(pathname) {
+  const m = String(pathname || '').match(/^\/diag\/intel\/ai-brief\/jobs\/([0-9a-f-]{36})\/cancel$/i);
+  return m ? m[1] : '';
 }
 
 /**
@@ -242,7 +262,7 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
         ok: false,
         error: 'intel_secret_not_configured',
         hint:
-          'Set PLAYSHARE_DIAG_INTEL_SECRET and/or PLAYSHARE_DIAG_UPLOAD_SECRET. AI access is independent of live room activity.'
+          'Set PLAYSHARE_DIAG_INTEL_SECRET and/or PLAYSHARE_DIAG_UPLOAD_SECRET. IntelPro access is independent of live room activity.'
       });
       return;
     }
@@ -299,7 +319,7 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
           ok: false,
           error: 'intel_secret_not_configured',
           hint:
-            'Set PLAYSHARE_DIAG_INTEL_SECRET and/or PLAYSHARE_DIAG_UPLOAD_SECRET. AI access is independent of live room activity.'
+            'Set PLAYSHARE_DIAG_INTEL_SECRET and/or PLAYSHARE_DIAG_UPLOAD_SECRET. IntelPro access is independent of live room activity.'
         });
         return;
       }
@@ -571,37 +591,74 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
       return;
     }
 
+    if (path === '/diag/intel/ai-brief/jobs') {
+      if (req.method !== 'GET') {
+        json(res, 405, { ok: false, error: 'method_not_allowed' });
+        return;
+      }
+      const lim = Math.min(40, Math.max(1, parseInt(url.searchParams.get('limit') || '15', 10)));
+      const off = Math.min(100000, Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10)));
+      const statusFilter = url.searchParams.get('status') || undefined;
+      const focusFilter = url.searchParams.get('focus_platform') || undefined;
+      const rows = await listAiBriefJobs(supabase, {
+        limit: lim,
+        offset: off,
+        status: statusFilter,
+        focusPlatform: focusFilter
+      });
+      json(res, 200, { ok: true, jobs: rows.map(jobSummaryRow) });
+      return;
+    }
+
+    const aiBriefJobId = parseAiBriefJobId(path);
+    if (aiBriefJobId) {
+      if (req.method !== 'GET') {
+        json(res, 405, { ok: false, error: 'method_not_allowed' });
+        return;
+      }
+      const row = await getAiBriefJob(supabase, aiBriefJobId);
+      if (!row) {
+        json(res, 404, { ok: false, error: 'not_found' });
+        return;
+      }
+      json(res, 200, { ok: true, job: jobDetailRow(row) });
+      return;
+    }
+
+    const aiBriefCancelId = parseAiBriefJobCancelId(path);
+    if (aiBriefCancelId) {
+      if (req.method !== 'POST') {
+        json(res, 405, { ok: false, error: 'method_not_allowed' });
+        return;
+      }
+      const row = await cancelAiBriefJob(supabase, aiBriefCancelId);
+      if (!row) {
+        json(res, 404, { ok: false, error: 'not_found_or_not_cancellable' });
+        return;
+      }
+      json(res, 200, { ok: true, job: jobSummaryRow(row) });
+      return;
+    }
+
     if (path === '/diag/intel/ai-brief') {
       if (req.method !== 'POST') {
         json(res, 405, { ok: false, error: 'method_not_allowed' });
         return;
       }
       const body = parsedBody || (await readJsonBody(req, 65536));
-      const dryRun = Boolean(body.dry_run);
-      const focusRaw = body.focus_platform != null ? String(body.focus_platform).trim().slice(0, 64) : '';
-      const focusPlatform = focusRaw || null;
-      const engineerNotes = body.engineer_notes != null ? String(body.engineer_notes).slice(0, 8000) : '';
-      const caseLimit = body.case_limit != null ? parseInt(body.case_limit, 10) : undefined;
-      const clusterLimit = body.cluster_limit != null ? parseInt(body.cluster_limit, 10) : undefined;
-      const metricsSample = body.metrics_sample != null ? parseInt(body.metrics_sample, 10) : undefined;
-      const includePriorLearnings = body.include_prior_learnings !== false;
-      const persistLearning = body.persist_learning !== false;
-      const priorLearningLimit =
-        body.prior_learning_limit != null ? parseInt(body.prior_learning_limit, 10) : undefined;
-      const bodyLlmKey =
-        body.llm_api_key != null ? String(body.llm_api_key).trim().slice(0, 512) : '';
+      const normalized = normalizeAiBriefRequest(body);
 
       const context = await gatherBriefContext(supabase, {
-        focusPlatform,
-        caseLimit: Number.isFinite(caseLimit) ? caseLimit : undefined,
-        clusterLimit: Number.isFinite(clusterLimit) ? clusterLimit : undefined,
-        metricsSample: Number.isFinite(metricsSample) ? metricsSample : undefined,
-        includePriorLearnings,
-        priorLearningLimit: Number.isFinite(priorLearningLimit) ? priorLearningLimit : undefined
+        focusPlatform: normalized.focusPlatform,
+        caseLimit: normalized.caseLimit,
+        clusterLimit: normalized.clusterLimit,
+        metricsSample: normalized.metricsSample,
+        includePriorLearnings: normalized.includePriorLearnings,
+        priorLearningLimit: normalized.priorLearningLimit
       });
       const fallbackMarkdown = buildFallbackMarkdown(context);
 
-      if (dryRun) {
+      if (normalized.dryRun) {
         json(res, 200, {
           ok: true,
           dry_run: true,
@@ -610,63 +667,52 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
             architecture_primer_markdown: EXTENSION_PRIMER_MARKDOWN
           },
           fallback_markdown: fallbackMarkdown,
-          ai_configured: getDiagAiConfig(req, { bodyApiKey: bodyLlmKey }).configured,
+          ai_configured: getDiagAiConfig(req, { bodyApiKey: normalized.bodyLlmKey }).configured,
           prior_runs_in_prompt: (context.prior_runs_from_database || []).length
         });
         return;
       }
 
-      const aiCfg = getDiagAiConfig(req, { bodyApiKey: bodyLlmKey });
+      const aiCfg = getServerDiagAiConfig();
       if (!aiCfg.configured) {
         json(res, 503, {
           ok: false,
           error: 'ai_not_configured',
           hint:
-            'Set PLAYSHARE_DIAG_AI_API_KEY (or OPENAI_API_KEY) on the server, or reload /diag/intel/explorer and paste an OpenAI key at unlock. The explorer sends a browser key in header X-PlayShare-Diag-AI-Key and JSON llm_api_key when provided; otherwise the server uses its env key.',
+            'IntelPro requires PLAYSHARE_DIAG_AI_API_KEY (or OPENAI_API_KEY) on the server/worker. Browser-only keys are not used for background jobs.',
           fallback_markdown: fallbackMarkdown
         });
         return;
       }
 
       try {
-        const assistantMarkdown = await generateAssistantBrief(aiCfg, context, engineerNotes);
-        /** @type {string|null} */
-        let learningId = null;
-        /** @type {string|null} */
-        let learningPersistError = null;
-        if (persistLearning) {
-          try {
-            learningId = await saveBriefAsLearning(supabase, {
-              source: 'ai_brief',
-              model: aiCfg.model,
-              focus_platform: focusPlatform,
-              extension_versions: Object.keys(context.extension_version_counts || {}),
-              case_window: Array.isArray(context.recent_cases) ? context.recent_cases.length : null,
-              digest_markdown: assistantMarkdown,
-              data_snapshot_at: context.generated_at
-            });
-          } catch (pe) {
-            learningPersistError = pe && pe.message ? pe.message : String(pe);
-            console.error('[PlayShare/diag/intel] ai-brief persist learning', pe);
-          }
-        }
-        json(res, 200, {
+        const row = await createAiBriefJob(supabase, {
+          trigger_source: 'explorer',
+          focus_platform: normalized.focusPlatform,
+          engineer_notes: normalized.engineerNotes,
+          include_prior_learnings: normalized.includePriorLearnings,
+          persist_learning: normalized.persistLearning,
+          auto_triggered: false,
+          request_options_json: queueRequestOptions(normalized),
+          context_json: context,
+          fallback_markdown: fallbackMarkdown,
+          prior_runs_in_prompt: (context.prior_runs_from_database || []).length
+        });
+        json(res, 202, {
           ok: true,
-          assistant_markdown: assistantMarkdown,
+          queued: true,
+          job: jobSummaryRow(row),
           fallback_markdown: fallbackMarkdown,
           model: aiCfg.model,
-          used_ai: true,
-          learning_id: learningId,
-          learning_persisted: Boolean(learningId),
-          learning_persist_error: learningPersistError,
+          used_ai: false,
           prior_runs_in_prompt: (context.prior_runs_from_database || []).length
         });
       } catch (e) {
         const detail = e && e.message ? e.message : String(e);
-        const status = e && e.status >= 400 && e.status < 600 ? e.status : 502;
+        const status = e && e.status >= 400 && e.status < 600 ? e.status : 500;
         json(res, status, {
           ok: false,
-          error: 'ai_request_failed',
+          error: 'ai_job_create_failed',
           detail,
           fallback_markdown: fallbackMarkdown
         });
@@ -1365,7 +1411,7 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
       <header class="gate-header">
         <span class="gate-badge">PlayShare · developers</span>
         <h1>Diagnostic intelligence</h1>
-        <p class="gate-tagline">Sign in once with your server secret. The server then keeps a secure session for this browser so AI access does not depend on a live room.</p>
+        <p class="gate-tagline">Sign in once with your server secret. The server then keeps a secure session for this browser so IntelPro access does not depend on a live room.</p>
       </header>
       <div class="gate-card">
         <div id="gateInitFail" role="alert"></div>
@@ -1386,7 +1432,7 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
               <code>HttpOnly</code> session cookie plus a CSRF header for later writes, so the raw secret is not replayed on each AI request.
             </p>
             <p style="margin: 12px 0 0">
-              <strong>OpenAI:</strong> optional; expand below. Leave blank if this host already has an LLM key in env.
+              <strong>OpenAI:</strong> optional; expand below. Leave blank if this host already has an IntelPro-compatible LLM key in env.
             </p>
           </div>
         </details>
@@ -1404,7 +1450,7 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
         <p id="gateSecretMeta">Paste above — length is checked locally before any request runs.</p>
 
         <details class="gate-optional-block">
-          <summary>Optional: OpenAI API key (AI tab)</summary>
+          <summary>Optional: OpenAI API key (IntelPro)</summary>
           <div class="gate-optional-inner">
             <label class="lbl" for="gateOpenAi">OpenAI key</label>
             <input
@@ -1416,7 +1462,7 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
               aria-describedby="gateErr"
             />
             <p id="gateServerLlmHint" class="muted" style="display: none; margin-top: 10px; font-size: 12px; line-height: 1.45">
-              This host reports an LLM key in its environment — you may leave this field empty for the AI tab.
+              This host reports an LLM key in its environment — you may leave this field empty for IntelPro.
             </p>
           </div>
         </details>
@@ -1435,7 +1481,7 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
           <div id="gateBootStatus" aria-live="polite"></div>
         </details>
 
-        <p class="gate-privacy-note">Your raw secret is only used during unlock. The server then manages the browser session; AI access works even when the extension is not in a room.</p>
+        <p class="gate-privacy-note">Your raw secret is only used during unlock. The server then manages the browser session; IntelPro works even when the extension is not in a room.</p>
       </div>
     </div>
   </div>
@@ -1452,10 +1498,10 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
       <aside class="side">
         <h2>1 · Access</h2>
         <p class="muted" style="margin: 0 0 10px; font-size: 12px; line-height: 1.45">
-          The <strong>unlock screen</strong> is the only place you type the Railway secret. After that, the server keeps a secure session for this browser and the explorer reuses it for AI briefs and saved learnings. You do <strong>not</strong> need the extension to be in a live room to use the AI tab. Use <strong>Change credentials</strong> to end the current session and unlock again.
+          The <strong>unlock screen</strong> is the only place you type the Railway secret. After that, the server keeps a secure session for this browser and the explorer reuses it for IntelPro reports and saved learnings. You do <strong>not</strong> need the extension to be in a live room to use IntelPro. Use <strong>Change credentials</strong> to end the current session and unlock again.
         </p>
         <ol class="steps">
-          <li>Use Cases / Clusters / AI assistant — no extra password prompts.</li>
+          <li>Use Cases / Clusters / IntelPro — no extra password prompts.</li>
           <li>Read the summary table; expand <em>Raw JSON</em> only if you need the full payload.</li>
         </ol>
         <p class="muted" style="margin-top:12px">503 <code>supabase_not_configured</code> → set URL + service role on the server. 401 → session missing or expired, so use Change credentials and unlock again.</p>
@@ -1465,7 +1511,7 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
         <div class="access-panel access-panel--post-unlock" id="accessPanel">
           <input type="hidden" id="tok" value="" autocomplete="off" />
           <div class="access-unlock-row">
-            <span><strong style="color: var(--ok)">Unlocked</strong> — this browser now has a secure diagnostic session; AI access is independent from room activity.</span>
+            <span><strong style="color: var(--ok)">Unlocked</strong> — this browser now has a secure diagnostic session; IntelPro access is independent from room activity.</span>
             <button type="button" class="ghost" id="btnReunlock">Change credentials…</button>
           </div>
           <p class="access-panel-hint" style="margin-top: 8px">
@@ -1478,7 +1524,7 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
           <button type="button" role="tab" data-tab="insights" aria-selected="false">Insights</button>
           <button type="button" role="tab" data-tab="search" aria-selected="false">Search</button>
           <button type="button" role="tab" data-tab="regress" aria-selected="false">Compare versions</button>
-          <button type="button" role="tab" data-tab="ai" aria-selected="false">AI assistant</button>
+          <button type="button" role="tab" data-tab="ai" aria-selected="false">IntelPro</button>
         </nav>
 
         <div id="panel-cases" class="tab-panel active" role="tabpanel">
@@ -1529,10 +1575,10 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
 
         <div id="panel-ai" class="tab-panel" role="tabpanel" hidden>
           <p class="muted" style="margin:0 0 10px">
-            Uses <strong>live data</strong> from diagnostic recordings (<code>diag_cases</code> / clusters). Each successful AI run can be <strong>saved</strong> into <code>diag_intel_knowledge</code>; the next run automatically includes those excerpts so the tool <strong>accumulates context</strong> about the extension over time.
+            IntelPro uses <strong>live data</strong> from diagnostic recordings (<code>diag_cases</code> / clusters). Each successful run can be <strong>saved</strong> into <code>diag_intel_knowledge</code>; the next run automatically includes those excerpts so the tool <strong>accumulates context</strong> about the extension over time.
           </p>
           <p class="muted" style="margin:0 0 10px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);font-size:13px;line-height:1.5">
-            LLM access comes from the <strong>OpenAI key you paste at unlock</strong> (sent with each request) or from Railway <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code> on the host when you leave that field empty. If you see <strong>LLM not configured</strong>, add a key at unlock or set one of those env vars, or use <strong>Data pack only</strong>. <strong>401</strong> on requests now usually means the explorer session expired — use <strong>Change credentials</strong>. No live room is required for AI access.
+            IntelPro runs with the server-side LLM key from Railway <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code>. If you see <strong>IntelPro not configured</strong>, set one of those env vars or use <strong>Data pack only</strong>. <strong>401</strong> on requests now usually means the explorer session expired — use <strong>Change credentials</strong>. No live room is required for IntelPro.
           </p>
           <p class="muted" style="margin:0 0 14px;font-size:12px">
             <strong>Supabase:</strong> apply migration <code>20260330120000_diag_intel_knowledge.sql</code>. Optional server env: <code>PLAYSHARE_DIAG_AI_BASE_URL</code>, <code>PLAYSHARE_DIAG_AI_MODEL</code> (default <code>gpt-4o-mini</code>). <strong>Primer:</strong> <code>npm run generate:primer</code> · <code>playshare-extension-primer.static.md</code> / <code>playshare-extension-primer.js</code>.
@@ -1546,18 +1592,18 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
             <label><input type="checkbox" id="aiIncludePrior" checked /> Include saved prior briefs in prompt (cumulative learning)</label>
           </div>
           <div class="chk" style="margin-top:6px">
-            <label><input type="checkbox" id="aiPersist" checked /> After AI run, save this brief to the knowledge table</label>
+            <label><input type="checkbox" id="aiPersist" checked /> After IntelPro runs, save this report to the knowledge table</label>
           </div>
           <div class="chk" style="margin-top:6px">
             <label><input type="checkbox" id="aiDryRun" /> Data pack only — no LLM (works without API key)</label>
           </div>
           <div class="row" style="margin-top:12px">
-            <button type="button" class="primary" id="btnAiBrief">Generate brief</button>
+            <button type="button" class="primary" id="btnAiBrief">Run IntelPro</button>
             <span id="aiBriefStatus" class="path"></span>
           </div>
           <div id="aiBriefResult" style="margin-top:16px"></div>
           <h3 class="muted" style="margin:22px 0 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em">Saved learnings</h3>
-          <p class="muted" style="margin:0 0 10px;font-size:12px">Append-only history of AI and manual notes. Open loads full markdown.</p>
+          <p class="muted" style="margin:0 0 10px;font-size:12px">Append-only history of IntelPro and manual notes. Open loads full markdown.</p>
           <div class="row" style="margin-bottom:10px">
             <button type="button" class="secondary" id="btnListKnowledge">Refresh list</button>
           </div>
