@@ -989,9 +989,12 @@ function explorerHtml() {
     .gate-screen {
       min-height: 100vh;
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: center;
-      padding: 24px 16px;
+      padding: 32px 18px 48px;
+      background:
+        radial-gradient(ellipse 85% 55% at 50% -25%, rgba(56, 189, 248, 0.16), transparent),
+        var(--bg);
     }
     .gate-screen[hidden] {
       display: none !important;
@@ -999,36 +1002,150 @@ function explorerHtml() {
     #playshareExplorerApp[hidden] {
       display: none !important;
     }
+    .gate-shell {
+      width: 100%;
+      max-width: 520px;
+    }
+    .gate-header {
+      margin-bottom: 22px;
+      text-align: center;
+    }
+    .gate-badge {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--accent);
+      background: var(--accent-dim);
+      border: 1px solid rgba(56, 189, 248, 0.28);
+      padding: 5px 11px;
+      border-radius: 999px;
+      margin-bottom: 14px;
+    }
+    .gate-header h1 {
+      margin: 0 0 10px;
+      font-size: clamp(1.38rem, 4.2vw, 1.68rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.12;
+    }
+    .gate-tagline {
+      margin: 0 auto;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.55;
+      max-width: 40ch;
+    }
     .gate-card {
       width: 100%;
-      max-width: 500px;
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 28px 26px;
-      border-left: 4px solid var(--accent);
+      border-radius: 18px;
+      padding: 24px 22px 22px;
+      box-shadow: 0 20px 55px rgba(0, 0, 0, 0.38);
     }
-    .gate-card h1 {
-      margin: 0 0 8px;
-      font-size: 1.35rem;
+    .gate-status-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px 12px;
+      margin-bottom: 18px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .gate-pill {
+      font-size: 12px;
       font-weight: 700;
-      letter-spacing: -0.02em;
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-variant-numeric: tabular-nums;
     }
-    .gate-lead {
+    .gate-pill--idle {
+      background: #1e2430;
       color: var(--muted);
-      font-size: 14px;
-      margin: 0 0 20px;
+    }
+    .gate-pill--checking {
+      background: rgba(56, 189, 248, 0.16);
+      color: var(--accent);
+      animation: gate-pill-pulse 1.15s ease-in-out infinite;
+    }
+    .gate-pill--err {
+      background: rgba(248, 113, 113, 0.16);
+      color: var(--err);
+    }
+    @keyframes gate-pill-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.72; }
+    }
+    .gate-hostpath {
+      font-size: 11px;
+      font-family: ui-monospace, monospace;
+      color: var(--muted);
+      word-break: break-all;
+      flex: 1;
+      min-width: 0;
+      line-height: 1.4;
+    }
+    .gate-help,
+    .gate-optional-block,
+    .gate-boot-wrap {
+      margin-bottom: 14px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface2);
+      overflow: hidden;
+    }
+    .gate-help summary,
+    .gate-optional-block summary,
+    .gate-boot-wrap summary {
+      cursor: pointer;
+      padding: 11px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      user-select: none;
+      list-style: none;
+    }
+    .gate-help summary::-webkit-details-marker,
+    .gate-optional-block summary::-webkit-details-marker,
+    .gate-boot-wrap summary::-webkit-details-marker {
+      display: none;
+    }
+    .gate-help-body {
+      padding: 12px 14px 14px;
+      font-size: 13px;
+      color: var(--muted);
       line-height: 1.55;
+      border-top: 1px solid var(--border);
     }
-    .gate-card .lbl:first-of-type {
-      margin-top: 0;
+    .gate-help-body code {
+      font-size: 11px;
+      color: #cbd5e1;
     }
-    .gate-card .lbl {
-      margin-top: 14px;
+    .gate-optional-inner {
+      padding: 4px 14px 14px;
+      border-top: 1px solid var(--border);
+    }
+    .gate-optional-inner .lbl {
+      margin-top: 10px;
+    }
+    .gate-card > .lbl {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: #94a3b8;
+      margin-bottom: 8px;
+    }
+    #gateSecretMeta {
+      font-size: 11px;
+      color: var(--muted);
+      margin: 0 0 14px;
+      line-height: 1.45;
     }
     #gateErr {
-      margin-top: 0;
-      margin-bottom: 14px;
+      margin-top: 14px;
+      margin-bottom: 0;
     }
     #gateErr[role='alert'] {
       outline: none;
@@ -1037,45 +1154,57 @@ function explorerHtml() {
       border-color: #f87171 !important;
       box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.35);
     }
-    #gateSubmit {
-      margin-top: 18px;
+    .gate-primary {
+      margin-top: 6px;
       width: 100%;
-      padding: 12px 14px;
+      padding: 14px 16px;
       font-size: 15px;
-      font-weight: 600;
+      font-weight: 700;
       border: none;
-      border-radius: 10px;
-      background: var(--accent);
-      color: #04202c;
+      border-radius: 12px;
+      background: linear-gradient(165deg, #5ecfff 0%, #0ea5e9 55%, #0284c7 100%);
+      color: #041c28;
       cursor: pointer;
       touch-action: manipulation;
       -webkit-tap-highlight-color: transparent;
     }
-    #gateSubmit:hover {
+    .gate-primary:hover {
       filter: brightness(1.06);
     }
-    #gateSubmit:disabled {
+    .gate-primary:disabled {
       opacity: 0.55;
       cursor: not-allowed;
+      filter: none;
+    }
+    #gateWorking {
+      margin-top: 14px !important;
+      padding: 11px 13px !important;
+      border-radius: 10px !important;
+      background: var(--surface2) !important;
+      border: 1px solid var(--border) !important;
+      color: var(--text) !important;
+      font-size: 13px !important;
     }
     .gate-diag {
-      margin-top: 16px;
+      margin-top: 14px;
       border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 10px 12px;
+      border-radius: 12px;
       background: var(--surface2);
-      font-size: 12px;
-      line-height: 1.45;
+      overflow: hidden;
     }
     .gate-diag summary {
+      padding: 11px 14px;
       cursor: pointer;
       color: var(--muted);
-      user-select: none;
       font-weight: 600;
+      font-size: 12px;
+      user-select: none;
     }
     .gate-diag-pre {
-      margin: 10px 0 0;
-      padding: 0;
+      margin: 0;
+      padding: 12px 14px;
+      max-height: min(32vh, 240px);
+      overflow-y: auto;
       white-space: pre-wrap;
       word-break: break-word;
       font-family: ui-monospace, monospace;
@@ -1083,13 +1212,14 @@ function explorerHtml() {
       line-height: 1.55;
       color: #cbd5e1;
       border: 0;
-      background: transparent;
+      border-top: 1px solid var(--border);
+      background: #05070a;
     }
     #gateInitFail {
       display: none;
-      margin: 0 0 14px;
+      margin: 0 0 16px;
       padding: 12px 14px;
-      border-radius: 10px;
+      border-radius: 12px;
       border: 1px solid rgba(248, 113, 113, 0.55);
       background: rgba(248, 113, 113, 0.12);
       color: #fecaca;
@@ -1097,51 +1227,105 @@ function explorerHtml() {
       line-height: 1.45;
     }
     #gateBootStatus {
-      margin: 0 0 14px;
-      padding: 10px 12px;
-      border-radius: 10px;
-      border: 1px solid var(--border);
-      background: var(--surface2);
+      margin: 0;
+      padding: 12px 14px;
       font-family: ui-monospace, monospace;
-      font-size: 11px;
+      font-size: 10px;
       line-height: 1.5;
       color: #94a3b8;
       white-space: pre-wrap;
       word-break: break-word;
-      max-height: 120px;
+      max-height: 140px;
       overflow-y: auto;
+      border-top: 1px solid var(--border);
+    }
+    .gate-privacy-note {
+      margin: 16px 0 0;
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.45;
+      text-align: center;
     }
   </style>
 </head>
 <body>
   <div id="gateRoot" class="gate-screen">
-    <div class="gate-card">
-      <h1>Unlock diagnostic intelligence</h1>
-      <div id="gateInitFail" role="alert"></div>
-      <div id="gateBootStatus" aria-live="polite"></div>
-      <p class="gate-lead">
-        <strong>Railway does not put this secret into the page for you.</strong> Open Railway → your service → <strong>Variables</strong>, copy the
-        <em>value</em> of <code>PLAYSHARE_DIAG_INTEL_SECRET</code> (or upload secret), and paste it in the first box. The server compares that header to the
-        variable; they must match exactly. <strong>Continue</strong> uses <code>POST /diag/intel/auth-check</code> plus <code>X-PlayShare-Diag-Intel-Secret</code> so unlock works without Supabase and survives proxies that strip <code>Authorization</code> on GET. Only the <strong>first field</strong> is required to open the explorer. The OpenAI field is optional: leave it blank to use the server’s <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code> for the AI tab, or paste your own key to send from the browser.
-      </p>
-      <label class="lbl" for="gateBearer">1 · Paste Railway secret here (PLAYSHARE_DIAG_INTEL_SECRET value)</label>
-      <input type="password" id="gateBearer" autocomplete="off" spellcheck="false" placeholder="Paste the full secret from Railway Variables" aria-describedby="gateErr" />
-      <label class="lbl" for="gateOpenAi">2 · OpenAI API key (optional)</label>
-      <input type="password" id="gateOpenAi" autocomplete="off" spellcheck="false" placeholder="sk-… — optional; server env key used if empty" aria-describedby="gateErr" />
-      <p id="gateServerLlmHint" class="muted" style="display: none; margin-top: 10px; font-size: 13px; line-height: 1.5">
-        This host reports an LLM key in its environment — you may leave the OpenAI field empty for AI assistant calls.
-      </p>
-      <p class="muted" style="margin-top: 12px; font-size: 12px; line-height: 1.45">Secrets are kept in this tab only until you close it or refresh; they are not written to sessionStorage.</p>
-      <div id="gateErr" class="alert err" style="display: none" tabindex="-1"></div>
-      <button type="button" id="gateSubmit">Continue</button>
-      <p id="gateWorking" class="muted" style="display: none; margin-top: 12px; font-size: 13px; line-height: 1.45" aria-live="polite"></p>
-      <details class="gate-diag" id="gateDiag">
-        <summary>Authentication diagnostic (developers)</summary>
-        <pre id="gateDiagBody" class="gate-diag-pre"></pre>
-        <p class="muted" style="margin: 10px 0 0; font-size: 11px; line-height: 1.45">
-          Never shares your secret or API key — only lengths, HTTP status, and server messages. Updates each time you press Continue.
-        </p>
-      </details>
+    <div class="gate-shell">
+      <header class="gate-header">
+        <span class="gate-badge">PlayShare · developers</span>
+        <h1>Diagnostic intelligence</h1>
+        <p class="gate-tagline">Sign in with your server secret. Nothing is pre-filled here; your browser only sends it when you unlock.</p>
+      </header>
+      <div class="gate-card">
+        <div id="gateInitFail" role="alert"></div>
+        <div class="gate-status-row">
+          <span id="gateStatusPill" class="gate-pill gate-pill--idle">Ready</span>
+          <span id="gateHostPath" class="gate-hostpath" title="API base for this tab"></span>
+        </div>
+
+        <details class="gate-help">
+          <summary>Where is the secret? · How unlock works</summary>
+          <div class="gate-help-body">
+            <p style="margin: 0">
+              <strong>Railway:</strong> open your service → <strong>Variables</strong> → copy the <em>value</em> of <code>PLAYSHARE_DIAG_INTEL_SECRET</code>
+              (or your upload secret). Paste <strong>only the value</strong>—no variable name, no quotes, no <code>Bearer</code> prefix.
+            </p>
+            <p style="margin: 12px 0 0">
+              <strong>Network:</strong> Unlock calls <code>POST /diag/intel/auth-check</code> with <code>Authorization</code> and
+              <code>X-PlayShare-Diag-Intel-Secret</code> so it still works when a proxy strips some headers.
+            </p>
+            <p style="margin: 12px 0 0">
+              <strong>OpenAI:</strong> optional; expand below. Leave blank if this host already has an LLM key in env.
+            </p>
+          </div>
+        </details>
+
+        <label class="lbl" for="gateBearer">Server secret</label>
+        <input
+          type="password"
+          id="gateBearer"
+          name="diag_intel_secret"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="Full value from Railway Variables"
+          aria-describedby="gateErr gateSecretMeta"
+        />
+        <p id="gateSecretMeta">Paste above — length is checked locally before any request runs.</p>
+
+        <details class="gate-optional-block">
+          <summary>Optional: OpenAI API key (AI tab)</summary>
+          <div class="gate-optional-inner">
+            <label class="lbl" for="gateOpenAi">OpenAI key</label>
+            <input
+              type="password"
+              id="gateOpenAi"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="sk-… or leave empty for server env"
+              aria-describedby="gateErr"
+            />
+            <p id="gateServerLlmHint" class="muted" style="display: none; margin-top: 10px; font-size: 12px; line-height: 1.45">
+              This host reports an LLM key in its environment — you may leave this field empty for the AI tab.
+            </p>
+          </div>
+        </details>
+
+        <div id="gateErr" class="alert err" style="display: none" tabindex="-1"></div>
+        <button type="button" id="gateSubmit" class="gate-primary">Unlock dashboard</button>
+        <p id="gateWorking" class="muted" style="display: none; margin-top: 12px; font-size: 13px; line-height: 1.45" aria-live="polite"></p>
+
+        <details class="gate-diag" id="gateDiag">
+          <summary>Authentication log · lengths &amp; HTTP only (no secret values)</summary>
+          <pre id="gateDiagBody" class="gate-diag-pre"></pre>
+        </details>
+
+        <details class="gate-boot-wrap">
+          <summary>Technical connection log</summary>
+          <div id="gateBootStatus" aria-live="polite"></div>
+        </details>
+
+        <p class="gate-privacy-note">Secrets stay in this tab until you close or refresh. They are not written to sessionStorage.</p>
+      </div>
     </div>
   </div>
 
@@ -1150,7 +1334,7 @@ function explorerHtml() {
     <header class="topbar">
       <h1>Diagnostic intelligence</h1>
       <p>Review anonymized sync diagnostics: recent uploads, repeating patterns (clusters), and version comparisons. You already entered access on the unlock screen — no second password is required unless you choose <strong>Change credentials</strong>.</p>
-      <p class="ver">UI v2 · If this page still looks like three plain buttons in a row, redeploy the server so <code>diag-intel-http.js</code> is current.</p>
+      <p class="ver">Explorer UI · redeploy the server if unlock or tabs look outdated (<code>diag-intel-http.js</code>).</p>
     </header>
 
     <div class="shell">
@@ -1395,6 +1579,23 @@ function explorerHtml() {
     return intelBase() + s;
   }
 
+  function setGatePill(mode, label) {
+    var el = $('gateStatusPill');
+    if (!el) return;
+    el.className = 'gate-pill gate-pill--' + mode;
+    if (label) el.textContent = label;
+  }
+
+  (function initGateHostLine() {
+    var el = $('gateHostPath');
+    if (!el) return;
+    try {
+      el.textContent = window.location.origin + intelBase();
+    } catch (eH) {
+      el.textContent = window.location.origin || '';
+    }
+  })();
+
   function enterExplorerApp() {
     try {
       console.log('[PlayShare diag explorer] enterExplorerApp called');
@@ -1423,6 +1624,7 @@ function explorerHtml() {
   function normalizeTokInput(raw) {
     var t = String(raw || '').trim();
     if (t.charCodeAt(0) === 0xfeff) t = t.slice(1).trim();
+    t = t.replace(/\u00a0/g, '');
     if ((t.charAt(0) === '"' && t.charAt(t.length - 1) === '"') || (t.charAt(0) === "'" && t.charAt(t.length - 1) === "'")) {
       t = t.slice(1, -1).trim();
     }
@@ -1473,6 +1675,7 @@ function explorerHtml() {
     el.style.display = 'block';
     el.style.visibility = 'visible';
     el.setAttribute('role', 'alert');
+    setGatePill('err', 'Error');
     try {
       el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     } catch (e) {}
@@ -1500,6 +1703,7 @@ function explorerHtml() {
 
   /** Sync UI before validate: visible loading + boot log (no async). */
   function gateImmediateUnlockFeedback() {
+    setGatePill('checking', 'Contacting server…');
     var working = $('gateWorking');
     if (working) {
       working.style.display = 'block';
@@ -1821,6 +2025,13 @@ function explorerHtml() {
       }
       if (working) working.style.display = 'none';
       if (btn) btn.disabled = false;
+      var stillGate = $('gateRoot') && !$('gateRoot').hasAttribute('hidden');
+      var ge = $('gateErr');
+      var errShowing = ge && ge.style.display !== 'none' && String(ge.textContent || '').length > 0;
+      if (stillGate) {
+        if (errShowing) setGatePill('err', 'Error');
+        else setGatePill('idle', 'Ready');
+      }
     }
   }
 
@@ -1910,7 +2121,17 @@ function explorerHtml() {
     }
   }
   var gb = $('gateBearer');
-  if (gb) gb.addEventListener('keydown', gateMaybeSubmit);
+  if (gb) {
+    gb.addEventListener('keydown', gateMaybeSubmit);
+    gb.addEventListener('input', function () {
+      var meta = $('gateSecretMeta');
+      if (!meta) return;
+      var n = normalizeTokInput(gb.value).length;
+      meta.textContent = n
+        ? 'Normalized length: ' + n + ' characters (nothing is sent until you unlock).'
+        : 'Paste above — length is checked locally before any request runs.';
+    });
+  }
   var go = $('gateOpenAi');
   if (go) go.addEventListener('keydown', gateMaybeSubmit);
 
@@ -1929,6 +2150,13 @@ function explorerHtml() {
       if ($('gateOpenAi')) $('gateOpenAi').value = '';
       clearGateErr();
       clearGateDiag();
+      setGatePill('idle', 'Ready');
+      var hp = $('gateHostPath');
+      if (hp) {
+        try {
+          hp.textContent = window.location.origin + intelBase();
+        } catch (eHP) {}
+      }
       var gr = $('gateRoot');
       var ap = $('playshareExplorerApp');
       if (ap) ap.setAttribute('hidden', '');
