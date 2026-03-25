@@ -80,8 +80,19 @@ function json(res, status, obj) {
   res.end(JSON.stringify(obj));
 }
 
+/** JSON for auth-related responses — must not be cached by intermediaries. */
+function jsonAuth(res, status, obj) {
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store, no-cache, must-revalidate',
+    Pragma: 'no-cache',
+    Expires: '0'
+  });
+  res.end(JSON.stringify(obj));
+}
+
 function unauthorized(res) {
-  json(res, 401, {
+  jsonAuth(res, 401, {
     ok: false,
     error: 'unauthorized',
     hint:
@@ -204,7 +215,7 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
 
   const authed = checkAuth(req);
   if (authed === null) {
-    json(res, 503, {
+    jsonAuth(res, 503, {
       ok: false,
       error: 'intel_secret_not_configured',
       hint:
@@ -221,7 +232,7 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
     if (req.method === 'POST') {
       await drainRequestBody(req);
     }
-    json(res, 200, {
+    jsonAuth(res, 200, {
       ok: true,
       authenticated: true,
       supabase_configured: Boolean(getSupabaseAdmin())
@@ -1271,8 +1282,8 @@ function explorerHtml() {
               (or your upload secret). Paste <strong>only the value</strong>—no variable name, no quotes, no <code>Bearer</code> prefix.
             </p>
             <p style="margin: 12px 0 0">
-              <strong>Network:</strong> Unlock calls <code>POST /diag/intel/auth-check</code> with <code>Authorization</code> and
-              <code>X-PlayShare-Diag-Intel-Secret</code> so it still works when a proxy strips some headers.
+              <strong>Network:</strong> Unlock calls <code>GET /diag/intel/auth-check</code> with <code>Authorization</code> and
+              <code>X-PlayShare-Diag-Intel-Secret</code> (POST also supported) so proxies that mishandle bodies still work.
             </p>
             <p style="margin: 12px 0 0">
               <strong>OpenAI:</strong> optional; expand below. Leave blank if this host already has an LLM key in env.
@@ -1481,7 +1492,7 @@ function explorerHtml() {
       </div>
     </div>
 
-    <footer>PlayShare · <code>/diag/intel/*</code> · unlock <code>POST /diag/intel/auth-check</code> · health <code>/diag/intel/health</code></footer>
+    <footer>PlayShare · <code>/diag/intel/*</code> · unlock <code>GET /diag/intel/auth-check</code> · health <code>/diag/intel/health</code></footer>
   </div>
   </div>
 
@@ -1604,10 +1615,18 @@ function explorerHtml() {
     var a = $('playshareExplorerApp');
     if (g) {
       g.setAttribute('hidden', '');
+      g.style.display = 'none';
+      g.setAttribute('aria-hidden', 'true');
     }
     if (a) {
       a.removeAttribute('hidden');
+      a.style.display = 'block';
+      a.style.visibility = 'visible';
+      a.setAttribute('aria-hidden', 'false');
     }
+    try {
+      window.scrollTo(0, 0);
+    } catch (eS) {}
   }
 
   function getClientLlmKeyForBrief() {
@@ -1733,7 +1752,7 @@ function explorerHtml() {
   }
 
   /**
-   * POST auth-check with a hard timeout even when AbortController is missing (older WebViews).
+   * auth-check fetch with a hard timeout even when AbortController is missing (older WebViews).
    * @returns {Promise<Response>}
    */
   function gateFetchAuthCheck(url, fetchOpts, timeoutMs) {
@@ -1835,17 +1854,18 @@ function explorerHtml() {
     try {
       var r;
       try {
+        /* GET avoids POST body / some reverse-proxy quirks; server accepts GET or POST. */
         var fetchOpts = {
-          method: 'POST',
+          method: 'GET',
           headers: {
             Authorization: 'Bearer ' + bearer,
-            'X-PlayShare-Diag-Intel-Secret': bearer,
-            'Content-Type': 'application/json'
+            'X-PlayShare-Diag-Intel-Secret': bearer
           },
-          body: '{}'
+          credentials: 'same-origin',
+          cache: 'no-store'
         };
         try {
-          console.log('[PlayShare diag explorer] fetch about to start', intelApi('/auth-check'));
+          console.log('[PlayShare diag explorer] fetch about to start (GET)', intelApi('/auth-check'));
         } catch (eLog) {}
         unlockFetchStarted = true;
         r = await gateFetchAuthCheck(intelApi('/auth-check'), fetchOpts, timeoutMs);
@@ -1863,7 +1883,7 @@ function explorerHtml() {
           recordGateAuthDiag([
             'No HTTP response — request aborted (timeout ' + Math.round(timeoutMs / 1000) + 's).',
             'Browser: ' + window.location.origin + window.location.pathname,
-            'Target: POST ' + intelApi('/auth-check'),
+            'Target: GET ' + intelApi('/auth-check'),
             'Normalized Railway secret length: ' + bearer.length + ' chars',
             'If the host is cold-starting, wait and retry.'
           ]);
@@ -1876,7 +1896,7 @@ function explorerHtml() {
           recordGateAuthDiag([
             'No HTTP response — network / wrong page origin.',
             'Browser: ' + window.location.origin + window.location.pathname,
-            'Target: POST ' + intelApi('/auth-check'),
+            'Target: GET ' + intelApi('/auth-check'),
             'Detail: ' + (eFetch && eFetch.message ? eFetch.message : String(eFetch)),
             'Open this page from the same host as your PlayShare server (…/diag/intel/explorer).'
           ]);
@@ -1920,7 +1940,7 @@ function explorerHtml() {
       if (r.status === 404) {
         recordGateAuthDiag([
           'HTTP 404 — path not found on this host.',
-          'Requested: POST ' + intelApi('/auth-check'),
+          'Requested: GET ' + intelApi('/auth-check'),
           'You are probably not on the PlayShare server (wrong domain or path prefix).'
         ]);
         showGateErr(
@@ -1986,7 +2006,7 @@ function explorerHtml() {
       recordGateAuthDiag([
         'HTTP ' + r.status + ' — authentication accepted.',
         'Browser: ' + window.location.origin + window.location.pathname,
-        'POST ' + intelApi('/auth-check'),
+        'GET ' + intelApi('/auth-check'),
         'Normalized Railway secret length: ' + bearer.length + ' chars',
         'OpenAI field: ' + (openai ? openai.length + ' chars (stored for AI requests)' : 'empty (use server LLM env if set)'),
         okBody ? 'Response JSON: ' + okBody : '(empty body)',
@@ -2159,8 +2179,18 @@ function explorerHtml() {
       }
       var gr = $('gateRoot');
       var ap = $('playshareExplorerApp');
-      if (ap) ap.setAttribute('hidden', '');
-      if (gr) gr.removeAttribute('hidden');
+      if (ap) {
+        ap.setAttribute('hidden', '');
+        ap.style.display = '';
+        ap.style.visibility = '';
+        ap.setAttribute('aria-hidden', 'true');
+      }
+      if (gr) {
+        gr.removeAttribute('hidden');
+        gr.style.display = '';
+        gr.style.visibility = '';
+        gr.removeAttribute('aria-hidden');
+      }
     };
   }
 
