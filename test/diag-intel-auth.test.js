@@ -1,10 +1,17 @@
 /**
- * Diagnostic intel auth helpers.
+ * Diagnostic auth/session helpers.
  * Run: node test/diag-intel-auth.test.js
  */
 
 const assert = require('assert');
-const { checkAuth, extractDiagIntelTokens } = require('../server/diag-intel-http');
+const {
+  extractDiagIntelTokens,
+  authenticateIntelRequest,
+  issueIntelSessionFromSecret,
+  enforceSessionCsrf,
+  createScopedUploadToken,
+  authenticateUploadRequest
+} = require('../server/diag-auth');
 
 function envSnapshot() {
   return {
@@ -20,8 +27,24 @@ function restoreEnv(snap) {
   }
 }
 
-function req(headers = {}) {
-  return { headers };
+function req(headers = {}, method = 'GET') {
+  return {
+    method,
+    headers: Object.assign({ host: 'playshare.test', origin: 'https://playshare.test' }, headers),
+    socket: { encrypted: true }
+  };
+}
+
+function res() {
+  const headers = new Map();
+  return {
+    getHeader(name) {
+      return headers.get(String(name).toLowerCase());
+    },
+    setHeader(name, value) {
+      headers.set(String(name).toLowerCase(), value);
+    }
+  };
 }
 
 async function run() {
@@ -40,21 +63,51 @@ async function run() {
     );
 
     assert.strictEqual(
-      checkAuth(req({ authorization: 'Bearer wrong-secret' }), { diag_intel_secret: 'upload-secret' }),
+      authenticateIntelRequest(req({ authorization: 'Bearer wrong-secret' }), { diag_intel_secret: 'upload-secret' }).ok,
       true,
-      'body fallback authorizes even when Authorization is wrong'
+      'legacy secret auth still works from POST bodies during rollout'
     );
 
-    assert.strictEqual(
-      checkAuth(req({}), { diag_intel_secret: 'Bearer intel-secret' }),
-      true,
-      'body fallback normalizes accidental Bearer prefixes'
-    );
+    const unlockReq = req({}, 'POST');
+    const unlockRes = res();
+    const issued = issueIntelSessionFromSecret(unlockReq, unlockRes, 'Bearer intel-secret');
+    assert.strictEqual(issued.ok, true, 'unlock exchanges a raw secret for a server session');
+    const setCookie = unlockRes.getHeader('set-cookie');
+    assert.ok(setCookie, 'unlock sets a session cookie');
+    const cookieHeader = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+    const cookiePair = String(cookieHeader).split(';')[0];
+    const authedSession = authenticateIntelRequest(req({ cookie: cookiePair }));
+    assert.strictEqual(authedSession.ok, true, 'subsequent requests authenticate with the session cookie');
+    assert.strictEqual(authedSession.via, 'session', 'session auth is preferred once established');
+    assert.ok(authedSession.session && authedSession.session.csrfToken, 'session auth exposes CSRF token server-side');
 
+    const csrfReq = req(
+      {
+        cookie: cookiePair,
+        'x-playshare-csrf': authedSession.session.csrfToken,
+        origin: 'https://playshare.test'
+      },
+      'POST'
+    );
+    assert.strictEqual(enforceSessionCsrf(csrfReq, authedSession, {}).ok, true, 'matching CSRF header passes');
     assert.strictEqual(
-      checkAuth(req({ authorization: 'Bearer nope' }), { diag_intel_secret: 'still-nope' }),
+      enforceSessionCsrf(req({ cookie: cookiePair }, 'POST'), authedSession, {}).ok,
       false,
-      'request stays unauthorized when no candidate matches'
+      'missing CSRF header is rejected for session-backed POSTs'
+    );
+
+    const scoped = createScopedUploadToken('session', authedSession.session.id);
+    assert.ok(scoped.token.startsWith('psu_'), 'scoped upload tokens have a recognizable prefix');
+    assert.strictEqual(
+      authenticateUploadRequest(req({ authorization: 'Bearer ' + scoped.token }), {}).ok,
+      true,
+      'issued upload tokens authorize /diag/upload'
+    );
+
+    assert.strictEqual(
+      authenticateUploadRequest(req({ authorization: 'Bearer upload-secret' }), {}).via,
+      'legacy_secret',
+      'legacy upload secret remains valid during rollout'
     );
 
     console.log('diag-intel-auth.test.js: all passed');

@@ -54,12 +54,8 @@
 
   gateBootLine('Explorer script loaded');
 
-  var TOK_KEY = 'playshare_diag_intel_token_v1';
-  var AI_KEY_STORAGE = 'playshare_diag_explorer_ai_key_v1';
-  var SKIP_LLM_STORAGE = 'playshare_diag_explorer_skip_llm_v1';
   var runtimeAiKey = '';
-  /** Bearer from unlock gate (used when hidden #tok is empty until filled). */
-  var runtimeDiagBearer = '';
+  var runtimeCsrfToken = '';
   var lastText = '';
   var lastPath = '';
   var lastPagedFetch = null;
@@ -134,10 +130,44 @@
     return String(runtimeAiKey || '').trim();
   }
 
+  function hasActiveIntelSession() {
+    return !!String(runtimeCsrfToken || '').trim();
+  }
+
   function attachClientAiHeaders(h) {
     var ak = getClientLlmKeyForBrief();
     if (ak) h['X-PlayShare-Diag-AI-Key'] = ak;
     return h;
+  }
+
+  function buildAuthHeaders(opts) {
+    var o = opts || {};
+    var h = {};
+    if (o.json) h['Content-Type'] = 'application/json';
+    if (o.csrf && runtimeCsrfToken) h['X-PlayShare-CSRF'] = runtimeCsrfToken;
+    return attachClientAiHeaders(h);
+  }
+
+  function authFetch(path, opts) {
+    var o = opts || {};
+    var headers = Object.assign({}, o.headers || {});
+    return fetch(path, Object.assign({}, o, {
+      headers: headers,
+      credentials: 'include',
+      cache: o.cache || 'no-store'
+    }));
+  }
+
+  function applyAuthenticatedSession(csrfToken, openai) {
+    runtimeCsrfToken = String(csrfToken || '').trim();
+    runtimeAiKey = String(openai || '').trim();
+    if ($('tok')) $('tok').value = runtimeCsrfToken;
+  }
+
+  function clearAuthenticatedSession() {
+    runtimeCsrfToken = '';
+    runtimeAiKey = '';
+    if ($('tok')) $('tok').value = '';
   }
 
   /** Strip wrapping quotes, BOM, CR, and accidental leading "Bearer " from pasted secrets. */
@@ -355,21 +385,16 @@
     try {
       var r;
       try {
-        /* GET avoids POST body / some reverse-proxy quirks; server accepts GET or POST. */
         var fetchOpts = {
-          method: 'GET',
-          headers: {
-            Authorization: 'Bearer ' + bearer,
-            'X-PlayShare-Diag-Intel-Secret': bearer
-          },
-          credentials: 'same-origin',
-          cache: 'no-store'
+          method: 'POST',
+          headers: buildAuthHeaders({ json: true }),
+          body: JSON.stringify({ secret: bearer })
         };
         try {
-          console.log('[PlayShare diag explorer] fetch about to start (GET)', intelApi('/auth-check'));
+          console.log('[PlayShare diag explorer] fetch about to start (POST)', intelApi('/session'));
         } catch (eLog) {}
         unlockFetchStarted = true;
-        r = await gateFetchAuthCheck(intelApi('/auth-check'), fetchOpts, timeoutMs);
+        r = await gateFetchAuthCheck(intelApi('/session'), fetchOpts, timeoutMs);
         try {
           console.log('[PlayShare diag explorer] fetch completed', r && r.status);
         } catch (eLog2) {}
@@ -384,7 +409,7 @@
           recordGateAuthDiag([
             'No HTTP response — request aborted (timeout ' + Math.round(timeoutMs / 1000) + 's).',
             'Browser: ' + window.location.origin + window.location.pathname,
-            'Target: GET ' + intelApi('/auth-check'),
+            'Target: POST ' + intelApi('/session'),
             'Normalized Railway secret length: ' + bearer.length + ' chars',
             'If the host is cold-starting, wait and retry.'
           ]);
@@ -397,7 +422,7 @@
           recordGateAuthDiag([
             'No HTTP response — network / wrong page origin.',
             'Browser: ' + window.location.origin + window.location.pathname,
-            'Target: GET ' + intelApi('/auth-check'),
+            'Target: POST ' + intelApi('/session'),
             'Detail: ' + (eFetch && eFetch.message ? eFetch.message : String(eFetch)),
             'Open this page from the same host as your PlayShare server (…/diag/intel/explorer).'
           ]);
@@ -441,7 +466,7 @@
       if (r.status === 404) {
         recordGateAuthDiag([
           'HTTP 404 — path not found on this host.',
-          'Requested: GET ' + intelApi('/auth-check'),
+          'Requested: POST ' + intelApi('/session'),
           'You are probably not on the PlayShare server (wrong domain or path prefix).'
         ]);
         showGateErr(
@@ -507,7 +532,7 @@
       recordGateAuthDiag([
         'HTTP ' + r.status + ' — authentication accepted.',
         'Browser: ' + window.location.origin + window.location.pathname,
-        'GET ' + intelApi('/auth-check'),
+        'POST ' + intelApi('/session'),
         'Normalized Railway secret length: ' + bearer.length + ' chars',
         'OpenAI field: ' + (openai ? openai.length + ' chars (stored for AI requests)' : 'empty (use server LLM env if set)'),
         okBody ? 'Response JSON: ' + okBody : '(empty body)',
@@ -515,14 +540,11 @@
       ].filter(Boolean));
 
       try {
-        runtimeAiKey = openai;
+        var sessionJson = {};
         try {
-          sessionStorage.removeItem(TOK_KEY);
-          sessionStorage.removeItem(AI_KEY_STORAGE);
-          sessionStorage.removeItem(SKIP_LLM_STORAGE);
-        } catch (e2) {}
-        runtimeDiagBearer = bearer;
-        if ($('tok')) $('tok').value = bearer;
+          sessionJson = JSON.parse(okBody || '{}');
+        } catch (e3) {}
+        applyAuthenticatedSession(sessionJson.csrf_token || '', openai);
         clearGateErr();
         clearGateFieldHighlights();
         try {
@@ -568,6 +590,22 @@
           if (gh) gh.style.display = 'block';
         }
       } catch (eParse) {}
+    })
+    .catch(function () {});
+
+  authFetch(intelApi('/auth-check'), { headers: buildAuthHeaders({}) })
+    .then(function (r) {
+      if (!r.ok) return null;
+      return r.json().catch(function () {
+        return null;
+      });
+    })
+    .then(function (j) {
+      if (!j || !j.ok || !j.authenticated) return;
+      applyAuthenticatedSession(j.csrf_token || '', runtimeAiKey);
+      clearGateErr();
+      clearGateFieldHighlights();
+      enterExplorerApp();
     })
     .catch(function () {});
 
@@ -659,14 +697,12 @@
   var btnReunlock = $('btnReunlock');
   if (btnReunlock) {
     btnReunlock.onclick = function () {
-      try {
-        sessionStorage.removeItem(TOK_KEY);
-        sessionStorage.removeItem(AI_KEY_STORAGE);
-        sessionStorage.removeItem(SKIP_LLM_STORAGE);
-      } catch (eR) {}
-      runtimeDiagBearer = '';
-      runtimeAiKey = '';
-      if ($('tok')) $('tok').value = '';
+      authFetch(intelApi('/logout'), {
+        method: 'POST',
+        headers: buildAuthHeaders({ json: true, csrf: true }),
+        body: JSON.stringify({})
+      }).catch(function () {});
+      clearAuthenticatedSession();
       if ($('gateBearer')) $('gateBearer').value = '';
       if ($('gateOpenAi')) $('gateOpenAi').value = '';
       clearGateErr();
@@ -747,28 +783,6 @@
       ' data-page="next">Next page</button>' +
       '</div>'
     );
-  }
-
-  function getResolvedBearer() {
-    var t = normalizeTokInput($('tok') && $('tok').value);
-    if (t) return t;
-    return normalizeTokInput(runtimeDiagBearer);
-  }
-
-  function authHeaders() {
-    var t = getResolvedBearer();
-    var h = { 'Content-Type': 'application/json' };
-    if (t) {
-      h.Authorization = 'Bearer ' + t;
-      h['X-PlayShare-Diag-Intel-Secret'] = t;
-    }
-    return attachClientAiHeaders(h);
-  }
-
-  function attachBodyDiagSecret(body) {
-    var t = getResolvedBearer();
-    if (t) body.diag_intel_secret = t;
-    return body;
   }
 
   function setPill(text, kind) {
@@ -954,7 +968,7 @@
     var t0 = performance.now();
     var status = 0;
     try {
-      var r = await fetch(path, { headers: authHeaders() });
+      var r = await authFetch(path, { headers: buildAuthHeaders({}) });
       status = r.status;
       var ms = Math.round(performance.now() - t0);
       var raw = await r.text();
@@ -1120,11 +1134,11 @@
     var btn = $('btnAiBrief');
     var out = $('aiBriefResult');
     var st = $('aiBriefStatus');
-    if (!getResolvedBearer()) {
+    if (!hasActiveIntelSession()) {
       st.textContent = '';
       out.innerHTML =
-        '<div class="alert err"><strong>Missing server secret</strong>' +
-        '<p class="muted" style="margin:8px 0 0">Use <strong>Change credentials</strong> (above the tabs) to open the unlock screen and paste your Railway <code>PLAYSHARE_DIAG_INTEL_SECRET</code> (or upload secret). Without it the server returns <strong>401</strong>.</p></div>';
+        '<div class="alert err"><strong>Session required</strong>' +
+        '<p class="muted" style="margin:8px 0 0">Use <strong>Change credentials</strong> to return to the unlock screen and establish a fresh server session. AI access does not depend on being in a live room.</p></div>';
       return;
     }
     btn.disabled = true;
@@ -1140,10 +1154,9 @@
         persist_learning: !$('aiDryRun').checked && $('aiPersist').checked
       };
       if (lk) body.llm_api_key = lk;
-      attachBodyDiagSecret(body);
-      var r = await fetch(intelApi('/ai-brief'), {
+      var r = await authFetch(intelApi('/ai-brief'), {
         method: 'POST',
-        headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+        headers: buildAuthHeaders({ json: true, csrf: true }),
         body: JSON.stringify(body)
       });
       var raw = await r.text();
@@ -1158,8 +1171,8 @@
       var parts = [];
       if (!j.ok && (r.status === 401 || j.error === 'unauthorized')) {
         parts.push(
-          '<div class="alert err"><strong>401 — wrong or missing Bearer token</strong>' +
-            '<p class="muted" style="margin:8px 0 0">The secret you entered at <strong>unlock</strong> must match the <em>exact</em> value of <code>PLAYSHARE_DIAG_INTEL_SECRET</code> or <code>PLAYSHARE_DIAG_UPLOAD_SECRET</code> from Railway Variables (copy-paste, no extra spaces). Use <strong>Change credentials</strong> to re-enter it. This is not your OpenAI API key.</p></div>'
+          '<div class="alert err"><strong>401 — session missing or expired</strong>' +
+            '<p class="muted" style="margin:8px 0 0">Return to <strong>Change credentials</strong> and unlock again to refresh the server session. This AI tool reads stored diagnostics on the server and does not require the extension to be in a live room.</p></div>'
         );
       } else if (!j.ok && (j.error === 'ai_not_configured' || j.error === 'ai_request_failed')) {
         var extra =
@@ -1336,7 +1349,7 @@
     var box = $('aiKnowledgeList');
     box.innerHTML = '<span class="muted">Loading…</span>';
     try {
-      var r = await fetch(intelApi('/knowledge?limit=25'), { headers: authHeaders() });
+      var r = await authFetch(intelApi('/knowledge?limit=25'), { headers: buildAuthHeaders({}) });
       var j = await r.json();
       if (j.ok && j.entries) renderKnowledgeTable(j.entries);
       else box.innerHTML = '<p class="muted">Could not load list: ' + esc(j.error || String(r.status)) + '</p>';
@@ -1357,7 +1370,7 @@
     ta.style.display = 'block';
     ta.value = 'Loading…';
     try {
-      var r = await fetch(intelApi('/knowledge?id=' + encodeURIComponent(id)), { headers: authHeaders() });
+      var r = await authFetch(intelApi('/knowledge?id=' + encodeURIComponent(id)), { headers: buildAuthHeaders({}) });
       var j = await r.json();
       if (j.ok && j.entry) ta.value = j.entry.digest_markdown || '';
       else ta.value = 'Error: ' + (j.error || String(r.status));
@@ -1375,13 +1388,13 @@
     }
     st.textContent = 'Saving…';
     try {
-      var r = await fetch(intelApi('/knowledge'), {
+      var r = await authFetch(intelApi('/knowledge'), {
         method: 'POST',
-        headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
-        body: JSON.stringify(attachBodyDiagSecret({
+        headers: buildAuthHeaders({ json: true, csrf: true }),
+        body: JSON.stringify({
           digest_markdown: t,
           focus_platform: ($('aiFocusPlat').value || '').trim() || undefined
-        }))
+        })
       });
       var j = await r.json();
       if (j.ok && j.learning_id) {

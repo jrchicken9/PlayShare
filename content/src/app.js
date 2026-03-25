@@ -4808,7 +4808,7 @@ export function runPlayShareContent() {
                 : '';
           const u401 =
             st === 401 && /unauthorized/i.test(String(errCode))
-              ? ' Paste the same value as Railway PLAYSHARE_DIAG_UPLOAD_SECRET into Analytics → “Upload token”, or remove that env var on the server.'
+              ? ' Refresh the upload access secret in Analytics so the extension can mint a fresh scoped upload token, or remove the upload secret env vars on the server.'
               : '';
           const u500store =
             st === 500 && /storage_failed|summary_failed/i.test(String(errCode))
@@ -5188,6 +5188,10 @@ export function runPlayShareContent() {
         });
         uploadBearerInp.addEventListener('change', () => {
           const t = String(uploadBearerInp.value || '').trim();
+          chrome.storage.local.remove([
+            'playshare_diag_upload_session_token',
+            'playshare_diag_upload_session_expires_at'
+          ]);
           if (!t || t === DEFAULT_DIAG_UPLOAD_BEARER) chrome.storage.local.remove('playshare_diag_upload_bearer');
           else chrome.storage.local.set({ playshare_diag_upload_bearer: t });
         });
@@ -5820,9 +5824,9 @@ export function runPlayShareContent() {
           <label class="ws-diag-simple-check"><input type="checkbox" id="diagUploadOptIn" /><span>Allow uploads to my server</span></label>
           <label class="ws-diag-simple-check"><input type="checkbox" id="diagUploadAutoStop" /><span>Send automatically when I stop recording</span></label>
           <div class="ws-diag-upload-token-block">
-            <label class="ws-diag-filter-label" for="diagUploadBearer">Upload token</label>
-            <input type="text" id="diagUploadBearer" class="ws-diag-filter" placeholder="Same as PLAYSHARE_DIAG_UPLOAD_SECRET on your server" autocomplete="off" spellcheck="false" />
-            <p class="ws-diag-simple-card-sub ws-diag-upload-token-hint">If your server has no upload secret, leave this empty.</p>
+            <label class="ws-diag-filter-label" for="diagUploadBearer">Upload access secret</label>
+            <input type="text" id="diagUploadBearer" class="ws-diag-filter" placeholder="Used once to mint a scoped upload token from your server" autocomplete="off" spellcheck="false" />
+            <p class="ws-diag-simple-card-sub ws-diag-upload-token-hint">If your server has no upload secret, leave this empty. Uploads do not require being in a live room; this secret is exchanged for a scoped token.</p>
           </div>
           <button type="button" class="ws-diag-btn ws-diag-btn-primary ws-diag-btn-sm ws-diag-unified-send-btn" id="diagUploadAnonymized">Send now</button>
         </div>

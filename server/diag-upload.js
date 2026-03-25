@@ -11,6 +11,7 @@ const {
   safePrivacyLog
 } = require('./diag-privacy-enforce');
 const { buildCaseIntelRecord, upsertClusterRollup } = require('./diag-intelligence');
+const { authenticateUploadRequest } = require('./diag-auth');
 
 const ENVELOPE_SCHEMA = 'playshare.diagUploadEnvelope.v1';
 const UNIFIED_VERSION = '1.0';
@@ -290,7 +291,6 @@ async function ingestDiagnosticBundle(body, deps = {}) {
  */
 async function handleDiagUpload(req, res) {
   const maxBytes = parseInt(process.env.PLAYSHARE_DIAG_UPLOAD_MAX_BYTES || '4194304', 10);
-  const secret = String(process.env.PLAYSHARE_DIAG_UPLOAD_SECRET || '').trim();
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
@@ -309,16 +309,6 @@ async function handleDiagUpload(req, res) {
     return;
   }
 
-  if (secret) {
-    const auth = String(req.headers.authorization || '');
-    const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-    if (token !== secret) {
-      res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: false, error: 'unauthorized', reasons: ['unauthorized'] }));
-      return;
-    }
-  }
-
   let body;
   try {
     body = await readJsonBody(req, maxBytes);
@@ -326,6 +316,21 @@ async function handleDiagUpload(req, res) {
     const code = e && e.message === 'PAYLOAD_TOO_LARGE' ? 'payload_too_large' : 'invalid_json';
     res.writeHead(code === 'payload_too_large' ? 413 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ ok: false, error: code, reasons: [code] }));
+    return;
+  }
+
+  const auth = authenticateUploadRequest(req, body);
+  if (auth.configured && !auth.ok) {
+    res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(
+      JSON.stringify({
+        ok: false,
+        error: 'unauthorized',
+        reasons: ['unauthorized'],
+        hint:
+          'Provide a valid scoped upload token, reuse a valid diagnostic session, or exchange your legacy upload secret for a fresh token.'
+      })
+    );
     return;
   }
 

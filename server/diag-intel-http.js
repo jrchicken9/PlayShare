@@ -11,6 +11,16 @@ const { explainCase, buildRecommendationsFromCases, regressionCompare } = requir
 const { getDiagAiConfig, gatherBriefContext, buildFallbackMarkdown, generateAssistantBrief } = require('./diag-ai-brief');
 const { EXTENSION_PRIMER_MARKDOWN } = require('./playshare-extension-primer');
 const { saveBriefAsLearning, listKnowledge, getKnowledgeOne } = require('./diag-intel-knowledge');
+const {
+  getDiagIntelAcceptedSecrets,
+  getIntelSecret,
+  extractDiagIntelTokens,
+  authenticateIntelRequest,
+  issueIntelSessionFromSecret,
+  clearIntelSession,
+  enforceSessionCsrf,
+  createScopedUploadToken
+} = require('./diag-auth');
 
 let explorerClientJsCache = null;
 /** Client bundle for /diag/intel/explorer — external file so CSP script-src 'self' works (no unsafe-inline). */
@@ -59,33 +69,6 @@ function diagIntelSlicePage(rows, limit) {
   return { data, hasMore, returned: data.length };
 }
 
-/** Trim, strip UTF-8 BOM, NBSP, and CR (common when copying from Railway / Windows / .env). */
-function scrubDiagSecret(s) {
-  let t = String(s || '').trim();
-  if (t.charCodeAt(0) === 0xfeff) t = t.slice(1).trim();
-  t = t.replace(/\u00a0/g, '').replace(/\r/g, '').trim();
-  return t;
-}
-
-/**
- * Unique non-empty secrets that authorize /diag/intel/*.
- * If both env vars are set to the same string, only one entry is used. If they differ, either value is accepted.
- */
-function getDiagIntelAcceptedSecrets() {
-  const intel = scrubDiagSecret(process.env.PLAYSHARE_DIAG_INTEL_SECRET);
-  const upload = scrubDiagSecret(process.env.PLAYSHARE_DIAG_UPLOAD_SECRET);
-  const out = [];
-  if (intel) out.push(intel);
-  if (upload && upload !== intel) out.push(upload);
-  return out;
-}
-
-/** @deprecated Use getDiagIntelAcceptedSecrets; kept for module export compatibility (first configured secret). */
-function getIntelSecret() {
-  const a = getDiagIntelAcceptedSecrets();
-  return a[0] || '';
-}
-
 function json(res, status, obj) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(obj));
@@ -107,62 +90,8 @@ function unauthorized(res) {
     ok: false,
     error: 'unauthorized',
     hint:
-      'The secret did not match PLAYSHARE_DIAG_INTEL_SECRET or PLAYSHARE_DIAG_UPLOAD_SECRET on this server. Paste the variable value only (no "Bearer" prefix). If you use a proxy that strips Authorization on GET, the explorer sends X-PlayShare-Diag-Intel-Secret as well.'
+      'Unlock again to refresh your diagnostic session, or provide the exact PLAYSHARE_DIAG_INTEL_SECRET / PLAYSHARE_DIAG_UPLOAD_SECRET value. AI access does not depend on being in a live room.'
   });
-}
-
-function parseBearerToken(authHeader) {
-  let t = String(authHeader || '').trim();
-  if (t.toLowerCase().startsWith('bearer ')) t = t.slice(7).trim();
-  if (t.toLowerCase().startsWith('bearer ')) t = t.slice(7).trim();
-  return scrubDiagSecret(t);
-}
-
-/** Single header value (Node may join duplicates with ", "). */
-function headerOne(req, lowerName) {
-  const v = req.headers[lowerName];
-  if (v == null || v === '') return '';
-  const s = Array.isArray(v) ? v.join(',') : String(v);
-  return s.trim();
-}
-
-/** JSON POST fallback when an intermediary mangles auth headers after unlock. */
-function bodyDiagIntelToken(body) {
-  if (!body || typeof body !== 'object') return '';
-  const raw =
-    body.diag_intel_secret != null
-      ? body.diag_intel_secret
-      : body.diag_bearer != null
-        ? body.diag_bearer
-        : body.diag_token;
-  return parseBearerToken(raw);
-}
-
-/**
- * Collect all auth candidates instead of trusting only one header, so a proxy-
- * injected/malformed Authorization value does not block the custom header or
- * JSON-body fallback from succeeding.
- * @param {import('http').IncomingMessage} req
- * @param {Record<string, unknown> | null | undefined} [body]
- */
-function extractDiagIntelTokens(req, body) {
-  const out = [];
-  const pushUnique = (token) => {
-    if (!token || out.includes(token)) return;
-    out.push(token);
-  };
-  pushUnique(parseBearerToken(req.headers.authorization));
-  pushUnique(scrubDiagSecret(headerOne(req, 'x-playshare-diag-intel-secret')));
-  pushUnique(bodyDiagIntelToken(body));
-  return out;
-}
-
-function checkAuth(req, body) {
-  const accepted = getDiagIntelAcceptedSecrets();
-  if (accepted.length === 0) return null;
-  const tokens = extractDiagIntelTokens(req, body);
-  if (!tokens.length) return false;
-  return accepted.some((secret) => tokens.includes(secret));
 }
 
 /**
@@ -203,12 +132,30 @@ async function readJsonBody(req, maxBytes = 65536) {
 }
 
 function routeSupportsBodyAuth(path) {
-  return path === '/diag/intel/ai-brief' || path === '/diag/intel/knowledge' || path === '/diag/intel/feedback';
+  return (
+    path === '/diag/intel/session' ||
+    path === '/diag/intel/auth-check' ||
+    path === '/diag/intel/upload-token' ||
+    path === '/diag/intel/ai-brief' ||
+    path === '/diag/intel/knowledge' ||
+    path === '/diag/intel/feedback'
+  );
 }
 
 function routeJsonBodyMaxBytes(path) {
   if (path === '/diag/intel/knowledge') return 131072;
+  if (path === '/diag/intel/session') return 8192;
+  if (path === '/diag/intel/upload-token') return 16384;
   return 65536;
+}
+
+function establishSessionFromAuthCandidates(req, res, body) {
+  const candidates = extractDiagIntelTokens(req, body);
+  for (const candidate of candidates) {
+    const result = issueIntelSessionFromSecret(req, res, candidate);
+    if (!result.configured || result.ok) return result;
+  }
+  return { configured: getDiagIntelAcceptedSecrets().length > 0, ok: false, session: null };
 }
 
 /**
@@ -225,7 +172,7 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Access-Control-Allow-Headers':
-        'Content-Type, Authorization, X-PlayShare-Diag-AI-Key, X-PlayShare-Diag-Intel-Secret'
+        'Content-Type, Authorization, X-PlayShare-CSRF, X-PlayShare-Diag-AI-Key, X-PlayShare-Diag-Intel-Secret'
     });
     res.end();
     return;
@@ -270,38 +217,143 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
 
   /** @type {Record<string, unknown> | null} */
   let parsedBody = null;
-  let authed = checkAuth(req);
-  if (!authed && req.method === 'POST' && routeSupportsBodyAuth(path)) {
+  if (req.method === 'POST' && routeSupportsBodyAuth(path)) {
     try {
       parsedBody = await readJsonBody(req, routeJsonBodyMaxBytes(path));
     } catch {
       json(res, 400, { ok: false, error: 'invalid_json' });
       return;
     }
-    authed = checkAuth(req, parsedBody);
-  }
-  if (authed === null) {
-    jsonAuth(res, 503, {
-      ok: false,
-      error: 'intel_secret_not_configured',
-      hint:
-        'Set PLAYSHARE_DIAG_INTEL_SECRET and/or PLAYSHARE_DIAG_UPLOAD_SECRET. If both are set, the explorer accepts either value in Authorization: Bearer.'
-    });
-    return;
-  }
-  if (!authed) {
-    unauthorized(res);
-    return;
   }
 
-  if (path === '/diag/intel/auth-check' && (req.method === 'POST' || req.method === 'GET')) {
-    if (req.method === 'POST') {
-      await drainRequestBody(req);
+  if (path === '/diag/intel/session') {
+    if (req.method !== 'POST') {
+      json(res, 405, { ok: false, error: 'method_not_allowed' });
+      return;
+    }
+    const explicitSecret =
+      (parsedBody && (parsedBody.secret || parsedBody.diag_intel_secret || parsedBody.diag_secret)) ||
+      req.headers['x-playshare-diag-intel-secret'] ||
+      req.headers.authorization ||
+      '';
+    const issued = issueIntelSessionFromSecret(req, res, explicitSecret);
+    if (!issued.configured) {
+      jsonAuth(res, 503, {
+        ok: false,
+        error: 'intel_secret_not_configured',
+        hint:
+          'Set PLAYSHARE_DIAG_INTEL_SECRET and/or PLAYSHARE_DIAG_UPLOAD_SECRET. AI access is independent of live room activity.'
+      });
+      return;
+    }
+    if (!issued.ok || !issued.session) {
+      unauthorized(res);
+      return;
     }
     jsonAuth(res, 200, {
       ok: true,
       authenticated: true,
+      auth_via: 'session',
+      csrf_token: issued.session.csrfToken,
       supabase_configured: Boolean(getSupabaseAdmin())
+    });
+    return;
+  }
+
+  if (path === '/diag/intel/logout') {
+    if (req.method !== 'POST') {
+      json(res, 405, { ok: false, error: 'method_not_allowed' });
+      return;
+    }
+    const logoutAuth = authenticateIntelRequest(req, parsedBody);
+    const logoutCsrf = enforceSessionCsrf(req, logoutAuth, parsedBody || {});
+    if (!logoutCsrf.ok) {
+      jsonAuth(res, logoutCsrf.status || 403, {
+        ok: false,
+        error: logoutCsrf.error,
+        hint: logoutCsrf.hint
+      });
+      return;
+    }
+    clearIntelSession(req, res);
+    jsonAuth(res, 200, { ok: true, logged_out: true });
+    return;
+  }
+
+  let auth = authenticateIntelRequest(req, parsedBody);
+  if (!auth.configured) {
+    jsonAuth(res, 503, {
+      ok: false,
+      error: 'intel_secret_not_configured',
+      hint:
+        'Set PLAYSHARE_DIAG_INTEL_SECRET and/or PLAYSHARE_DIAG_UPLOAD_SECRET. If both are set, the explorer accepts either value during unlock.'
+    });
+    return;
+  }
+
+  if (path === '/diag/intel/auth-check' && (req.method === 'POST' || req.method === 'GET')) {
+    if (!auth.ok && req.method === 'POST') {
+      const issued = establishSessionFromAuthCandidates(req, res, parsedBody);
+      if (!issued.configured) {
+        jsonAuth(res, 503, {
+          ok: false,
+          error: 'intel_secret_not_configured',
+          hint:
+            'Set PLAYSHARE_DIAG_INTEL_SECRET and/or PLAYSHARE_DIAG_UPLOAD_SECRET. AI access is independent of live room activity.'
+        });
+        return;
+      }
+      if (issued.ok && issued.session) {
+        auth = { configured: true, ok: true, via: 'session', session: issued.session };
+      }
+    } else if (!auth.ok && req.method === 'GET') {
+      unauthorized(res);
+      return;
+    }
+    if (!auth.ok) {
+      unauthorized(res);
+      return;
+    }
+    jsonAuth(res, 200, {
+      ok: true,
+      authenticated: true,
+      auth_via: auth.via,
+      csrf_token: auth.session ? auth.session.csrfToken : null,
+      supabase_configured: Boolean(getSupabaseAdmin())
+    });
+    return;
+  }
+
+  if (!auth.ok) {
+    unauthorized(res);
+    return;
+  }
+
+  if (req.method === 'POST') {
+    const csrf = enforceSessionCsrf(req, auth, parsedBody || {});
+    if (!csrf.ok) {
+      jsonAuth(res, csrf.status || 403, {
+        ok: false,
+        error: csrf.error,
+        hint: csrf.hint
+      });
+      return;
+    }
+  }
+
+  if (path === '/diag/intel/upload-token') {
+    if (req.method !== 'POST') {
+      json(res, 405, { ok: false, error: 'method_not_allowed' });
+      return;
+    }
+    const issued = createScopedUploadToken(auth.via || 'secret', auth.session ? auth.session.id : null);
+    jsonAuth(res, 200, {
+      ok: true,
+      upload_token: issued.token,
+      created_at: issued.created_at,
+      expires_at: issued.expires_at,
+      expires_in_ms: issued.expires_in_ms,
+      auth_via: auth.via
     });
     return;
   }
@@ -1313,7 +1365,7 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
       <header class="gate-header">
         <span class="gate-badge">PlayShare · developers</span>
         <h1>Diagnostic intelligence</h1>
-        <p class="gate-tagline">Sign in with your server secret. Nothing is pre-filled here; your browser only sends it when you unlock.</p>
+        <p class="gate-tagline">Sign in once with your server secret. The server then keeps a secure session for this browser so AI access does not depend on a live room.</p>
       </header>
       <div class="gate-card">
         <div id="gateInitFail" role="alert"></div>
@@ -1330,8 +1382,8 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
               (or your upload secret). Paste <strong>only the value</strong>—no variable name, no quotes, no <code>Bearer</code> prefix.
             </p>
             <p style="margin: 12px 0 0">
-              <strong>Network:</strong> Unlock calls <code>GET /diag/intel/auth-check</code> with <code>Authorization</code> and
-              <code>X-PlayShare-Diag-Intel-Secret</code> (POST also supported) so proxies that mishandle bodies still work.
+              <strong>Network:</strong> Unlock calls <code>POST /diag/intel/session</code>. After that, the browser uses a server-issued
+              <code>HttpOnly</code> session cookie plus a CSRF header for later writes, so the raw secret is not replayed on each AI request.
             </p>
             <p style="margin: 12px 0 0">
               <strong>OpenAI:</strong> optional; expand below. Leave blank if this host already has an LLM key in env.
@@ -1383,7 +1435,7 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
           <div id="gateBootStatus" aria-live="polite"></div>
         </details>
 
-        <p class="gate-privacy-note">Secrets stay in this tab until you close or refresh. They are not written to sessionStorage.</p>
+        <p class="gate-privacy-note">Your raw secret is only used during unlock. The server then manages the browser session; AI access works even when the extension is not in a room.</p>
       </div>
     </div>
   </div>
@@ -1392,7 +1444,7 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
   <div class="wrap">
     <header class="topbar">
       <h1>Diagnostic intelligence</h1>
-      <p>Review anonymized sync diagnostics: recent uploads, repeating patterns (clusters), and version comparisons. You already entered access on the unlock screen — no second password is required unless you choose <strong>Change credentials</strong>.</p>
+      <p>Review anonymized sync diagnostics: recent uploads, repeating patterns (clusters), and version comparisons. Unlock creates a secure browser session for this explorer, so no second password is required unless you choose <strong>Change credentials</strong>.</p>
       <p class="ver">Explorer UI · redeploy the server if unlock or tabs look outdated (<code>diag-intel-http.js</code>).</p>
     </header>
 
@@ -1400,24 +1452,24 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
       <aside class="side">
         <h2>1 · Access</h2>
         <p class="muted" style="margin: 0 0 10px; font-size: 12px; line-height: 1.45">
-          The <strong>unlock screen</strong> is the only place you type the Railway Bearer secret for this tab. While the tab stays open, the browser keeps it in memory for API calls (including AI briefs and saving to the knowledge table). Refresh or a new tab requires unlocking again. Use <strong>Change credentials</strong> above the tabs to switch secret or LLM settings.
+          The <strong>unlock screen</strong> is the only place you type the Railway secret. After that, the server keeps a secure session for this browser and the explorer reuses it for AI briefs and saved learnings. You do <strong>not</strong> need the extension to be in a live room to use the AI tab. Use <strong>Change credentials</strong> to end the current session and unlock again.
         </p>
         <ol class="steps">
           <li>Use Cases / Clusters / AI assistant — no extra password prompts.</li>
           <li>Read the summary table; expand <em>Raw JSON</em> only if you need the full payload.</li>
         </ol>
-        <p class="muted" style="margin-top:12px">503 <code>supabase_not_configured</code> → set URL + service role on the server. 401 → use Change credentials and re-unlock.</p>
+        <p class="muted" style="margin-top:12px">503 <code>supabase_not_configured</code> → set URL + service role on the server. 401 → session missing or expired, so use Change credentials and unlock again.</p>
       </aside>
 
       <div class="main-col">
         <div class="access-panel access-panel--post-unlock" id="accessPanel">
           <input type="hidden" id="tok" value="" autocomplete="off" />
           <div class="access-unlock-row">
-            <span><strong style="color: var(--ok)">Unlocked</strong> — Bearer and LLM settings from the gateway apply to all requests in this tab.</span>
+            <span><strong style="color: var(--ok)">Unlocked</strong> — this browser now has a secure diagnostic session; AI access is independent from room activity.</span>
             <button type="button" class="ghost" id="btnReunlock">Change credentials…</button>
           </div>
           <p class="access-panel-hint" style="margin-top: 8px">
-            The server never sends your secret to the page; after unlock the browser attaches <code>Authorization: Bearer …</code> and your LLM key (if any) on each request until you refresh or use <strong>Change credentials</strong>.
+            The server never sends your raw secret back to the page. After unlock the browser reuses a secure session cookie and your LLM key (if any) until the session expires or you use <strong>Change credentials</strong>.
           </p>
         </div>
         <nav class="tabs" role="tablist" aria-label="Views">
@@ -1480,7 +1532,7 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
             Uses <strong>live data</strong> from diagnostic recordings (<code>diag_cases</code> / clusters). Each successful AI run can be <strong>saved</strong> into <code>diag_intel_knowledge</code>; the next run automatically includes those excerpts so the tool <strong>accumulates context</strong> about the extension over time.
           </p>
           <p class="muted" style="margin:0 0 10px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);font-size:13px;line-height:1.5">
-            LLM access comes from the <strong>OpenAI key you paste at unlock</strong> (sent with each request) or from Railway <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code> on the host when you leave that field empty. If you see <strong>LLM not configured</strong>, add a key at unlock or set one of those env vars, or use <strong>Data pack only</strong>. <strong>401</strong> on requests is almost always a wrong unlock secret — use <strong>Change credentials</strong>.
+            LLM access comes from the <strong>OpenAI key you paste at unlock</strong> (sent with each request) or from Railway <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code> on the host when you leave that field empty. If you see <strong>LLM not configured</strong>, add a key at unlock or set one of those env vars, or use <strong>Data pack only</strong>. <strong>401</strong> on requests now usually means the explorer session expired — use <strong>Change credentials</strong>. No live room is required for AI access.
           </p>
           <p class="muted" style="margin:0 0 14px;font-size:12px">
             <strong>Supabase:</strong> apply migration <code>20260330120000_diag_intel_knowledge.sql</code>. Optional server env: <code>PLAYSHARE_DIAG_AI_BASE_URL</code>, <code>PLAYSHARE_DIAG_AI_MODEL</code> (default <code>gpt-4o-mini</code>). <strong>Primer:</strong> <code>npm run generate:primer</code> · <code>playshare-extension-primer.static.md</code> / <code>playshare-extension-primer.js</code>.
@@ -1540,7 +1592,7 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
       </div>
     </div>
 
-    <footer>PlayShare · <code>/diag/intel/*</code> · unlock <code>GET /diag/intel/auth-check</code> · health <code>/diag/intel/health</code></footer>
+    <footer>PlayShare · <code>/diag/intel/*</code> · unlock <code>POST /diag/intel/session</code> · health <code>/diag/intel/health</code></footer>
   </div>
   </div>
   <script defer src="${clientJsSrc}"></script>
@@ -1551,6 +1603,12 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
   </noscript>
 </body>
 </html>`;
+}
+
+function checkAuth(req, body) {
+  const auth = authenticateIntelRequest(req, body);
+  if (!auth.configured) return null;
+  return auth.ok;
 }
 
 module.exports = {

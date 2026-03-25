@@ -2,7 +2,7 @@ importScripts('server-config.js');
 importScripts('shared/streaming-hosts.generated.js');
 importScripts('shared/diag-anonymize.js');
 
-/** Keep in sync with `content/src/constants.js` → `DEFAULT_DIAG_UPLOAD_BEARER`. Only used for unpacked (development) installs. */
+/** Keep in sync with `content/src/constants.js` → `DEFAULT_DIAG_UPLOAD_BEARER`. Only used as a dev bootstrap secret for scoped upload tokens. */
 const DEFAULT_DIAG_UPLOAD_BEARER = 'ibrahim1@';
 
 function playShareIsDevelopmentInstall() {
@@ -82,6 +82,33 @@ function playShareHttpOriginFromServerUrl(raw) {
   } catch {
     return null;
   }
+}
+
+async function refreshScopedDiagUploadToken(httpOrigin, bootstrapSecret) {
+  const secret = bootstrapSecret && String(bootstrapSecret).trim();
+  if (!secret) return { ok: false, error: 'missing_bootstrap_secret' };
+  const tokenUrl = `${String(httpOrigin).replace(/\/+$/, '')}/diag/intel/upload-token`;
+  const r = await fetch(tokenUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ diag_upload_secret: secret })
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j || !j.upload_token) {
+    return {
+      ok: false,
+      status: r.status,
+      error: (j && (j.error || j.detail)) || 'upload_token_issue_failed',
+      tokenUrl
+    };
+  }
+  const token = String(j.upload_token || '').trim();
+  const expiresAt = j.expires_at ? String(j.expires_at) : null;
+  await chrome.storage.local.set({
+    playshare_diag_upload_session_token: token,
+    playshare_diag_upload_session_expires_at: expiresAt
+  });
+  return { ok: true, token, expiresAt, tokenUrl };
 }
 
 function clearTransportStallTimer() {
@@ -602,24 +629,65 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             testRunId: msg.testRunId ? String(msg.testRunId).slice(0, 64) : null,
             payload: anon
           };
-          const extraTok = await chrome.storage.local.get(['playshare_diag_upload_bearer']);
-          let bearer =
+          const extraTok = await chrome.storage.local.get([
+            'playshare_diag_upload_bearer',
+            'playshare_diag_upload_session_token',
+            'playshare_diag_upload_session_expires_at'
+          ]);
+          let bootstrapSecret =
             (extraTok.playshare_diag_upload_bearer && String(extraTok.playshare_diag_upload_bearer).trim()) || '';
           const devInstall = await playShareIsDevelopmentInstall();
-          if (!bearer && devInstall) bearer = DEFAULT_DIAG_UPLOAD_BEARER;
-          /** @type {Record<string, string>} */
-          const headers = { 'Content-Type': 'application/json' };
-          if (bearer) headers.Authorization = `Bearer ${bearer}`;
-          const r = await fetch(uploadUrl, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(envelope)
-          });
-          const j = await r.json().catch(() => ({}));
+          if (!bootstrapSecret && devInstall) bootstrapSecret = DEFAULT_DIAG_UPLOAD_BEARER;
+          let scopedToken =
+            (extraTok.playshare_diag_upload_session_token &&
+              String(extraTok.playshare_diag_upload_session_token).trim()) ||
+            '';
+          const scopedExpiry = extraTok.playshare_diag_upload_session_expires_at
+            ? Date.parse(String(extraTok.playshare_diag_upload_session_expires_at))
+            : NaN;
+          if (!scopedToken || (Number.isFinite(scopedExpiry) && scopedExpiry <= Date.now() + 30000)) {
+            scopedToken = '';
+          }
+          if (!scopedToken && bootstrapSecret) {
+            const minted = await refreshScopedDiagUploadToken(httpOrigin, bootstrapSecret);
+            if (minted.ok && minted.token) scopedToken = minted.token;
+          }
+          const attemptUpload = async (bearerValue) => {
+            /** @type {Record<string, string>} */
+            const headers = { 'Content-Type': 'application/json' };
+            if (bearerValue) headers.Authorization = `Bearer ${bearerValue}`;
+            const r = await fetch(uploadUrl, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify(envelope)
+            });
+            const j = await r.json().catch(() => ({}));
+            return { r, j };
+          };
+          let { r, j } = await attemptUpload(scopedToken || bootstrapSecret);
+          if (r.status === 401 && bootstrapSecret) {
+            await chrome.storage.local.remove([
+              'playshare_diag_upload_session_token',
+              'playshare_diag_upload_session_expires_at'
+            ]);
+            const minted = await refreshScopedDiagUploadToken(httpOrigin, bootstrapSecret);
+            if (minted.ok && minted.token) {
+              scopedToken = minted.token;
+              ({ r, j } = await attemptUpload(scopedToken));
+            } else if (scopedToken) {
+              ({ r, j } = await attemptUpload(bootstrapSecret));
+            }
+          }
           if (!r.ok) {
             console.warn('[PlayShare] diag upload failed', r.status, uploadUrl, j && j.error ? j.error : '');
           }
-          sendResponse({ ok: r.ok, status: r.status, uploadUrl, ...j });
+          sendResponse({
+            ok: r.ok,
+            status: r.status,
+            uploadUrl,
+            authMode: scopedToken ? 'scoped_upload_token' : bootstrapSecret ? 'legacy_secret' : 'none',
+            ...j
+          });
         } catch (e) {
           sendResponse({ ok: false, error: e && e.message ? e.message : String(e) });
         }
