@@ -1038,6 +1038,8 @@ function explorerHtml() {
       background: var(--accent);
       color: #04202c;
       cursor: pointer;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
     }
     #gateSubmit:hover {
       filter: brightness(1.06);
@@ -1377,7 +1379,6 @@ function explorerHtml() {
     el.setAttribute('role', 'alert');
     try {
       el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      el.focus({ preventScroll: true });
     } catch (e) {}
   }
 
@@ -1395,10 +1396,51 @@ function explorerHtml() {
     if (!pre || !det) return;
     var when = new Date().toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'medium' });
     pre.textContent = when + '\n\n' + lines.filter(Boolean).join('\n');
-    try {
-      det.open = true;
-      det.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    } catch (e) {}
+    setTimeout(function () {
+      try {
+        det.open = true;
+        det.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      } catch (e) {}
+    }, 0);
+  }
+
+  /**
+   * POST auth-check with a hard timeout even when AbortController is missing (older WebViews).
+   * @returns {Promise<Response>}
+   */
+  function gateFetchAuthCheck(url, fetchOpts, timeoutMs) {
+    var ms = timeoutMs || 25000;
+    if (typeof AbortController !== 'undefined') {
+      var ctrl = new AbortController();
+      var opts = Object.assign({}, fetchOpts, { signal: ctrl.signal });
+      var tid = setTimeout(function () {
+        try {
+          ctrl.abort();
+        } catch (eA) {}
+      }, ms);
+      return fetch(url, opts).finally(function () {
+        clearTimeout(tid);
+      });
+    }
+    var tid2 = 0;
+    var fetchP = fetch(url, fetchOpts).then(
+      function (res) {
+        if (tid2) clearTimeout(tid2);
+        return res;
+      },
+      function (err) {
+        if (tid2) clearTimeout(tid2);
+        throw err;
+      }
+    );
+    var timeoutP = new Promise(function (_, reject) {
+      tid2 = setTimeout(function () {
+        var err = new Error('timeout');
+        err.name = 'TimeoutError';
+        reject(err);
+      }, ms);
+    });
+    return Promise.race([fetchP, timeoutP]);
   }
 
   /** @param {Response} res */
@@ -1456,16 +1498,7 @@ function explorerHtml() {
       working.style.display = 'block';
       working.textContent = 'Checking credentials with the server…';
     }
-    var useAbort = typeof AbortController !== 'undefined';
-    var ctrl = useAbort ? new AbortController() : null;
     var timeoutMs = 25000;
-    var to = useAbort
-      ? setTimeout(function () {
-          try {
-            if (ctrl) ctrl.abort();
-          } catch (eAb) {}
-        }, timeoutMs)
-      : 0;
     try {
       var r;
       try {
@@ -1478,10 +1511,14 @@ function explorerHtml() {
           },
           body: '{}'
         };
-        if (useAbort && ctrl) fetchOpts.signal = ctrl.signal;
-        r = await fetch(intelApi('/auth-check'), fetchOpts);
+        r = await gateFetchAuthCheck(intelApi('/auth-check'), fetchOpts, timeoutMs);
       } catch (eFetch) {
-        var aborted = eFetch && (eFetch.name === 'AbortError' || (String(eFetch.message || '').indexOf('abort') >= 0));
+        var aborted =
+          eFetch &&
+          (eFetch.name === 'AbortError' ||
+            eFetch.name === 'TimeoutError' ||
+            (String(eFetch.message || '').toLowerCase().indexOf('abort') >= 0) ||
+            (String(eFetch.message || '').toLowerCase().indexOf('timeout') >= 0));
         if (aborted) {
           recordGateAuthDiag([
             'No HTTP response — request aborted (timeout ' + Math.round(timeoutMs / 1000) + 's).',
@@ -1507,8 +1544,6 @@ function explorerHtml() {
           );
         }
         return;
-      } finally {
-        if (to) clearTimeout(to);
       }
 
       if (r.status === 401) {
@@ -1635,7 +1670,6 @@ function explorerHtml() {
         showGateErr('Unlocked locally but something failed in the page: ' + (eDone && eDone.message ? eDone.message : String(eDone)));
       }
     } finally {
-      if (to) clearTimeout(to);
       if (working) working.style.display = 'none';
       if (btn) btn.disabled = false;
     }
@@ -1658,7 +1692,11 @@ function explorerHtml() {
 
   var gateBtn = $('gateSubmit');
   if (gateBtn) {
-    gateBtn.onclick = function () {
+    function onGateContinueClick(ev) {
+      if (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
       try {
         var pr = validateAndEnterFromGate();
         if (pr && typeof pr.catch === 'function') {
@@ -1677,7 +1715,8 @@ function explorerHtml() {
         ]);
         showGateErr('Unexpected error: ' + (eSync && eSync.message ? eSync.message : String(eSync)));
       }
-    };
+    }
+    gateBtn.addEventListener('click', onGateContinueClick);
   }
   function gateMaybeSubmit(e) {
     if (e.key !== 'Enter') return;
