@@ -124,6 +124,20 @@ function checkAuth(req) {
   return accepted.some((secret) => token === secret);
 }
 
+/**
+ * Discard the rest of the request body. Safe when the stream may already be finished
+ * (avoids hanging on req.on('end') if 'end' fired before the listener was attached).
+ */
+async function drainRequestBody(req) {
+  try {
+    for await (const _chunk of req) {
+      /* discard */
+    }
+  } catch (_e) {
+    /* ignore */
+  }
+}
+
 async function readJsonBody(req, maxBytes = 65536) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -205,11 +219,7 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
 
   if (path === '/diag/intel/auth-check' && (req.method === 'POST' || req.method === 'GET')) {
     if (req.method === 'POST') {
-      await new Promise((resolve) => {
-        req.resume();
-        req.on('end', () => resolve(undefined));
-        req.on('error', () => resolve(undefined));
-      });
+      await drainRequestBody(req);
     }
     json(res, 200, {
       ok: true,
@@ -1522,6 +1532,7 @@ function explorerHtml() {
         if (aborted) {
           recordGateAuthDiag([
             'No HTTP response — request aborted (timeout ' + Math.round(timeoutMs / 1000) + 's).',
+            'Browser: ' + window.location.origin + window.location.pathname,
             'Target: POST ' + intelApi('/auth-check'),
             'Normalized Railway secret length: ' + bearer.length + ' chars',
             'If the host is cold-starting, wait and retry.'
@@ -1534,6 +1545,7 @@ function explorerHtml() {
         } else {
           recordGateAuthDiag([
             'No HTTP response — network / wrong page origin.',
+            'Browser: ' + window.location.origin + window.location.pathname,
             'Target: POST ' + intelApi('/auth-check'),
             'Detail: ' + (eFetch && eFetch.message ? eFetch.message : String(eFetch)),
             'Open this page from the same host as your PlayShare server (…/diag/intel/explorer).'
@@ -1643,6 +1655,7 @@ function explorerHtml() {
       } catch (eJ) {}
       recordGateAuthDiag([
         'HTTP ' + r.status + ' — authentication accepted.',
+        'Browser: ' + window.location.origin + window.location.pathname,
         'POST ' + intelApi('/auth-check'),
         'Normalized Railway secret length: ' + bearer.length + ' chars',
         'OpenAI field: ' + (openai ? openai.length + ' chars (stored for AI requests)' : 'empty (use server LLM env if set)'),
