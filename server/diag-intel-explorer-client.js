@@ -765,6 +765,12 @@
     return attachClientAiHeaders(h);
   }
 
+  function attachBodyDiagSecret(body) {
+    var t = getResolvedBearer();
+    if (t) body.diag_intel_secret = t;
+    return body;
+  }
+
   function setPill(text, kind) {
     var el = $('statusPill');
     el.textContent = text;
@@ -1134,6 +1140,7 @@
         persist_learning: !$('aiDryRun').checked && $('aiPersist').checked
       };
       if (lk) body.llm_api_key = lk;
+      attachBodyDiagSecret(body);
       var r = await fetch(intelApi('/ai-brief'), {
         method: 'POST',
         headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
@@ -1371,10 +1378,10 @@
       var r = await fetch(intelApi('/knowledge'), {
         method: 'POST',
         headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
-        body: JSON.stringify({
+        body: JSON.stringify(attachBodyDiagSecret({
           digest_markdown: t,
           focus_platform: ($('aiFocusPlat').value || '').trim() || undefined
-        })
+        }))
       });
       var j = await r.json();
       if (j.ok && j.learning_id) {

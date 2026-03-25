@@ -126,24 +126,43 @@ function headerOne(req, lowerName) {
   return s.trim();
 }
 
-/**
- * Bearer first; then custom header (some proxies strip Authorization on GET).
- * @param {import('http').IncomingMessage} req
- */
-function extractDiagIntelToken(req) {
-  let t = parseBearerToken(req.headers.authorization);
-  if (t) return t;
-  const alt = headerOne(req, 'x-playshare-diag-intel-secret');
-  if (!alt) return '';
-  return scrubDiagSecret(alt);
+/** JSON POST fallback when an intermediary mangles auth headers after unlock. */
+function bodyDiagIntelToken(body) {
+  if (!body || typeof body !== 'object') return '';
+  const raw =
+    body.diag_intel_secret != null
+      ? body.diag_intel_secret
+      : body.diag_bearer != null
+        ? body.diag_bearer
+        : body.diag_token;
+  return parseBearerToken(raw);
 }
 
-function checkAuth(req) {
+/**
+ * Collect all auth candidates instead of trusting only one header, so a proxy-
+ * injected/malformed Authorization value does not block the custom header or
+ * JSON-body fallback from succeeding.
+ * @param {import('http').IncomingMessage} req
+ * @param {Record<string, unknown> | null | undefined} [body]
+ */
+function extractDiagIntelTokens(req, body) {
+  const out = [];
+  const pushUnique = (token) => {
+    if (!token || out.includes(token)) return;
+    out.push(token);
+  };
+  pushUnique(parseBearerToken(req.headers.authorization));
+  pushUnique(scrubDiagSecret(headerOne(req, 'x-playshare-diag-intel-secret')));
+  pushUnique(bodyDiagIntelToken(body));
+  return out;
+}
+
+function checkAuth(req, body) {
   const accepted = getDiagIntelAcceptedSecrets();
   if (accepted.length === 0) return null;
-  const token = extractDiagIntelToken(req);
-  if (!token) return false;
-  return accepted.some((secret) => token === secret);
+  const tokens = extractDiagIntelTokens(req, body);
+  if (!tokens.length) return false;
+  return accepted.some((secret) => tokens.includes(secret));
 }
 
 /**
@@ -181,6 +200,15 @@ async function readJsonBody(req, maxBytes = 65536) {
     });
     req.on('error', reject);
   });
+}
+
+function routeSupportsBodyAuth(path) {
+  return path === '/diag/intel/ai-brief' || path === '/diag/intel/knowledge' || path === '/diag/intel/feedback';
+}
+
+function routeJsonBodyMaxBytes(path) {
+  if (path === '/diag/intel/knowledge') return 131072;
+  return 65536;
 }
 
 /**
@@ -240,7 +268,18 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
     return;
   }
 
-  const authed = checkAuth(req);
+  /** @type {Record<string, unknown> | null} */
+  let parsedBody = null;
+  let authed = checkAuth(req);
+  if (!authed && req.method === 'POST' && routeSupportsBodyAuth(path)) {
+    try {
+      parsedBody = await readJsonBody(req, routeJsonBodyMaxBytes(path));
+    } catch {
+      json(res, 400, { ok: false, error: 'invalid_json' });
+      return;
+    }
+    authed = checkAuth(req, parsedBody);
+  }
   if (authed === null) {
     jsonAuth(res, 503, {
       ok: false,
@@ -453,13 +492,7 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
         return;
       }
       if (req.method === 'POST') {
-        let body;
-        try {
-          body = await readJsonBody(req, 131072);
-        } catch {
-          json(res, 400, { ok: false, error: 'invalid_json' });
-          return;
-        }
+        const body = parsedBody || (await readJsonBody(req, 131072));
         const digest = String(body.digest_markdown || '').trim();
         if (digest.length < 20) {
           json(res, 400, { ok: false, error: 'digest_too_short', min: 20 });
@@ -491,13 +524,7 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
         json(res, 405, { ok: false, error: 'method_not_allowed' });
         return;
       }
-      let body = {};
-      try {
-        body = await readJsonBody(req, 65536);
-      } catch {
-        json(res, 400, { ok: false, error: 'invalid_json' });
-        return;
-      }
+      const body = parsedBody || (await readJsonBody(req, 65536));
       const dryRun = Boolean(body.dry_run);
       const focusRaw = body.focus_platform != null ? String(body.focus_platform).trim().slice(0, 64) : '';
       const focusPlatform = focusRaw || null;
@@ -636,13 +663,7 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
         json(res, 405, { ok: false, error: 'method_not_allowed' });
         return;
       }
-      let body;
-      try {
-        body = await readJsonBody(req);
-      } catch {
-        json(res, 400, { ok: false, error: 'invalid_json' });
-        return;
-      }
+      const body = parsedBody || (await readJsonBody(req));
       const label = String(body.label || '').trim();
       if (!FEEDBACK_LABELS.has(label)) {
         json(res, 400, { ok: false, error: 'invalid_label', allowed: [...FEEDBACK_LABELS] });
@@ -1532,4 +1553,11 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
 </html>`;
 }
 
-module.exports = { handleDiagIntel, getIntelSecret, explorerHtml };
+module.exports = {
+  handleDiagIntel,
+  getIntelSecret,
+  explorerHtml,
+  getDiagIntelAcceptedSecrets,
+  extractDiagIntelTokens,
+  checkAuth
+};
