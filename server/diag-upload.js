@@ -308,7 +308,7 @@ async function ingestDiagnosticBundle(body, deps = {}) {
           report_id: reportId,
           focus_platform: intel.platform || summary.platform || null
         }).catch((e) => {
-          console.warn('[PlayShare/diag/intel] auto AI job enqueue failed', e && e.message);
+          console.warn('[PlayShare/diag/intel] auto IntelPro job enqueue failed', e && e.message);
           return null;
         });
       }

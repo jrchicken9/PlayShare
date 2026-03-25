@@ -1298,7 +1298,7 @@
               queued: false,
               job: x.job,
               error: 'job_cancelled',
-              detail: 'The AI job was cancelled.',
+              detail: 'The IntelPro job was cancelled.',
               fallback_markdown: j.fallback_markdown,
               model: j.model
             });
@@ -1354,7 +1354,7 @@
           renderAiBriefPayload({
             ok: false,
             error: job.error_code || (job.status === 'cancelled' ? 'job_cancelled' : 'job_failed'),
-            detail: job.error_detail || (job.status === 'cancelled' ? 'The AI job was cancelled.' : ''),
+            detail: job.error_detail || (job.status === 'cancelled' ? 'The IntelPro job was cancelled.' : ''),
             fallback_markdown: job.fallback_markdown,
             job: job,
             queued: false,
@@ -1389,12 +1389,12 @@
       st.textContent = '';
       out.innerHTML =
         '<div class="alert err"><strong>Session required</strong>' +
-        '<p class="muted" style="margin:8px 0 0">Use <strong>Change credentials</strong> to return to the unlock screen and establish a fresh server session. AI access does not depend on being in a live room.</p></div>';
+        '<p class="muted" style="margin:8px 0 0">Use <strong>Change credentials</strong> to return to the unlock screen and establish a fresh server session. IntelPro access does not depend on being in a live room.</p></div>';
       return;
     }
     btn.disabled = true;
     st.textContent = '';
-    out.innerHTML = '<div class="empty">Gathering data' + ($('aiDryRun').checked ? '…' : ' and queueing the AI job…') + '</div>';
+    out.innerHTML = '<div class="empty">Gathering data' + ($('aiDryRun').checked ? '…' : ' and queueing IntelPro…') + '</div>';
     try {
       var lk = getClientLlmKeyForBrief();
       var body = {

@@ -28,7 +28,7 @@ _Hand-maintained. Update when behavior or architecture changes meaningfully. The
 
 ### Server (`server.js`)
 - **WebSocket**: rooms, members, playback updates, chat.
-- **HTTP**: health, **diagnostic ingest** (`server/diag-upload.js`), **diagnostic intelligence** APIs (`server/diag-intel-http.js`) — cases, clusters, search, regression, **AI brief** (`server/diag-ai-brief.js`), **knowledge** table for cumulative briefs (`server/diag-intel-knowledge.js`).
+- **HTTP**: health, **diagnostic ingest** (`server/diag-upload.js`), **diagnostic intelligence** APIs (`server/diag-intel-http.js`) — cases, clusters, search, regression, **IntelPro report generation** (`server/diag-ai-brief.js`), **knowledge** table for cumulative reports (`server/diag-intel-knowledge.js`).
 - **Intel pipeline** (`server/diag-intelligence.js`) — normalized metrics, **cluster signatures**, **explainCase**, **recommendations**, **regressionCompare** (no raw page HTML in DB).
 
 ### Key paths (when suggesting code changes)
@@ -46,7 +46,7 @@ _Hand-maintained. Update when behavior or architecture changes meaningfully. The
 | Signaling + diag HTTP | `server.js`, `server/diag-*.js` |
 
 ### Diagnostics & “recordings”
-- Engineers run **recording** sessions (profiler + sync metrics); uploads create rows in **Supabase** (`diag_cases`, `diag_case_clusters`, etc.). The **AI assistant** and **explorer** read **aggregates only** (summaries, tags, normalized numbers).
+- Engineers run **recording** sessions (profiler + sync metrics); uploads create rows in **Supabase** (`diag_cases`, `diag_case_clusters`, etc.). **IntelPro** and the **explorer** read **aggregates only** (summaries, tags, normalized numbers).
 - **Knowledge table** (`diag_intel_knowledge`) stores **past AI/manual briefs** so each new analysis can **build on previous conclusions**.
 
 ### Build

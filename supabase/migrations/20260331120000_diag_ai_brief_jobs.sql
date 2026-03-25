@@ -1,4 +1,4 @@
--- Async AI brief jobs so diagnostic analysis can run out-of-band.
+-- Async IntelPro jobs so diagnostic analysis can run out-of-band.
 
 create table if not exists public.diag_ai_brief_jobs (
   id uuid primary key default gen_random_uuid(),
@@ -41,6 +41,6 @@ create index if not exists diag_ai_brief_jobs_source_report_idx
   on public.diag_ai_brief_jobs (source_report_id);
 
 comment on table public.diag_ai_brief_jobs is
-  'Queued and completed AI brief jobs for always-on diagnostic analysis.';
+  'Queued and completed IntelPro jobs for always-on diagnostic analysis.';
 
 grant select, insert, update, delete on table public.diag_ai_brief_jobs to service_role;

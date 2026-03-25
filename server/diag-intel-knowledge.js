@@ -1,5 +1,5 @@
 /**
- * Persistent "memory" for diagnostic AI briefs — prior runs are reinjected into new prompts.
+ * Persistent "memory" for IntelPro reports — prior runs are reinjected into new prompts.
  */
 
 const DEFAULT_LEARNING_LIMIT = 14;

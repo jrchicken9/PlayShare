@@ -1,5 +1,5 @@
 /**
- * AI-assisted briefs from diagnostic intelligence aggregates.
+ * IntelPro reports from diagnostic intelligence aggregates.
  * Uses OpenAI-compatible POST /v1/chat/completions when PLAYSHARE_DIAG_AI_API_KEY is set.
  */
 
@@ -10,7 +10,7 @@ const { EXTENSION_PRIMER_MARKDOWN, EXTENSION_PRIMER_VERSION } = require('./plays
 const DEFAULT_MODEL = 'gpt-4o-mini';
 const MAX_USER_JSON_CHARS = 72000;
 
-/** Explorer can send a per-session key (header or JSON body) when Railway has no LLM env. */
+/** Explorer can send a per-session key (header or JSON body) when Railway has no IntelPro LLM env. */
 function readClientAiApiKey(req) {
   if (!req || !req.headers || typeof req.headers !== 'object') return '';
   const raw = req.headers['x-playshare-diag-ai-key'];
