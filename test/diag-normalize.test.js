@@ -115,6 +115,36 @@ function run() {
   assert.strictEqual(failPrime.summary.prime_site_debug_summary.capture_failed, true);
   assert.ok(typeof failPrime.summary.prime_site_debug_summary.capture_error_token === 'string');
 
+  const marked = normalizeDiagnosticReport({
+    payload: {
+      extension: {
+        platform: { key: 'prime' },
+        room: { memberCount: 2 },
+        videoBuffering: {},
+        extensionOps: {},
+        sync: { events: [] },
+        analytics: { flags: [] },
+        diagSynopsisCodes: ['export_data_truncated'],
+        timing: {}
+      },
+      videoPlayerProfiler: {
+        events: [
+          { type: 'user_marker', seq: 1, code: 'undetected_ad', note: 'undetected_ad' },
+          { type: 'user_marker', seq: 2, code: 'undetected_ad', note: 'undetected_ad' },
+          { type: 'user_marker', seq: 3, code: 'detected_ad', note: 'detected_ad' }
+        ],
+        session: { rollup: { userMarkerCodeCounts: { undetected_ad: 2, detected_ad: 1 } } }
+      },
+      uploadClient: {},
+      anonymization: {},
+      ingestMeta: {}
+    }
+  });
+  assert.strictEqual(marked.summary.user_marker_code_counts.undetected_ad, 2);
+  assert.ok(marked.derived_tags.includes('marker_undetected_ad'));
+  assert.ok((marked.summary.diag_synopsis_codes || []).includes('undetected_ad'));
+  assert.ok((marked.summary.diag_synopsis_codes || []).includes('export_data_truncated'));
+
   console.log('diag-normalize.test.js: all passed');
 }
 

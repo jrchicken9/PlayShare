@@ -1026,6 +1026,25 @@
     return payload;
   }
 
+  // content/src/diagnostics/recorder-marker-presets.js
+  var DIAG_RECORDER_MARKER_PRESETS = [
+    { code: "detected_ad", label: "Detected ad", hint: "Extension/player cues match what you see" },
+    { code: "undetected_ad", label: "Ad visible, missed detection", hint: "You see an ad; extension likely did not" },
+    { code: "late_ad_detection", label: "Late ad detection", hint: "Ad state lagged vs on-screen ad" },
+    { code: "sync_desync_observed", label: "Sync / drift issue", hint: "Felt out of sync with room" },
+    { code: "buffering_or_stall_observed", label: "Buffering / stall", hint: "Long spinner or frozen buffer" },
+    { code: "playback_frozen_or_unresponsive", label: "Playback frozen", hint: "UI/time not advancing as expected" },
+    { code: "av_desync_observed", label: "Audio / video mismatch", hint: "Lip-sync or track drift" },
+    { code: "control_or_drm_issue", label: "Controls / DRM error", hint: "Scrubber, black screen, media error" }
+  ];
+  var PRESET_CODES = new Set(DIAG_RECORDER_MARKER_PRESETS.map((p) => p.code));
+  function validateRecorderMarkerCode(raw) {
+    const s = String(raw || "").trim().toLowerCase().slice(0, 48);
+    if (!s || !/^[a-z][a-z0-9_]*$/.test(s)) return void 0;
+    if (!PRESET_CODES.has(s)) return void 0;
+    return s;
+  }
+
   // content/src/diagnostics/video-player-profiler.js
   var PROFILER_SCHEMA = "playshare.videoPlayerProfiler.v4";
   var LARGE_DISCONTINUITY_SEC = 3.5;
@@ -1239,13 +1258,20 @@
     let longTaskEvents = 0;
     let decisionEvents = 0;
     let derivedTimelineEvents = 0;
+    const userMarkerCodeCounts = {};
     for (const e of evs) {
       const row = e && typeof e === "object" ? (
         /** @type {Record<string, unknown>} */
         e
       ) : null;
       const et = row ? String(row.type || "") : "";
-      if (et === "user_marker") userMarkers++;
+      if (et === "user_marker") {
+        userMarkers++;
+        const c = row && typeof row.code === "string" ? String(row.code).trim().toLowerCase().slice(0, 48) : "";
+        if (c && /^[a-z][a-z0-9_]*$/.test(c)) {
+          userMarkerCodeCounts[c] = (userMarkerCodeCounts[c] || 0) + 1;
+        }
+      }
       if (et === "video_element_rebound") rebounds++;
       if (et === "current_src_changed") srcChanges++;
       if (et === "performance_longtask") longTaskEvents++;
@@ -1267,7 +1293,8 @@
       currentSrcChanges: srcChanges,
       performanceLongTaskEvents: longTaskEvents,
       decisionEvents,
-      derivedTimelineEvents
+      derivedTimelineEvents,
+      userMarkerCodeCounts: Object.keys(userMarkerCodeCounts).length ? userMarkerCodeCounts : void 0
     };
   }
   function captureEnvironmentSnapshot() {
@@ -1891,7 +1918,7 @@
       null
     );
     let snapshotEnrichContext = (
-      /** @type {{ userMarker?: boolean, seq?: number, note?: string }|null} */
+      /** @type {{ userMarker?: boolean, seq?: number, note?: string, code?: string }|null} */
       null
     );
     let snapshotTimerId = null;
@@ -2563,15 +2590,36 @@
         if (recording) syncBoundVideo();
       },
       /**
-       * Annotate the timeline (e.g. “ad started”, “sync broke”) — adds an event and an extra snapshot.
-       * @param {string} [note]
+       * Annotate the timeline (e.g. preset ad/sync markers for IntelPro) — adds an event and an extra snapshot.
+       * @param {string|{ code?: string, note?: string }|null|undefined} noteOrOpts — plain note, or `{ code }` from recorder presets plus optional `note`.
        */
-      dropMarker(note) {
+      dropMarker(noteOrOpts) {
         if (!recording) return false;
+        let note = void 0;
+        let code = void 0;
+        if (noteOrOpts != null && typeof noteOrOpts === "object" && !Array.isArray(noteOrOpts)) {
+          const o = (
+            /** @type {{ code?: unknown, note?: unknown }} */
+            noteOrOpts
+          );
+          if (o.code != null && String(o.code).trim() !== "") {
+            code = validateRecorderMarkerCode(o.code);
+          }
+          if (o.note != null && String(o.note).trim() !== "") {
+            note = truncUrl(String(o.note).trim(), 140);
+          }
+        } else if (noteOrOpts != null && String(noteOrOpts).trim() !== "") {
+          note = truncUrl(String(noteOrOpts).trim(), 140);
+        }
         userMarkerSeq += 1;
-        const label = note != null && String(note).trim() !== "" ? truncUrl(String(note).trim(), 140) : `marker_${userMarkerSeq}`;
-        pushEvent({ type: "user_marker", seq: userMarkerSeq, note: label });
-        snapshotEnrichContext = { userMarker: true, seq: userMarkerSeq, note: label };
+        const label = note != null && note !== "" ? note : code != null ? code : `marker_${userMarkerSeq}`;
+        const ev = { type: "user_marker", seq: userMarkerSeq, note: label };
+        if (code) ev.code = code;
+        pushEvent(
+          /** @type {ProfilerEvent} */
+          ev
+        );
+        snapshotEnrichContext = { userMarker: true, seq: userMarkerSeq, note: label, code };
         pushSnapshot();
         return true;
       },
@@ -5721,6 +5769,13 @@
             roomMemberCount: diag.clusterSync.roomMemberCount
           } : null
         };
+        if (ctx?.userMarker) {
+          snap.playShare.userMarker = {
+            seq: ctx.seq ?? null,
+            code: ctx.code != null ? String(ctx.code) : null,
+            note: ctx.note != null && String(ctx.note).trim() !== "" ? String(ctx.note).slice(0, 120) : null
+          };
+        }
       } catch {
         snap.playShare = { readError: true };
       }
@@ -5769,6 +5824,7 @@
           if (ctx?.userMarker) {
             snap.netflixAd.userMarkerSeq = ctx.seq;
             snap.netflixAd.userMarkerNote = ctx.note;
+            snap.netflixAd.userMarkerCode = ctx.code != null ? String(ctx.code) : null;
             snap.netflixAd.domHints = captureNetflixAdProfilerHints(v);
           }
         } catch {
@@ -9866,7 +9922,7 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
           const canStart = !!v;
           if (profilerMarkerBtn) {
             profilerMarkerBtn.disabled = !recording;
-            profilerMarkerBtn.title = recording ? "Add a labeled point in the JSON timeline" : "Start recording first to add markers";
+            profilerMarkerBtn.title = recording ? "Mark a moment (ad/sync/buffer…) — sent with upload for IntelPro" : "Start recording first to add markers";
           }
           if (recToggle && recLabel) {
             recToggle.classList.toggle("ws-diag-compact-rec-active", recording);
@@ -10206,7 +10262,16 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
             </button>
           </div>
           <div class="ws-diag-simple-inline-tools ws-diag-unified-tools">
-            <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerMarker" title="Add a marker while recording">Mark</button>
+            <div class="ws-diag-marker-wrap">
+              <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerMarker" aria-haspopup="true" aria-expanded="false" title="Add an IntelPro marker while recording">Mark…</button>
+              <div class="ws-diag-marker-menu" id="diagMarkerMenu" hidden role="menu" aria-label="Session markers (uploaded with recording)">
+                <div class="ws-diag-marker-menu-hint">What did you notice? Presets are privacy-safe labels for the AI brief.</div>
+                ${DIAG_RECORDER_MARKER_PRESETS.map(
+        (p) => `<button type="button" role="menuitem" class="ws-diag-marker-item" data-recorder-marker="${p.code}">${p.label}</button>`
+      ).join("")}
+                <button type="button" role="menuitem" class="ws-diag-marker-item ws-diag-marker-item-muted" data-recorder-marker-custom>Custom note only…</button>
+              </div>
+            </div>
             <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerClear" title="Discard captured data without saving">Clear</button>
             ${siteSync.key === "prime" ? `<button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm ws-diag-btn-missed-ad diag-prime-missed-ad-btn" title="Prime ad-debug JSON (separate file)">Ad snap</button>` : ""}
           </div>
@@ -10618,13 +10683,57 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
       });
       const diagSyncReset = diagPanel.querySelector("#diagSyncReset");
       if (diagSyncReset) diagSyncReset.addEventListener("click", resetSyncMetrics);
-      diagPanel.querySelector("#diagVideoProfilerMarker")?.addEventListener("click", () => {
-        if (!getVideoProfiler().isRecording()) return;
-        const raw = typeof window !== "undefined" && window.prompt ? window.prompt("Marker label (optional):", "") : "";
-        const note = raw != null ? String(raw).trim() : "";
-        getVideoProfiler().dropMarker(note || void 0);
-        updateDiagnosticOverlay();
-      });
+      (function bindDiagRecorderMarkerMenu() {
+        const panel = diagPanel;
+        if (!panel || panel.dataset.markerMenuBound) return;
+        panel.dataset.markerMenuBound = "1";
+        const btn = panel.querySelector("#diagVideoProfilerMarker");
+        const menu = panel.querySelector("#diagMarkerMenu");
+        if (!btn || !menu) return;
+        function closeMenu() {
+          menu.hidden = true;
+          btn.setAttribute("aria-expanded", "false");
+        }
+        function openMenu() {
+          menu.hidden = false;
+          btn.setAttribute("aria-expanded", "true");
+        }
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (!getVideoProfiler().isRecording()) return;
+          if (menu.hidden) openMenu();
+          else closeMenu();
+        });
+        menu.addEventListener("click", (e) => e.stopPropagation());
+        menu.querySelectorAll("[data-recorder-marker]").forEach((el) => {
+          el.addEventListener("click", () => {
+            const code = el.getAttribute("data-recorder-marker");
+            if (code) getVideoProfiler().dropMarker({ code });
+            closeMenu();
+            updateDiagnosticOverlay();
+          });
+        });
+        const customBtn = menu.querySelector("[data-recorder-marker-custom]");
+        if (customBtn) {
+          customBtn.addEventListener("click", () => {
+            closeMenu();
+            if (!getVideoProfiler().isRecording()) return;
+            const raw = typeof window !== "undefined" && window.prompt ? window.prompt("Short note (optional, no preset code):", "") : "";
+            const note = raw != null ? String(raw).trim() : "";
+            if (note) getVideoProfiler().dropMarker(note);
+            updateDiagnosticOverlay();
+          });
+        }
+        document.addEventListener("click", (ev) => {
+          if (menu.hidden) return;
+          if (ev.target && /** @type {Element} */
+          ev.target.closest && /** @type {Element} */
+          ev.target.closest(".ws-diag-marker-wrap")) {
+            return;
+          }
+          closeMenu();
+        });
+      })();
       diagPanel.querySelector("#diagVideoProfilerClear")?.addEventListener("click", () => {
         clearVideoProfilerSession();
       });
@@ -11411,6 +11520,33 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
         margin-top:4px;
       }
       .ws-diag-unified-tools { margin-top:6px;margin-bottom:0; }
+      .ws-diag-marker-wrap { position:relative; display:inline-block; }
+      .ws-diag-marker-menu {
+        position:absolute; z-index:120;
+        left:0; top:calc(100% + 4px);
+        min-width:min(280px, 92vw);
+        max-height:min(320px, 52vh);
+        overflow-y:auto;
+        padding:8px;
+        border-radius:10px;
+        border:1px solid var(--ws-diag-border);
+        background:var(--ws-diag-bg1);
+        box-shadow:0 8px 28px rgba(0,0,0,0.45);
+      }
+      .ws-diag-marker-menu-hint {
+        font-size:10px; line-height:1.35; color:var(--ws-diag-muted);
+        margin:0 4px 8px;
+      }
+      .ws-diag-marker-item {
+        display:block; width:100%; text-align:left;
+        margin:0 0 4px; padding:8px 10px;
+        border:none; border-radius:8px;
+        font-size:12px; cursor:pointer;
+        color:var(--ws-diag-text);
+        background:rgba(255,255,255,0.04);
+      }
+      .ws-diag-marker-item:hover { background:var(--ws-diag-accent-dim); color:var(--ws-diag-accent); }
+      .ws-diag-marker-item-muted { opacity:0.92; font-size:11px; }
       .ws-diag-report-divider {
         height:1px;
         margin:12px 0 8px;

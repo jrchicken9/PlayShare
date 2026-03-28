@@ -10,6 +10,8 @@
  * session `progressionQuality` rollup — observer-only; no sync control logic here.
  */
 
+import { validateRecorderMarkerCode } from './recorder-marker-presets.js';
+
 /** @typedef {{ t: number, type: string, [k: string]: unknown }} ProfilerEvent */
 
 const PROFILER_SCHEMA = 'playshare.videoPlayerProfiler.v4';
@@ -255,10 +257,18 @@ function computeSessionRollup(snaps, evs) {
   let longTaskEvents = 0;
   let decisionEvents = 0;
   let derivedTimelineEvents = 0;
+  /** @type {Record<string, number>} */
+  const userMarkerCodeCounts = {};
   for (const e of evs) {
     const row = e && typeof e === 'object' ? /** @type {Record<string, unknown>} */ (e) : null;
     const et = row ? String(row.type || '') : '';
-    if (et === 'user_marker') userMarkers++;
+    if (et === 'user_marker') {
+      userMarkers++;
+      const c = row && typeof row.code === 'string' ? String(row.code).trim().toLowerCase().slice(0, 48) : '';
+      if (c && /^[a-z][a-z0-9_]*$/.test(c)) {
+        userMarkerCodeCounts[c] = (userMarkerCodeCounts[c] || 0) + 1;
+      }
+    }
     if (et === 'video_element_rebound') rebounds++;
     if (et === 'current_src_changed') srcChanges++;
     if (et === 'performance_longtask') longTaskEvents++;
@@ -282,7 +292,8 @@ function computeSessionRollup(snaps, evs) {
     currentSrcChanges: srcChanges,
     performanceLongTaskEvents: longTaskEvents,
     decisionEvents,
-    derivedTimelineEvents
+    derivedTimelineEvents,
+    userMarkerCodeCounts: Object.keys(userMarkerCodeCounts).length ? userMarkerCodeCounts : undefined
   };
 }
 
@@ -977,7 +988,8 @@ export function createVideoPlayerProfiler(opts) {
   let endedAtMs = /** @type {number|null} */ (null);
 
   /** Passed to `enrichSnapshot` for the extra snapshot taken after **Mark moment** (then cleared). */
-  let snapshotEnrichContext = /** @type {{ userMarker?: boolean, seq?: number, note?: string }|null} */ (null);
+  let snapshotEnrichContext =
+    /** @type {{ userMarker?: boolean, seq?: number, note?: string, code?: string }|null} */ (null);
 
   /** @type {ReturnType<typeof setInterval>|null} */
   let snapshotTimerId = null;
@@ -1739,15 +1751,36 @@ export function createVideoPlayerProfiler(opts) {
     },
 
     /**
-     * Annotate the timeline (e.g. “ad started”, “sync broke”) — adds an event and an extra snapshot.
-     * @param {string} [note]
+     * Annotate the timeline (e.g. preset ad/sync markers for IntelPro) — adds an event and an extra snapshot.
+     * @param {string|{ code?: string, note?: string }|null|undefined} noteOrOpts — plain note, or `{ code }` from recorder presets plus optional `note`.
      */
-    dropMarker(note) {
+    dropMarker(noteOrOpts) {
       if (!recording) return false;
+      let note = undefined;
+      let code = undefined;
+      if (noteOrOpts != null && typeof noteOrOpts === 'object' && !Array.isArray(noteOrOpts)) {
+        const o = /** @type {{ code?: unknown, note?: unknown }} */ (noteOrOpts);
+        if (o.code != null && String(o.code).trim() !== '') {
+          code = validateRecorderMarkerCode(o.code);
+        }
+        if (o.note != null && String(o.note).trim() !== '') {
+          note = truncUrl(String(o.note).trim(), 140);
+        }
+      } else if (noteOrOpts != null && String(noteOrOpts).trim() !== '') {
+        note = truncUrl(String(noteOrOpts).trim(), 140);
+      }
       userMarkerSeq += 1;
-      const label = note != null && String(note).trim() !== '' ? truncUrl(String(note).trim(), 140) : `marker_${userMarkerSeq}`;
-      pushEvent({ type: 'user_marker', seq: userMarkerSeq, note: label });
-      snapshotEnrichContext = { userMarker: true, seq: userMarkerSeq, note: label };
+      const label =
+        note != null && note !== ''
+          ? note
+          : code != null
+            ? code
+            : `marker_${userMarkerSeq}`;
+      /** @type {Record<string, unknown>} */
+      const ev = { type: 'user_marker', seq: userMarkerSeq, note: label };
+      if (code) ev.code = code;
+      pushEvent(/** @type {ProfilerEvent} */ (ev));
+      snapshotEnrichContext = { userMarker: true, seq: userMarkerSeq, note: label, code };
       pushSnapshot();
       return true;
     },

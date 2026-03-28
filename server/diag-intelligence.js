@@ -173,6 +173,7 @@ function pickNormalizedMetricsForStorage(summary) {
     'peer_recording_summary',
     'prime_site_debug_summary',
     'diag_synopsis_codes',
+    'user_marker_code_counts',
     'profiler_export_compact',
     'diag_upload_depth',
     'handler_key',

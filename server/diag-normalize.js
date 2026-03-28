@@ -174,6 +174,78 @@ function sanitizeDiagSynopsisCodes(codes) {
   return out.length ? out : null;
 }
 
+/**
+ * @param {unknown} prof — unified.videoPlayerProfiler
+ */
+function userMarkerCodeCountsFromProfiler(prof) {
+  if (!prof || typeof prof !== 'object') return null;
+  const rollup =
+    prof.session && typeof prof.session === 'object' && prof.session.rollup && typeof prof.session.rollup === 'object'
+      ? prof.session.rollup
+      : null;
+  const fromRollup =
+    rollup && rollup.userMarkerCodeCounts && typeof rollup.userMarkerCodeCounts === 'object'
+      ? rollup.userMarkerCodeCounts
+      : null;
+  /** @type {Record<string, number>} */
+  const o = {};
+  if (fromRollup) {
+    for (const [k, v] of Object.entries(fromRollup)) {
+      const t = safeAnalyticsFlagToken(k);
+      if (!t || typeof v !== 'number' || !Number.isFinite(v)) continue;
+      o[t] = Math.min(Math.max(Math.round(v), 0), 999);
+    }
+  }
+  if (!Object.keys(o).length) {
+    const evs = prof.events || [];
+    for (const e of evs) {
+      if (!e || e.type !== 'user_marker' || typeof e.code !== 'string') continue;
+      const t = safeAnalyticsFlagToken(e.code);
+      if (!t) continue;
+      o[t] = (o[t] || 0) + 1;
+    }
+  }
+  return Object.keys(o).length ? o : null;
+}
+
+/**
+ * @param {unknown} extCodesRaw
+ * @param {Record<string, number>|null} userMarkerCounts
+ */
+function mergeDiagSynopsisCodes(extCodesRaw, userMarkerCounts) {
+  const base = sanitizeDiagSynopsisCodes(extCodesRaw) || [];
+  /** @type {Set<string>} */
+  const set = new Set(base);
+  if (userMarkerCounts && typeof userMarkerCounts === 'object') {
+    for (const k of Object.keys(userMarkerCounts)) {
+      const t = safeAnalyticsFlagToken(k);
+      if (t) set.add(t);
+    }
+  }
+  if (!set.size) return null;
+  return [...set].sort().slice(0, 56);
+}
+
+/**
+ * @param {string[]} tags
+ * @param {Record<string, number>|null} markerCounts
+ */
+function mergeMarkerDerivedTags(tags, markerCounts) {
+  if (!markerCounts || typeof markerCounts !== 'object') return [...tags];
+  const out = [...tags];
+  const seen = new Set(out);
+  for (const k of Object.keys(markerCounts)) {
+    if (out.length >= MAX_DERIVED_TAGS) break;
+    const t = safeAnalyticsFlagToken(k);
+    if (!t) continue;
+    const tag = `marker_${t}`;
+    if (seen.has(tag)) continue;
+    seen.add(tag);
+    out.push(tag);
+  }
+  return out;
+}
+
 function countEventsCorrectionReason(events, reason) {
   if (!Array.isArray(events)) return 0;
   return events.filter((e) => e && e.correctionReason === reason).length;
@@ -193,6 +265,7 @@ function normalizeDiagnosticReport(args) {
   const profEvents = prof.events || [];
   const profilerEventCounts = profilerEventTypeHistogram(profEvents);
   const rollup = prof.session?.rollup || {};
+  const userMarkerCodeCounts = userMarkerCodeCountsFromProfiler(prof);
   const prog = prof.session?.summary?.progressionQuality || {};
 
   const latAll = analytics.latencyMsPeerReported?.all || {};
@@ -283,7 +356,8 @@ function normalizeDiagnosticReport(args) {
     data_completeness: sanitizeDataCompletenessForMetrics(ext.dataCompleteness),
     peer_recording_summary: summarizePeerRecordingForMetrics(unified.peerRecordingDiagnostics),
     prime_site_debug_summary: summarizePrimeSiteDebugForMetrics(unified.primeSiteDebug),
-    diag_synopsis_codes: sanitizeDiagSynopsisCodes(ext.diagSynopsisCodes),
+    user_marker_code_counts: userMarkerCodeCounts,
+    diag_synopsis_codes: mergeDiagSynopsisCodes(ext.diagSynopsisCodes, userMarkerCodeCounts),
     profiler_export_compact:
       prof.exportOptions && typeof prof.exportOptions === 'object'
         ? prof.exportOptions.compact === true
@@ -334,7 +408,10 @@ function normalizeDiagnosticReport(args) {
     tags.push('buffering_signal_mild');
   }
 
-  const derived_tags = mergeAnalyticsFlagsIntoDerivedTags([...new Set(tags)], analytics.flags);
+  const derived_tags = mergeAnalyticsFlagsIntoDerivedTags(
+    mergeMarkerDerivedTags([...new Set(tags)], userMarkerCodeCounts),
+    analytics.flags
+  );
 
   return { summary, derived_tags };
 }

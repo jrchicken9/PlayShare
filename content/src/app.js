@@ -18,6 +18,7 @@ import {
   updateDriftEwm
 } from "./diagnostics/helpers.js";
 import { createVideoPlayerProfiler } from "./diagnostics/video-player-profiler.js";
+import { DIAG_RECORDER_MARKER_PRESETS } from "./diagnostics/recorder-marker-presets.js";
 import { getPlaybackProfile, getApplyDelayMs } from "./platform-profiles.js";
 import { getSiteSyncAdapter } from "./sites/site-sync-adapter.js";
 import {
@@ -942,7 +943,7 @@ export function runPlayShareContent() {
    * Per-snapshot sync + site context for video profiler exports (v3).
    * @param {Record<string, unknown>} snap
    * @param {HTMLVideoElement|null} v
-   * @param {{ userMarker?: boolean, seq?: number, note?: string }|null|undefined} [ctx]
+   * @param {{ userMarker?: boolean, seq?: number, note?: string, code?: string }|null|undefined} [ctx]
    */
   function enrichVideoProfilerSnapshot(snap, v, ctx) {
     try {
@@ -1014,6 +1015,16 @@ export function runPlayShareContent() {
             }
           : null
       };
+      if (ctx?.userMarker) {
+        snap.playShare.userMarker = {
+          seq: ctx.seq ?? null,
+          code: ctx.code != null ? String(ctx.code) : null,
+          note:
+            ctx.note != null && String(ctx.note).trim() !== ''
+              ? String(ctx.note).slice(0, 120)
+              : null
+        };
+      }
     } catch {
       snap.playShare = { readError: true };
     }
@@ -1065,6 +1076,7 @@ export function runPlayShareContent() {
         if (ctx?.userMarker) {
           snap.netflixAd.userMarkerSeq = ctx.seq;
           snap.netflixAd.userMarkerNote = ctx.note;
+          snap.netflixAd.userMarkerCode = ctx.code != null ? String(ctx.code) : null;
           snap.netflixAd.domHints = captureNetflixAdProfilerHints(v);
         }
       } catch {
@@ -5462,7 +5474,7 @@ export function runPlayShareContent() {
         if (profilerMarkerBtn) {
           profilerMarkerBtn.disabled = !recording;
           profilerMarkerBtn.title = recording
-            ? 'Add a labeled point in the JSON timeline'
+            ? 'Mark a moment (ad/sync/buffer…) — sent with upload for IntelPro'
             : 'Start recording first to add markers';
         }
 
@@ -5839,7 +5851,17 @@ export function runPlayShareContent() {
             </button>
           </div>
           <div class="ws-diag-simple-inline-tools ws-diag-unified-tools">
-            <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerMarker" title="Add a marker while recording">Mark</button>
+            <div class="ws-diag-marker-wrap">
+              <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerMarker" aria-haspopup="true" aria-expanded="false" title="Add an IntelPro marker while recording">Mark…</button>
+              <div class="ws-diag-marker-menu" id="diagMarkerMenu" hidden role="menu" aria-label="Session markers (uploaded with recording)">
+                <div class="ws-diag-marker-menu-hint">What did you notice? Presets are privacy-safe labels for the AI brief.</div>
+                ${DIAG_RECORDER_MARKER_PRESETS.map(
+                  (p) =>
+                    `<button type="button" role="menuitem" class="ws-diag-marker-item" data-recorder-marker="${p.code}">${p.label}</button>`
+                ).join('')}
+                <button type="button" role="menuitem" class="ws-diag-marker-item ws-diag-marker-item-muted" data-recorder-marker-custom>Custom note only…</button>
+              </div>
+            </div>
             <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerClear" title="Discard captured data without saving">Clear</button>
             ${
               siteSync.key === 'prime'
@@ -6271,13 +6293,58 @@ export function runPlayShareContent() {
     const diagSyncReset = diagPanel.querySelector('#diagSyncReset');
     if (diagSyncReset) diagSyncReset.addEventListener('click', resetSyncMetrics);
 
-    diagPanel.querySelector('#diagVideoProfilerMarker')?.addEventListener('click', () => {
-      if (!getVideoProfiler().isRecording()) return;
-      const raw = typeof window !== 'undefined' && window.prompt ? window.prompt('Marker label (optional):', '') : '';
-      const note = raw != null ? String(raw).trim() : '';
-      getVideoProfiler().dropMarker(note || undefined);
-      updateDiagnosticOverlay();
-    });
+    (function bindDiagRecorderMarkerMenu() {
+      const panel = diagPanel;
+      if (!panel || panel.dataset.markerMenuBound) return;
+      panel.dataset.markerMenuBound = '1';
+      const btn = panel.querySelector('#diagVideoProfilerMarker');
+      const menu = panel.querySelector('#diagMarkerMenu');
+      if (!btn || !menu) return;
+      function closeMenu() {
+        menu.hidden = true;
+        btn.setAttribute('aria-expanded', 'false');
+      }
+      function openMenu() {
+        menu.hidden = false;
+        btn.setAttribute('aria-expanded', 'true');
+      }
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!getVideoProfiler().isRecording()) return;
+        if (menu.hidden) openMenu();
+        else closeMenu();
+      });
+      menu.addEventListener('click', (e) => e.stopPropagation());
+      menu.querySelectorAll('[data-recorder-marker]').forEach((el) => {
+        el.addEventListener('click', () => {
+          const code = el.getAttribute('data-recorder-marker');
+          if (code) getVideoProfiler().dropMarker({ code });
+          closeMenu();
+          updateDiagnosticOverlay();
+        });
+      });
+      const customBtn = menu.querySelector('[data-recorder-marker-custom]');
+      if (customBtn) {
+        customBtn.addEventListener('click', () => {
+          closeMenu();
+          if (!getVideoProfiler().isRecording()) return;
+          const raw =
+            typeof window !== 'undefined' && window.prompt
+              ? window.prompt('Short note (optional, no preset code):', '')
+              : '';
+          const note = raw != null ? String(raw).trim() : '';
+          if (note) getVideoProfiler().dropMarker(note);
+          updateDiagnosticOverlay();
+        });
+      }
+      document.addEventListener('click', (ev) => {
+        if (menu.hidden) return;
+        if (ev.target && /** @type {Element} */ (ev.target).closest && /** @type {Element} */ (ev.target).closest('.ws-diag-marker-wrap')) {
+          return;
+        }
+        closeMenu();
+      });
+    })();
     diagPanel.querySelector('#diagVideoProfilerClear')?.addEventListener('click', () => {
       clearVideoProfilerSession();
     });
@@ -7066,6 +7133,33 @@ export function runPlayShareContent() {
         margin-top:4px;
       }
       .ws-diag-unified-tools { margin-top:6px;margin-bottom:0; }
+      .ws-diag-marker-wrap { position:relative; display:inline-block; }
+      .ws-diag-marker-menu {
+        position:absolute; z-index:120;
+        left:0; top:calc(100% + 4px);
+        min-width:min(280px, 92vw);
+        max-height:min(320px, 52vh);
+        overflow-y:auto;
+        padding:8px;
+        border-radius:10px;
+        border:1px solid var(--ws-diag-border);
+        background:var(--ws-diag-bg1);
+        box-shadow:0 8px 28px rgba(0,0,0,0.45);
+      }
+      .ws-diag-marker-menu-hint {
+        font-size:10px; line-height:1.35; color:var(--ws-diag-muted);
+        margin:0 4px 8px;
+      }
+      .ws-diag-marker-item {
+        display:block; width:100%; text-align:left;
+        margin:0 0 4px; padding:8px 10px;
+        border:none; border-radius:8px;
+        font-size:12px; cursor:pointer;
+        color:var(--ws-diag-text);
+        background:rgba(255,255,255,0.04);
+      }
+      .ws-diag-marker-item:hover { background:var(--ws-diag-accent-dim); color:var(--ws-diag-accent); }
+      .ws-diag-marker-item-muted { opacity:0.92; font-size:11px; }
       .ws-diag-report-divider {
         height:1px;
         margin:12px 0 8px;
