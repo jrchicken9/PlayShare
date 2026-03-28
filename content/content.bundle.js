@@ -798,6 +798,31 @@
     lines.push(payload.howToUse || "");
     return lines.filter(Boolean).join("\n");
   }
+  function buildDiagSynopsisCodes({ analyticsFlags, memberCount, dataCompleteness, videoAttached, tabHidden }) {
+    const set = /* @__PURE__ */ new Set();
+    const pushCode = (s) => {
+      if (typeof s !== "string") return;
+      const t = s.trim().slice(0, 72);
+      if (!t || !/^[a-z][a-z0-9_]*$/i.test(t)) return;
+      set.add(t);
+    };
+    if (Array.isArray(analyticsFlags)) {
+      for (const f of analyticsFlags) pushCode(f);
+    }
+    if (memberCount != null && Number.isFinite(memberCount) && memberCount <= 1) {
+      set.add("scenario_solo_session");
+    }
+    if (dataCompleteness && dataCompleteness.anyTruncation === true) {
+      set.add("export_data_truncated");
+    }
+    if (videoAttached === false) {
+      set.add("scenario_no_video_attached");
+    }
+    if (tabHidden) {
+      set.add("scenario_tab_hidden_at_export");
+    }
+    return [...set].sort().slice(0, 56);
+  }
   function buildDiagnosticExport({
     diag,
     roomState,
@@ -978,6 +1003,13 @@
       howToUse: "Upload JSON or paste narrativeSummary. v2.5: top “Extension & server connectivity” + extensionOps / serviceWorkerTransport / connectionDetail in JSON. v2.3+: apply denials, messaging failures, WS send drops, buffering, correlationTraceDelivery. Export refreshes RTT + trace. No full URLs/chat.",
       note: 'Redacted for privacy. sessionChronology + dataCompleteness describe how the test was run and what was clipped. When embedded under playshareUnifiedExport, this object is the "extension" slice alongside videoPlayerProfiler and (on Prime) primeSiteDebug.'
     };
+    payload.diagSynopsisCodes = buildDiagSynopsisCodes({
+      analyticsFlags: analytics.flags,
+      memberCount,
+      dataCompleteness,
+      videoAttached: !!videoAttached,
+      tabHidden: !!diag.tabHidden
+    });
     payload.narrativeSummary = buildNarrativeSummary({
       ...payload,
       analytics: payload.analytics,
@@ -9254,7 +9286,11 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
         showToast("Turn on “Allow uploads to my server” first, then try again.");
         return;
       }
-      const payload = await getUnifiedPlayShareExportPayload({ compactProfiler: true });
+      const deepPref = await new Promise(
+        (r) => chrome.storage.local.get(["playshare_diag_upload_deep"], r)
+      );
+      const deepUpload = !!deepPref.playshare_diag_upload_deep;
+      const payload = await getUnifiedPlayShareExportPayload({ compactProfiler: !deepUpload });
       mergeEnrichmentForDiagUpload(payload);
       let ver = "1.0.0";
       try {
@@ -9263,7 +9299,9 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
       }
       payload.uploadClient = {
         extensionVersion: ver,
-        diagnosticReportSchema: DIAGNOSTIC_REPORT_SCHEMA
+        diagnosticReportSchema: DIAGNOSTIC_REPORT_SCHEMA,
+        diagUploadDepth: deepUpload ? "deep" : "standard",
+        profilerCompact: !deepUpload
       };
       const tr = await new Promise((r) => chrome.storage.local.get(["playshare_diag_test_run_id"], r));
       chrome.runtime.sendMessage(
@@ -9557,16 +9595,24 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
       refreshIntelExplorerLink();
       const uploadOpt = diagPanel.querySelector("#diagUploadOptIn");
       const uploadAutoStop = diagPanel.querySelector("#diagUploadAutoStop");
+      const uploadDeep = diagPanel.querySelector("#diagUploadDeepProfile");
       if (uploadOpt && !uploadOpt.dataset.bound) {
         uploadOpt.dataset.bound = "1";
         try {
-          chrome.storage.local.get(["playshare_diag_upload_opt_in", "playshare_diag_auto_upload_on_stop"], (r) => {
-            uploadOpt.checked = !!r.playshare_diag_upload_opt_in;
-            if (uploadAutoStop) {
-              uploadAutoStop.checked = !!r.playshare_diag_auto_upload_on_stop;
-              uploadAutoStop.disabled = !uploadOpt.checked;
+          chrome.storage.local.get(
+            ["playshare_diag_upload_opt_in", "playshare_diag_auto_upload_on_stop", "playshare_diag_upload_deep"],
+            (r) => {
+              uploadOpt.checked = !!r.playshare_diag_upload_opt_in;
+              if (uploadAutoStop) {
+                uploadAutoStop.checked = !!r.playshare_diag_auto_upload_on_stop;
+                uploadAutoStop.disabled = !uploadOpt.checked;
+              }
+              if (uploadDeep) {
+                uploadDeep.checked = !!r.playshare_diag_upload_deep;
+                uploadDeep.disabled = !uploadOpt.checked;
+              }
             }
-          });
+          );
           uploadOpt.addEventListener("change", () => {
             const on = !!uploadOpt.checked;
             chrome.storage.local.set({ playshare_diag_upload_opt_in: on });
@@ -9577,6 +9623,18 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
               }
               uploadAutoStop.disabled = !on;
             }
+            if (uploadDeep) {
+              uploadDeep.disabled = !on;
+            }
+          });
+        } catch {
+        }
+      }
+      if (uploadDeep && !uploadDeep.dataset.bound) {
+        uploadDeep.dataset.bound = "1";
+        try {
+          uploadDeep.addEventListener("change", () => {
+            chrome.storage.local.set({ playshare_diag_upload_deep: !!uploadDeep.checked });
           });
         } catch {
         }
@@ -10155,6 +10213,7 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
           <div class="ws-diag-report-divider ws-diag-unified-divider" aria-hidden="true"></div>
           <label class="ws-diag-simple-check"><input type="checkbox" id="diagUploadOptIn" /><span>Allow uploads to my server</span></label>
           <label class="ws-diag-simple-check"><input type="checkbox" id="diagUploadAutoStop" /><span>Send automatically when I stop recording</span></label>
+          <label class="ws-diag-simple-check"><input type="checkbox" id="diagUploadDeepProfile" /><span>Deep diagnostic upload (richer profiler timeline; larger JSON — stay under server max size)</span></label>
           <div class="ws-diag-upload-token-block">
             <label class="ws-diag-filter-label" for="diagUploadBearer">Upload access secret</label>
             <input type="text" id="diagUploadBearer" class="ws-diag-filter" placeholder="Used once to mint a scoped upload token from your server" autocomplete="off" spellcheck="false" />

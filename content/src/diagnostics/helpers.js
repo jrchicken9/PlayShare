@@ -587,6 +587,44 @@ export function buildNarrativeSummary(payload) {
 }
 
 /**
+ * Enum-like strings for IntelPro (no free-form text). Superset of analytics.flags plus scenario markers.
+ * @param {{
+ *   analyticsFlags?: string[]|null,
+ *   memberCount?: number,
+ *   dataCompleteness?: { anyTruncation?: boolean }|null,
+ *   videoAttached?: boolean,
+ *   tabHidden?: boolean
+ * }} opts
+ * @returns {string[]}
+ */
+export function buildDiagSynopsisCodes({ analyticsFlags, memberCount, dataCompleteness, videoAttached, tabHidden }) {
+  /** @type {Set<string>} */
+  const set = new Set();
+  const pushCode = (s) => {
+    if (typeof s !== 'string') return;
+    const t = s.trim().slice(0, 72);
+    if (!t || !/^[a-z][a-z0-9_]*$/i.test(t)) return;
+    set.add(t);
+  };
+  if (Array.isArray(analyticsFlags)) {
+    for (const f of analyticsFlags) pushCode(f);
+  }
+  if (memberCount != null && Number.isFinite(memberCount) && memberCount <= 1) {
+    set.add('scenario_solo_session');
+  }
+  if (dataCompleteness && dataCompleteness.anyTruncation === true) {
+    set.add('export_data_truncated');
+  }
+  if (videoAttached === false) {
+    set.add('scenario_no_video_attached');
+  }
+  if (tabHidden) {
+    set.add('scenario_tab_hidden_at_export');
+  }
+  return [...set].sort().slice(0, 56);
+}
+
+/**
  * Redacted JSON-safe snapshot + analytics + narrative for upload / paste.
  */
 export function buildDiagnosticExport({
@@ -794,6 +832,14 @@ export function buildDiagnosticExport({
       'Upload JSON or paste narrativeSummary. v2.5: top “Extension & server connectivity” + extensionOps / serviceWorkerTransport / connectionDetail in JSON. v2.3+: apply denials, messaging failures, WS send drops, buffering, correlationTraceDelivery. Export refreshes RTT + trace. No full URLs/chat.',
     note: 'Redacted for privacy. sessionChronology + dataCompleteness describe how the test was run and what was clipped. When embedded under playshareUnifiedExport, this object is the "extension" slice alongside videoPlayerProfiler and (on Prime) primeSiteDebug.'
   };
+
+  payload.diagSynopsisCodes = buildDiagSynopsisCodes({
+    analyticsFlags: analytics.flags,
+    memberCount,
+    dataCompleteness,
+    videoAttached: !!videoAttached,
+    tabHidden: !!diag.tabHidden
+  });
 
   payload.narrativeSummary = buildNarrativeSummary({
     ...payload,

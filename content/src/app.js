@@ -4744,7 +4744,11 @@ export function runPlayShareContent() {
       showToast('Turn on “Allow uploads to my server” first, then try again.');
       return;
     }
-    const payload = await getUnifiedPlayShareExportPayload({ compactProfiler: true });
+    const deepPref = await new Promise((r) =>
+      chrome.storage.local.get(['playshare_diag_upload_deep'], r)
+    );
+    const deepUpload = !!deepPref.playshare_diag_upload_deep;
+    const payload = await getUnifiedPlayShareExportPayload({ compactProfiler: !deepUpload });
     mergeEnrichmentForDiagUpload(payload);
     let ver = '1.0.0';
     try {
@@ -4754,7 +4758,9 @@ export function runPlayShareContent() {
     }
     payload.uploadClient = {
       extensionVersion: ver,
-      diagnosticReportSchema: DIAGNOSTIC_REPORT_SCHEMA
+      diagnosticReportSchema: DIAGNOSTIC_REPORT_SCHEMA,
+      diagUploadDepth: deepUpload ? 'deep' : 'standard',
+      profilerCompact: !deepUpload
     };
     const tr = await new Promise((r) => chrome.storage.local.get(['playshare_diag_test_run_id'], r));
     chrome.runtime.sendMessage(
@@ -5135,16 +5141,24 @@ export function runPlayShareContent() {
 
     const uploadOpt = diagPanel.querySelector('#diagUploadOptIn');
     const uploadAutoStop = diagPanel.querySelector('#diagUploadAutoStop');
+    const uploadDeep = diagPanel.querySelector('#diagUploadDeepProfile');
     if (uploadOpt && !uploadOpt.dataset.bound) {
       uploadOpt.dataset.bound = '1';
       try {
-        chrome.storage.local.get(['playshare_diag_upload_opt_in', 'playshare_diag_auto_upload_on_stop'], (r) => {
-          uploadOpt.checked = !!r.playshare_diag_upload_opt_in;
-          if (uploadAutoStop) {
-            uploadAutoStop.checked = !!r.playshare_diag_auto_upload_on_stop;
-            uploadAutoStop.disabled = !uploadOpt.checked;
+        chrome.storage.local.get(
+          ['playshare_diag_upload_opt_in', 'playshare_diag_auto_upload_on_stop', 'playshare_diag_upload_deep'],
+          (r) => {
+            uploadOpt.checked = !!r.playshare_diag_upload_opt_in;
+            if (uploadAutoStop) {
+              uploadAutoStop.checked = !!r.playshare_diag_auto_upload_on_stop;
+              uploadAutoStop.disabled = !uploadOpt.checked;
+            }
+            if (uploadDeep) {
+              uploadDeep.checked = !!r.playshare_diag_upload_deep;
+              uploadDeep.disabled = !uploadOpt.checked;
+            }
           }
-        });
+        );
         uploadOpt.addEventListener('change', () => {
           const on = !!uploadOpt.checked;
           chrome.storage.local.set({ playshare_diag_upload_opt_in: on });
@@ -5155,6 +5169,19 @@ export function runPlayShareContent() {
             }
             uploadAutoStop.disabled = !on;
           }
+          if (uploadDeep) {
+            uploadDeep.disabled = !on;
+          }
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+    if (uploadDeep && !uploadDeep.dataset.bound) {
+      uploadDeep.dataset.bound = '1';
+      try {
+        uploadDeep.addEventListener('change', () => {
+          chrome.storage.local.set({ playshare_diag_upload_deep: !!uploadDeep.checked });
         });
       } catch {
         /* ignore */
@@ -5823,6 +5850,7 @@ export function runPlayShareContent() {
           <div class="ws-diag-report-divider ws-diag-unified-divider" aria-hidden="true"></div>
           <label class="ws-diag-simple-check"><input type="checkbox" id="diagUploadOptIn" /><span>Allow uploads to my server</span></label>
           <label class="ws-diag-simple-check"><input type="checkbox" id="diagUploadAutoStop" /><span>Send automatically when I stop recording</span></label>
+          <label class="ws-diag-simple-check"><input type="checkbox" id="diagUploadDeepProfile" /><span>Deep diagnostic upload (richer profiler timeline; larger JSON — stay under server max size)</span></label>
           <div class="ws-diag-upload-token-block">
             <label class="ws-diag-filter-label" for="diagUploadBearer">Upload access secret</label>
             <input type="text" id="diagUploadBearer" class="ws-diag-filter" placeholder="Used once to mint a scoped upload token from your server" autocomplete="off" spellcheck="false" />

@@ -292,7 +292,7 @@ const SYSTEM_PROMPT_TASK = `You are a senior engineer helping improve the PlaySh
 
 The **first block** of this system message (above the --- separator) is the **extension architecture primer** — treat it as ground truth for repo layout, purpose, and data flow. If telemetry suggests something that contradicts the primer, prefer the primer for *structure* and explain the conflict.
 
-You receive ONLY privacy-safe aggregates: short case summaries, derived tags, normalized metrics (including optional **profiler_event_counts** histograms), **aggregate_window_stats**, **recent_engineer_feedback**, cluster rollups, rule-based recommendations, and optionally **prior_runs_from_database** — excerpts from earlier successful AI/manual briefs. Those excerpts are cumulative memory from past diagnostic recordings (tests).
+You receive ONLY privacy-safe aggregates: short case summaries, derived tags, normalized metrics (including optional **profiler_event_counts** histograms, **diag_synopsis_codes**, **data_completeness**, **peer_recording_summary**, **prime_site_debug_summary**, **profiler_export_compact**, **diag_upload_depth**), **aggregate_window_stats**, **recent_engineer_feedback**, cluster rollups, rule-based recommendations, and optionally **prior_runs_from_database** — excerpts from earlier successful AI/manual briefs. Those excerpts are cumulative memory from past diagnostic recordings (tests).
 
 When prior_runs_from_database is non-empty:
 - Treat it as institutional knowledge about the extension; **build on it** and call out what changed or what is newly confirmed.
@@ -304,7 +304,7 @@ When prior_runs_from_database is non-empty:
 **recent_engineer_feedback** (from diag_case_feedback) is human triage. When a label applies to the same cluster/symptom, **prefer it** over speculative root causes; cite the label in Themes when relevant.
 
 Your job:
-1. Read the data and infer themes (e.g. buffering vs sync rejects vs ad divergence vs Netflix safety path). Tie claims to **specific metrics, derived_tags, profiler_event_counts, or engineer feedback** when possible; mark generic advice as low-confidence when the window is narrow or homogeneous.
+1. Read the data and infer themes (e.g. buffering vs sync rejects vs ad divergence vs Netflix safety path). Prefer **diag_synopsis_codes**, **data_completeness**, and extension-derived **derived_tags** (merged analytics flags) before inferring; tie claims to **specific metrics, derived_tags, diag_synopsis_codes, profiler_event_counts, peer_recording_summary, prime_site_debug_summary, or engineer feedback** when possible; mark generic advice as low-confidence when the window is narrow or homogeneous.
 2. Propose concrete, actionable extension work: which subsystems to inspect (sync engine, ad detection, site adapters, service worker bridge, profiler).
 3. Produce output the user can paste into Cursor or another coding AI.
 

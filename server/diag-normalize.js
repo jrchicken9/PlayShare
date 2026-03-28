@@ -30,6 +30,150 @@ function profilerEventTypeHistogram(events) {
   return Object.keys(o).length ? o : null;
 }
 
+const MAX_DERIVED_TAGS = 48;
+
+/** @param {unknown} s */
+function safeAnalyticsFlagToken(s) {
+  if (typeof s !== 'string') return null;
+  const t = s.trim().slice(0, 72);
+  if (!t || !/^[a-z][a-z0-9_]*$/i.test(t)) return null;
+  return t;
+}
+
+/**
+ * Numbers/booleans only — extension `dataCompleteness` is already summary-sized.
+ * @param {unknown} dc
+ * @returns {Record<string, number|boolean>|null}
+ */
+function sanitizeDataCompletenessForMetrics(dc) {
+  if (!dc || typeof dc !== 'object') return null;
+  /** @type {Record<string, number|boolean>} */
+  const o = {};
+  for (const [k, v] of Object.entries(dc)) {
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      o[k] = Math.round(Math.min(Math.max(v, -1e9), 1e9));
+    } else if (typeof v === 'boolean') {
+      o[k] = v;
+    }
+  }
+  return Object.keys(o).length ? o : null;
+}
+
+/**
+ * @param {string[]} ruleTags
+ * @param {unknown} flags
+ * @returns {string[]}
+ */
+function mergeAnalyticsFlagsIntoDerivedTags(ruleTags, flags) {
+  const out = [];
+  const seen = new Set();
+  for (const t of ruleTags) {
+    const s = typeof t === 'string' ? t.trim() : '';
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  if (!Array.isArray(flags)) return out;
+  for (const f of flags) {
+    if (out.length >= MAX_DERIVED_TAGS) break;
+    const tok = safeAnalyticsFlagToken(f);
+    if (!tok || seen.has(tok)) continue;
+    seen.add(tok);
+    out.push(tok);
+  }
+  return out;
+}
+
+/** @param {unknown} prd */
+function summarizePeerRecordingForMetrics(prd) {
+  if (!prd || typeof prd !== 'object') return null;
+  const peers = Array.isArray(prd.peers) ? prd.peers : [];
+  if (!peers.length) return null;
+  let sampleRows = 0;
+  let videoTrue = 0;
+  let videoFalse = 0;
+  /** @type {Set<string>} */
+  const platformKeys = new Set();
+  for (const p of peers) {
+    if (!p || typeof p !== 'object') continue;
+    const n = typeof p.sampleCount === 'number' && Number.isFinite(p.sampleCount) ? p.sampleCount : 0;
+    sampleRows += n;
+    const samples = Array.isArray(p.samples) ? p.samples : [];
+    let sliceN = 0;
+    for (const s of samples) {
+      if (sliceN >= 120) break;
+      sliceN++;
+      if (s && typeof s === 'object') {
+        if (s.videoAttached === true) videoTrue++;
+        else if (s.videoAttached === false) videoFalse++;
+        const pk = s.platform && typeof s.platform === 'object' && typeof s.platform.key === 'string' ? s.platform.key : null;
+        if (pk) platformKeys.add(String(pk).slice(0, 32));
+      }
+    }
+  }
+  return {
+    peer_count: peers.length,
+    sample_rows_total: sampleRows,
+    collector_recording: prd.collectorRecording === true,
+    sample_video_attached_true: videoTrue,
+    sample_video_attached_false: videoFalse,
+    distinct_peer_platform_keys: platformKeys.size
+  };
+}
+
+/** @param {unknown} psd */
+function summarizePrimeSiteDebugForMetrics(psd) {
+  if (!psd || typeof psd !== 'object') return null;
+  if (typeof psd.captureError === 'string' && psd.captureError.trim()) {
+    const raw = psd.captureError.trim().slice(0, 200);
+    const capture_error_token = raw
+      .replace(/[^\w.:+/-]/g, '_')
+      .replace(/_+/g, '_')
+      .slice(0, 96);
+    return {
+      capture_failed: true,
+      capture_error_token: capture_error_token || 'unknown'
+    };
+  }
+  const ext = psd.extension && typeof psd.extension === 'object' ? psd.extension : {};
+  const pad = psd.primeAdDetection && typeof psd.primeAdDetection === 'object' ? psd.primeAdDetection : {};
+  const ch = pad.channels && typeof pad.channels === 'object' ? pad.channels : {};
+  const frame = psd.frameCapture && typeof psd.frameCapture === 'object' ? psd.frameCapture : {};
+  const notes = Array.isArray(psd.syncDebugNotes) ? psd.syncDebugNotes : [];
+  let adChTrue = 0;
+  for (const k of ['adCountdownUi', 'adTimerUi', 'playerAdControls', 'mediaSession']) {
+    if (ch[k] === true) adChTrue++;
+  }
+  const vc = Array.isArray(psd.videoCandidates) ? Math.min(psd.videoCandidates.length, 24) : null;
+  return {
+    kind: typeof psd.kind === 'string' ? psd.kind.slice(0, 64) : null,
+    in_room: ext.inRoom === true,
+    is_host: ext.isHost === true,
+    local_ad_break_active: ext.localAdBreakActive === true,
+    ad_detection_score: typeof pad.score === 'number' && Number.isFinite(pad.score) ? pad.score : null,
+    ad_channel_signals_true: adChTrue,
+    sync_debug_note_count: Math.min(notes.length, 50),
+    frame_capture_attempted: frame.attempted === true,
+    video_candidate_count: vc,
+    multi_user_sync_present: psd.multiUserSync != null && typeof psd.multiUserSync === 'object'
+  };
+}
+
+/** @param {unknown} codes */
+function sanitizeDiagSynopsisCodes(codes) {
+  if (!Array.isArray(codes)) return null;
+  const out = [];
+  const seen = new Set();
+  for (const c of codes) {
+    if (out.length >= 56) break;
+    const t = safeAnalyticsFlagToken(c);
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out.length ? out : null;
+}
+
 function countEventsCorrectionReason(events, reason) {
   if (!Array.isArray(events)) return 0;
   return events.filter((e) => e && e.correctionReason === reason).length;
@@ -135,7 +279,23 @@ function normalizeDiagnosticReport(args) {
     converging_reject_count: num(eo.syncDecisionRejectedConverging, 0),
     reconnect_settle_reject_count: num(eo.syncDecisionRejectedReconnectSettle, 0),
     netflix_safety_reject_count: num(eo.syncDecisionNetflixSafetyNoop, 0),
-    profiler_event_counts: profilerEventCounts
+    profiler_event_counts: profilerEventCounts,
+    data_completeness: sanitizeDataCompletenessForMetrics(ext.dataCompleteness),
+    peer_recording_summary: summarizePeerRecordingForMetrics(unified.peerRecordingDiagnostics),
+    prime_site_debug_summary: summarizePrimeSiteDebugForMetrics(unified.primeSiteDebug),
+    diag_synopsis_codes: sanitizeDiagSynopsisCodes(ext.diagSynopsisCodes),
+    profiler_export_compact:
+      prof.exportOptions && typeof prof.exportOptions === 'object'
+        ? prof.exportOptions.compact === true
+          ? true
+          : prof.exportOptions.compact === false
+            ? false
+            : null
+        : null,
+    diag_upload_depth:
+      unified.uploadClient && String(unified.uploadClient.diagUploadDepth || '').toLowerCase() === 'deep'
+        ? 'deep'
+        : 'standard'
   };
 
   summary.sync_apply_reject_total =
@@ -174,7 +334,9 @@ function normalizeDiagnosticReport(args) {
     tags.push('buffering_signal_mild');
   }
 
-  return { summary, derived_tags: [...new Set(tags)] };
+  const derived_tags = mergeAnalyticsFlagsIntoDerivedTags([...new Set(tags)], analytics.flags);
+
+  return { summary, derived_tags };
 }
 
 module.exports = { normalizeDiagnosticReport, profilerEventTypeHistogram };
