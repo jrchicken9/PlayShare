@@ -142,6 +142,8 @@ const POSITION_REPORT_STALE_MS = parseInt(process.env.PLAYSHARE_POSITION_STALE_M
  */
 const CORRECTION_REASON = Object.freeze({
   JOIN: 'join',
+  /** Existing members: pause at shared anchor when a new participant joins (fresh join only, not WS rejoin). */
+  MEMBER_JOIN_SYNC: 'member_join_sync',
   LAGGARD_ANCHOR: 'laggard_anchor',
   AD_MODE_EXIT: 'ad_mode_exit',
   RECONNECT_SYNC: 'reconnect_sync',
@@ -333,6 +335,11 @@ function syncPolicyLog(roomCode, event, detail, diagOnly) {
 }
 
 function broadcastHardSyncState(roomCode, room, wallMs, playing, currentTime, correctionReason) {
+  broadcastHardSyncStateExcept(roomCode, room, wallMs, playing, currentTime, correctionReason, null);
+}
+
+/** Like `broadcastHardSyncState` but omit one socket (e.g. new joiner, who gets `ROOM_JOINED` separately). */
+function broadcastHardSyncStateExcept(roomCode, room, wallMs, playing, currentTime, correctionReason, excludeWs) {
   const computedAt = Date.now();
   room.state = {
     playing: !!playing,
@@ -341,7 +348,7 @@ function broadcastHardSyncState(roomCode, room, wallMs, playing, currentTime, co
   };
   room.lastHardCorrectionAt = wallMs;
   const sentAt = Date.now();
-  broadcastAll(roomCode, {
+  const payload = {
     type: 'SYNC_STATE',
     state: {
       playing: !!playing,
@@ -351,7 +358,9 @@ function broadcastHardSyncState(roomCode, room, wallMs, playing, currentTime, co
       syncKind: 'hard',
       correctionReason: correctionReason || null
     }
-  });
+  };
+  if (excludeWs) broadcast(roomCode, payload, excludeWs);
+  else broadcastAll(roomCode, payload);
 }
 
 /**
@@ -1010,24 +1019,45 @@ wss.on('connection', (ws) => {
         room.reconnectSettleUntil = Date.now() + RECONNECT_SETTLE_MS;
         syncPolicyLog(roomCode, 'RECONNECT_SETTLE', { until: room.reconnectSettleUntil });
         const color = assignColor(roomCode);
+        /** Members already in the room before this socket joins (1 = host only, 2+ = group). */
+        const priorMemberCount = room.members.size;
+        const rejoinAfterDrop = msg.rejoinAfterDrop === true;
+        const pauseRoomForJoinSync = priorMemberCount >= 1 && !rejoinAfterDrop;
+
         room.members.set(clientId, { ws, username, color });
         client.roomCode = roomCode;
         client.username = username;
         client.color = color;
 
-        // Compute current state (add elapsed time if playing) — include computedAt for latency compensation
+        const wallMs = Date.now();
+
+        if (pauseRoomForJoinSync) {
+          const elapsed = room.state.playing ? (wallMs - room.state.updatedAt) / 1000 : 0;
+          const anchorTime = room.state.currentTime + elapsed;
+          broadcastHardSyncStateExcept(
+            roomCode,
+            room,
+            wallMs,
+            false,
+            anchorTime,
+            CORRECTION_REASON.MEMBER_JOIN_SYNC,
+            ws
+          );
+          syncPolicyLog(roomCode, 'MEMBER_JOIN_PAUSE_SYNC', { username, anchorTime: +anchorTime.toFixed(2) });
+        }
+
         const computedAt = Date.now();
-        const elapsed = room.state.playing ? (computedAt - room.state.updatedAt) / 1000 : 0;
+        const elapsedJoin = room.state.playing ? (computedAt - room.state.updatedAt) / 1000 : 0;
         const joinState = {
           playing: room.state.playing,
-          currentTime: room.state.currentTime + elapsed,
+          currentTime: room.state.currentTime + elapsedJoin,
           computedAt,
           sentAt: computedAt,
           syncKind: 'hard',
           correctionReason: CORRECTION_REASON.JOIN
         };
 
-        // Send current state to the new joiner
+        // Send current state to the new joiner (paused + anchor if we ran join sync)
         sendTo(ws, {
           type: 'ROOM_JOINED',
           roomCode,
@@ -1052,6 +1082,13 @@ wss.on('connection', (ws) => {
           countdownOnPlay: room.countdownOnPlay,
           members: getMemberList(roomCode)
         }, ws);
+
+        if (pauseRoomForJoinSync) {
+          broadcastAll(roomCode, {
+            type: 'SYSTEM_MSG',
+            text: `📥 ${username} joined — playback paused so everyone matches the same moment`
+          });
+        }
 
         console.log(`[ROOM] ${username} joined: ${roomCode}`);
         break;

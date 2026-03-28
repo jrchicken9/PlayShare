@@ -242,7 +242,8 @@ function connect(onOpen) {
             JSON.stringify({
               type: 'JOIN_ROOM',
               roomCode: roomState.roomCode,
-              username: roomState.username
+              username: roomState.username,
+              rejoinAfterDrop: true
             })
           );
         } else {
@@ -808,7 +809,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     default:
       sendResponse({ ok: false });
   }
-  return true; // keep channel open for async
 });
 
 // Restore state on service worker restart
