@@ -289,6 +289,8 @@ export function runPlayShareContent() {
   let recorderMarkerDashEl = null;
   let recorderMarkerDashPersistTimer = 0;
   let recorderMarkerDashResizeBound = false;
+  /** True if we auto-minimized the analytics panel when the current profiler session started (restore on stop). */
+  let panelMinimizedForRecorderSession = false;
 
   const diag = {
     connectionStatus: 'unknown',
@@ -4880,6 +4882,16 @@ export function runPlayShareContent() {
     diag.peerRecordingSamples.byClient = {};
     getVideoProfiler().start();
     recorderMarkerDashDismissed = false;
+    if (diagPanel && !diag.panelMinimized) {
+      panelMinimizedForRecorderSession = true;
+      diag.panelMinimized = true;
+      diagPanel.classList.add('ws-diag-minimized');
+      try {
+        closeDiagDashModal();
+      } catch {
+        /* ignore */
+      }
+    }
     broadcastProfilerCollectionState(true);
     diagLog('DIAG', { videoProfiler: 'started', peerCollection: true });
     updateDiagnosticOverlay();
@@ -4890,6 +4902,11 @@ export function runPlayShareContent() {
     getVideoProfiler().stop();
     if (wasRec) diag.profilerExportPending = true;
     if (wasRec) broadcastProfilerCollectionState(false);
+    if (panelMinimizedForRecorderSession && diagPanel && diag.panelMinimized) {
+      diag.panelMinimized = false;
+      diagPanel.classList.remove('ws-diag-minimized');
+    }
+    panelMinimizedForRecorderSession = false;
     diagLog('DIAG', { videoProfiler: 'stopped' });
     updateDiagnosticOverlay();
     if (wasRec) void maybeAutoUploadAfterProfilerStop();
@@ -4931,6 +4948,11 @@ export function runPlayShareContent() {
     const wasRec = getVideoProfiler().isRecording();
     getVideoProfiler().clearSession();
     if (wasRec) broadcastProfilerCollectionState(false);
+    if (panelMinimizedForRecorderSession && diagPanel && diag.panelMinimized) {
+      diag.panelMinimized = false;
+      diagPanel.classList.remove('ws-diag-minimized');
+    }
+    panelMinimizedForRecorderSession = false;
     stopPeerRecordingSampleLoop();
     diag.profilerPeerCollection.remoteCollectorClientId = null;
     diag.peerRecordingSamples.byClient = {};
@@ -5903,6 +5925,9 @@ export function runPlayShareContent() {
         <button type="button" class="ws-diag-marker-dash-close" title="Hide bar (show again from Analytics panel)" aria-label="Hide marker bar">×</button>
       </div>
       <p class="ws-diag-marker-dash-hint">Tap a label — fast timestamp for IntelPro</p>
+      <div class="ws-diag-marker-dash-actions">
+        <button type="button" class="ws-diag-marker-dash-stop" data-recorder-marker-stop title="End session (same as Stop in Analytics)">Stop recording</button>
+      </div>
       <div class="ws-diag-marker-dash-grid">
         ${DIAG_RECORDER_MARKER_PRESETS.map(
           (p) =>
@@ -5946,6 +5971,13 @@ export function runPlayShareContent() {
         const note = raw != null ? String(raw).trim() : '';
         if (note) getVideoProfiler().dropMarker(note);
         updateDiagnosticOverlay();
+      });
+    }
+    const stopRecBtn = dash.querySelector('[data-recorder-marker-stop]');
+    if (stopRecBtn) {
+      stopRecBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        stopVideoProfilerSession();
       });
     }
     const closeBtn = dash.querySelector('.ws-diag-marker-dash-close');
@@ -7375,6 +7407,39 @@ export function runPlayShareContent() {
         line-height:1.35;
       }
       .ws-diag-marker-dash-light .ws-diag-marker-dash-hint { color:#64748b; }
+      .ws-diag-marker-dash-actions {
+        padding:8px 10px 0;
+      }
+      .ws-diag-marker-dash-stop {
+        width:100%;
+        margin:0;
+        padding:10px 12px;
+        border:none;
+        border-radius:8px;
+        cursor:pointer;
+        font-size:12px;
+        font-weight:700;
+        letter-spacing:0.03em;
+        text-transform:uppercase;
+        color:#fecaca;
+        background:linear-gradient(165deg, rgba(127,29,29,0.45), rgba(185,28,28,0.35));
+        border:1px solid rgba(248,113,113,0.45);
+        box-shadow:0 2px 12px rgba(0,0,0,0.25);
+      }
+      .ws-diag-marker-dash-stop:hover {
+        background:linear-gradient(165deg, rgba(153,27,27,0.55), rgba(220,38,38,0.4));
+        border-color:rgba(252,165,165,0.55);
+        color:#fff;
+      }
+      .ws-diag-marker-dash-light .ws-diag-marker-dash-stop {
+        color:#991b1b;
+        background:linear-gradient(165deg, rgba(254,226,226,0.95), rgba(254,202,202,0.85));
+        border-color:rgba(185,28,28,0.35);
+      }
+      .ws-diag-marker-dash-light .ws-diag-marker-dash-stop:hover {
+        color:#7f1d1d;
+        background:linear-gradient(165deg, rgba(254,202,202,0.98), rgba(252,165,165,0.9));
+      }
       .ws-diag-marker-dash-grid {
         display:grid;
         grid-template-columns:1fr 1fr;
