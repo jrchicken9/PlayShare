@@ -27,6 +27,10 @@ function playShareIsDevelopmentInstall() {
 
 let ws = null;
 let reconnectTimer = null;
+/** Increments after each close while in a room; reset on successful open (exponential reconnect delay). */
+let wsReconnectBackoffAttempt = 0;
+const WS_RECONNECT_BASE_MS = 3000;
+const WS_RECONNECT_MAX_MS = 25000;
 let heartbeatTimer = null;
 /** Run after WebSocket is OPEN — queued while CONNECTING or during overlapping connect() calls. */
 const wsOpenWaiters = [];
@@ -223,6 +227,7 @@ function connect(onOpen) {
         lastWsOpenedAt = Date.now();
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
+        wsReconnectBackoffAttempt = 0;
         transportStallStartedAt = 0;
         clearTransportStallTimer();
         lastHeartbeatSentAt = Date.now();
@@ -294,10 +299,19 @@ function connect(onOpen) {
 
 function scheduleReconnect() {
   if (reconnectTimer) return;
+  let delayMs = WS_RECONNECT_BASE_MS;
+  if (roomState) {
+    const exp = Math.min(
+      WS_RECONNECT_MAX_MS,
+      WS_RECONNECT_BASE_MS * Math.pow(2, wsReconnectBackoffAttempt)
+    );
+    wsReconnectBackoffAttempt = Math.min(wsReconnectBackoffAttempt + 1, 9);
+    delayMs = exp + Math.floor(Math.random() * 900);
+  }
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     if (roomState) connect();
-  }, 3000);
+  }, delayMs);
 }
 
 function startHeartbeat() {
