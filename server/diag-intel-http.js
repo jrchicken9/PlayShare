@@ -1261,6 +1261,90 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
     .intelpro-card--datapack .intelpro-card__eyebrow {
       color: #94a3b8;
     }
+    .intelpro-datapack-details {
+      margin: 0;
+      border: 0;
+      padding: 0;
+    }
+    .intelpro-datapack-details > summary {
+      list-style: none;
+      cursor: pointer;
+      user-select: none;
+    }
+    .intelpro-datapack-details > summary::-webkit-details-marker {
+      display: none;
+    }
+    .intelpro-datapack-summary {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 14px 16px;
+      border-radius: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      background: rgba(15, 23, 42, 0.45);
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+    .intelpro-datapack-summary:hover {
+      border-color: rgba(56, 189, 248, 0.35);
+      background: rgba(15, 23, 42, 0.62);
+    }
+    .intelpro-datapack-details[open] .intelpro-datapack-summary {
+      border-bottom-left-radius: 0;
+      border-bottom-right-radius: 0;
+      border-bottom-color: transparent;
+    }
+    .intelpro-datapack-summary__caret {
+      flex-shrink: 0;
+      width: 1.5rem;
+      height: 1.5rem;
+      margin-top: 2px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.22);
+      font-size: 11px;
+      color: var(--accent);
+      line-height: 1;
+      transition: transform 0.18s ease;
+    }
+    .intelpro-datapack-details[open] .intelpro-datapack-summary__caret {
+      transform: rotate(90deg);
+    }
+    .intelpro-datapack-summary__text {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+    .intelpro-datapack-summary__title {
+      font-size: 14px;
+      font-weight: 650;
+      color: #e2e8f0;
+      letter-spacing: -0.01em;
+    }
+    .intelpro-datapack-summary__sub {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+    .intelpro-datapack-panel {
+      padding: 0 16px 16px;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-top: none;
+      border-radius: 0 0 12px 12px;
+      background: rgba(15, 23, 42, 0.28);
+    }
+    .intelpro-datapack-panel .intelpro-datapack-lede {
+      margin: 12px 0 10px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #94a3b8;
+    }
+    .intelpro-datapack-panel .intelpro-card__actions {
+      border-top-color: rgba(148, 163, 184, 0.1);
+    }
     .ai-brief-result-host {
       margin-top: 20px;
     }

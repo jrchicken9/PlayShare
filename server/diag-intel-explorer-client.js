@@ -1193,18 +1193,22 @@
 
     if (j.fallback_markdown) {
       parts.push(
-        '<section class="intelpro-card intelpro-card--datapack" aria-labelledby="intelproDatapackHeading">' +
-          '<header class="intelpro-card__head">' +
-          '<div>' +
-          '<p class="intelpro-card__eyebrow" id="intelproDatapackHeading">Diagnostic data pack</p>' +
-          '<p class="intelpro-card__lede">Structured markdown from your telemetry (no LLM required). Paste into Cursor <strong>together with</strong> the short Cursor message above, or use it alone as context.</p>' +
-          '</div></header>' +
+        '<section class="intelpro-card intelpro-card--datapack">' +
+          '<details class="intelpro-datapack-details">' +
+          '<summary class="intelpro-datapack-summary">' +
+          '<span class="intelpro-datapack-summary__caret" aria-hidden="true">▶</span>' +
+          '<span class="intelpro-datapack-summary__text">' +
+          '<span class="intelpro-datapack-summary__title">Diagnostic data pack</span>' +
+          '<span class="intelpro-datapack-summary__sub">Optional — open to view or copy raw markdown for Cursor / other tools (no LLM required).</span>' +
+          '</span></summary>' +
+          '<div class="intelpro-datapack-panel">' +
+          '<p class="intelpro-datapack-lede">Paste into Cursor <strong>together with</strong> the short Cursor message above when you want both the AI brief handoff and the underlying aggregates.</p>' +
           '<label class="intelpro-field-label" for="aiFallbackTa">Markdown</label>' +
           '<textarea id="aiFallbackTa" class="brief-ta brief-ta--intelpro" readonly spellcheck="false"></textarea>' +
           '<div class="intelpro-card__actions">' +
           '<button type="button" class="ghost" id="btnCopyFallback">Copy data pack</button>' +
           '<span id="copyFbHint" class="intelpro-copy-hint path"></span></div>' +
-          '</section>'
+          '</div></details></section>'
       );
     }
 
