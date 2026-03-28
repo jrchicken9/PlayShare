@@ -9341,6 +9341,22 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
         payload.enrichment = { syncConfigSnapshot: { handlerKey: playbackProfile.handlerKey } };
       }
     }
+    function setDiagSendNowUploadState(busy) {
+      const btn = diagPanel && diagPanel.querySelector("#diagUploadAnonymized");
+      if (!btn) return;
+      if (busy) {
+        if (!btn.dataset.sendLabelDefault) btn.dataset.sendLabelDefault = btn.textContent.trim() || "Send now";
+        btn.disabled = true;
+        btn.classList.add("ws-diag-send-now-busy");
+        btn.textContent = "Sending…";
+        btn.setAttribute("aria-busy", "true");
+      } else {
+        btn.disabled = false;
+        btn.classList.remove("ws-diag-send-now-busy");
+        btn.textContent = btn.dataset.sendLabelDefault || "Send now";
+        btn.removeAttribute("aria-busy");
+      }
+    }
     async function uploadAnonymizedDiagnosticExport() {
       const opt = await new Promise((r) => chrome.storage.local.get(["playshare_diag_upload_opt_in"], r));
       if (!opt.playshare_diag_upload_opt_in) {
@@ -9348,73 +9364,90 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
         showToast("Turn on “Allow uploads to my server” first, then try again.");
         return;
       }
-      const deepPref = await new Promise(
-        (r) => chrome.storage.local.get(["playshare_diag_upload_deep"], r)
-      );
-      const deepUpload = !!deepPref.playshare_diag_upload_deep;
-      const payload = await getUnifiedPlayShareExportPayload({ compactProfiler: !deepUpload });
-      mergeEnrichmentForDiagUpload(payload);
-      let ver = "1.0.0";
+      setDiagSendNowUploadState(true);
       try {
-        ver = chrome.runtime.getManifest()?.version || ver;
-      } catch {
-      }
-      payload.uploadClient = {
-        extensionVersion: ver,
-        diagnosticReportSchema: DIAGNOSTIC_REPORT_SCHEMA,
-        diagUploadDepth: deepUpload ? "deep" : "standard",
-        profilerCompact: !deepUpload
-      };
-      const tr = await new Promise((r) => chrome.storage.local.get(["playshare_diag_test_run_id"], r));
-      chrome.runtime.sendMessage(
-        {
-          source: "playshare",
-          type: "DIAG_UPLOAD_UNIFIED",
-          payload,
-          hashSecrets: {
-            roomCode: roomState?.roomCode ?? null,
-            clientId: roomState?.clientId ?? null,
-            username: roomState?.username ?? null
-          },
-          extensionVersion: ver,
-          platformHandlerKey: playbackProfile.handlerKey,
-          diagnosticReportSchema: DIAGNOSTIC_REPORT_SCHEMA,
-          testRunId: tr.playshare_diag_test_run_id || null
-        },
-        (res) => {
-          const le = chrome.runtime.lastError;
-          if (le) {
-            diagLog("ERROR", { message: le.message || "Upload failed", kind: "diag_upload" });
-            showToast("Upload failed (extension bridge).");
-            return;
-          }
-          if (res && res.ok && res.reportId) {
-            diagLog("DIAG_UPLOAD", { ok: true, reportId: res.reportId, persisted: res.persisted });
-            showToast(
-              res.persisted ? `Anonymized report uploaded · ${String(res.reportId).slice(0, 8)}…` : `Report accepted · ${String(res.reportId).slice(0, 8)}… (server storage not configured)`
-            );
-            if (res.persisted === true) resetCapturedDiagnosticSessionAfterUpload();
-          } else {
-            diagLog("ERROR", {
-              message: res?.error || res?.detail || "Upload rejected",
-              status: res?.status,
-              uploadUrl: res?.uploadUrl,
-              kind: "diag_upload"
-            });
-            const st = res?.status;
-            const errCode = res?.error || Array.isArray(res?.reasons) && res.reasons[0] || "";
-            const u404 = st === 404 ? " Server has no POST /diag/upload (deploy latest server) or the signaling URL included a path — use host only, e.g. wss://your.railway.app" : "";
-            const u503 = st === 503 && String(errCode).includes("hash_salt") ? " Set env PLAYSHARE_DIAG_HASH_SALT on the server (16+ random characters) in Railway, then redeploy." : st === 503 ? " Server misconfigured or unavailable (check Railway logs)." : "";
-            const u401 = st === 401 && /unauthorized/i.test(String(errCode)) ? " Refresh the upload access secret in Analytics so the extension can mint a fresh scoped upload token, or remove the upload secret env vars on the server." : "";
-            const u500store = st === 500 && /storage_failed|summary_failed/i.test(String(errCode)) ? " In Supabase SQL editor, run migrations under supabase/migrations (diag_reports_raw, diag_reports_summary, …). Confirm Railway SUPABASE_URL matches that project. See Railway logs for the exact Postgres error." : "";
-            const detailStr = res?.detail != null ? String(res.detail).trim() : "";
-            const detailHint = detailStr.length > 0 ? ` — ${detailStr.slice(0, 140)}${detailStr.length > 140 ? "…" : ""}` : "";
-            showToast(
-              `Upload failed${st ? ` (${st})` : ""}${errCode ? `: ${errCode}` : ""}${detailHint}.${u404}${u503}${u401}${u500store}`
-            );
-          }
+        const deepPref = await new Promise(
+          (r) => chrome.storage.local.get(["playshare_diag_upload_deep"], r)
+        );
+        const deepUpload = !!deepPref.playshare_diag_upload_deep;
+        const payload = await getUnifiedPlayShareExportPayload({ compactProfiler: !deepUpload });
+        mergeEnrichmentForDiagUpload(payload);
+        let ver = "1.0.0";
+        try {
+          ver = chrome.runtime.getManifest()?.version || ver;
+        } catch {
         }
-      );
+        payload.uploadClient = {
+          extensionVersion: ver,
+          diagnosticReportSchema: DIAGNOSTIC_REPORT_SCHEMA,
+          diagUploadDepth: deepUpload ? "deep" : "standard",
+          profilerCompact: !deepUpload
+        };
+        const tr = await new Promise((r) => chrome.storage.local.get(["playshare_diag_test_run_id"], r));
+        await new Promise((resolve) => {
+          chrome.runtime.sendMessage(
+            {
+              source: "playshare",
+              type: "DIAG_UPLOAD_UNIFIED",
+              payload,
+              hashSecrets: {
+                roomCode: roomState?.roomCode ?? null,
+                clientId: roomState?.clientId ?? null,
+                username: roomState?.username ?? null
+              },
+              extensionVersion: ver,
+              platformHandlerKey: playbackProfile.handlerKey,
+              diagnosticReportSchema: DIAGNOSTIC_REPORT_SCHEMA,
+              testRunId: tr.playshare_diag_test_run_id || null
+            },
+            (res) => {
+              try {
+                const le = chrome.runtime.lastError;
+                if (le) {
+                  diagLog("ERROR", { message: le.message || "Upload failed", kind: "diag_upload" });
+                  showToast("Upload failed (extension bridge).");
+                  return;
+                }
+                if (res && res.ok && res.reportId) {
+                  diagLog("DIAG_UPLOAD", { ok: true, reportId: res.reportId, persisted: res.persisted });
+                  showToast(
+                    res.persisted ? `Anonymized report uploaded · ${String(res.reportId).slice(0, 8)}…` : `Report accepted · ${String(res.reportId).slice(0, 8)}… (server storage not configured)`
+                  );
+                  if (res.persisted === true) resetCapturedDiagnosticSessionAfterUpload();
+                } else {
+                  diagLog("ERROR", {
+                    message: res?.error || res?.detail || "Upload rejected",
+                    status: res?.status,
+                    uploadUrl: res?.uploadUrl,
+                    kind: "diag_upload"
+                  });
+                  const st = res?.status;
+                  const errCode = res?.error || Array.isArray(res?.reasons) && res.reasons[0] || "";
+                  const u404 = st === 404 ? " Server has no POST /diag/upload (deploy latest server) or the signaling URL included a path — use host only, e.g. wss://your.railway.app" : "";
+                  const u503 = st === 503 && String(errCode).includes("hash_salt") ? " Set env PLAYSHARE_DIAG_HASH_SALT on the server (16+ random characters) in Railway, then redeploy." : st === 503 ? " Server misconfigured or unavailable (check Railway logs)." : "";
+                  const u401 = st === 401 && /unauthorized/i.test(String(errCode)) ? " Refresh the upload access secret in Analytics so the extension can mint a fresh scoped upload token, or remove the upload secret env vars on the server." : "";
+                  const u500store = st === 500 && /storage_failed|summary_failed/i.test(String(errCode)) ? " In Supabase SQL editor, run migrations under supabase/migrations (diag_reports_raw, diag_reports_summary, …). Confirm Railway SUPABASE_URL matches that project. See Railway logs for the exact Postgres error." : "";
+                  const detailStr = res?.detail != null ? String(res.detail).trim() : "";
+                  const detailHint = detailStr.length > 0 ? ` — ${detailStr.slice(0, 140)}${detailStr.length > 140 ? "…" : ""}` : "";
+                  showToast(
+                    `Upload failed${st ? ` (${st})` : ""}${errCode ? `: ${errCode}` : ""}${detailHint}.${u404}${u503}${u401}${u500store}`
+                  );
+                }
+              } finally {
+                resolve();
+              }
+            }
+          );
+        });
+      } catch (e) {
+        diagLog("ERROR", {
+          message: e && e.message ? e.message : String(e),
+          kind: "diag_upload"
+        });
+        showToast("Could not prepare upload — try again or check the console.");
+      } finally {
+        setDiagSendNowUploadState(false);
+      }
     }
     function buildVideoProfilerPageMeta() {
       let ver = "1.0.0";
@@ -11863,6 +11896,32 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
       }
       .ws-diag-unified-divider { margin:8px 0 6px; }
       .ws-diag-unified-send-btn { margin-top:8px; }
+      @keyframes ws-diag-send-spin {
+        to { transform: rotate(360deg); }
+      }
+      .ws-diag-send-now-busy {
+        position:relative;
+        padding-left:34px !important;
+        pointer-events:none;
+        opacity:0.92;
+      }
+      .ws-diag-send-now-busy::before {
+        content:'';
+        position:absolute;
+        left:12px;
+        top:50%;
+        width:14px;
+        height:14px;
+        margin-top:-7px;
+        border:2px solid rgba(255,255,255,0.35);
+        border-top-color:rgba(255,255,255,0.95);
+        border-radius:50%;
+        animation:ws-diag-send-spin 0.7s linear infinite;
+      }
+      .ws-diag-panel.ws-diag-light .ws-diag-send-now-busy::before {
+        border-color:rgba(15,23,42,0.2);
+        border-top-color:rgba(14,116,144,0.85);
+      }
       .ws-diag-intel-url-details { margin-top:8px; }
       .ws-diag-simple-card {
         background:var(--ws-diag-surface);
