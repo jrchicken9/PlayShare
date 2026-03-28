@@ -3080,7 +3080,7 @@ export function runPlayShareContent() {
       text.startsWith(`✓ ${u}'s ad break ended`);
   }
 
-  /** Skip soft drift corrections briefly after <video> waiting/stalled so CDN rebuffer is not fought. */
+  /** Prime only: skip soft drift corrections briefly after <video> waiting/stalled (CDN rebuffer vs aggressiveRemoteSync). */
   const SOFT_SYNC_DEFER_MS_AFTER_BUFFER_MS = 2600;
   function isRecentVideoRebufferingForSoftSyncDefer() {
     const now = Date.now();
@@ -3188,6 +3188,7 @@ export function runPlayShareContent() {
       const crStr =
         state.correctionReason != null ? String(state.correctionReason) : '';
       if (
+        playbackProfile.handlerKey === 'prime' &&
         syncKind === 'soft' &&
         crStr !== syncDecision.CORRECTION_REASONS.HOST_ANCHOR_SOFT &&
         !syncDecision.isHardPriorityRemote({

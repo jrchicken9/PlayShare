@@ -7993,7 +7993,7 @@
           return;
         }
         const crStr = state.correctionReason != null ? String(state.correctionReason) : "";
-        if (syncKind === "soft" && crStr !== syncDecision.CORRECTION_REASONS.HOST_ANCHOR_SOFT && !syncDecision.isHardPriorityRemote({
+        if (playbackProfile.handlerKey === "prime" && syncKind === "soft" && crStr !== syncDecision.CORRECTION_REASONS.HOST_ANCHOR_SOFT && !syncDecision.isHardPriorityRemote({
           syncKind,
           correctionReason: state.correctionReason,
           fromRoomJoin: state.correctionReason === syncDecision.CORRECTION_REASONS.JOIN
