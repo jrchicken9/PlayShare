@@ -3,87 +3,10 @@
  */
 
 const DEFAULT_LEARNING_LIMIT = 14;
-const DEFAULT_PER_ENTRY_MAX_CHARS = 3800;
-const DEFAULT_MAX_INJECT_TOTAL_CHARS = 32000;
+const PER_ENTRY_MAX_CHARS = 3800;
+const MAX_INJECT_TOTAL_CHARS = 32000;
 const DEFAULT_FEEDBACK_LIMIT = 18;
 const FEEDBACK_NOTE_MAX_CHARS = 480;
-
-/** @deprecated use getPerEntryMaxChars() for env-aware cap */
-const PER_ENTRY_MAX_CHARS = DEFAULT_PER_ENTRY_MAX_CHARS;
-
-function getPriorLearningPromptMode() {
-  return String(process.env.PLAYSHARE_DIAG_PRIOR_LEARNING_PROMPT_MODE || 'full')
-    .trim()
-    .toLowerCase();
-}
-
-function getPerEntryMaxChars() {
-  const n = parseInt(process.env.PLAYSHARE_DIAG_PRIOR_LEARNING_PER_ENTRY_MAX_CHARS || '', 10);
-  if (Number.isFinite(n) && n >= 200) return Math.min(20000, n);
-  return DEFAULT_PER_ENTRY_MAX_CHARS;
-}
-
-function getMaxInjectTotalChars() {
-  const n = parseInt(process.env.PLAYSHARE_DIAG_PRIOR_LEARNING_MAX_INJECT_CHARS || '', 10);
-  if (Number.isFinite(n) && n >= 500) return Math.min(100000, n);
-  return DEFAULT_MAX_INJECT_TOTAL_CHARS;
-}
-
-function getFallbackHeadChars() {
-  const n = parseInt(process.env.PLAYSHARE_DIAG_PRIOR_LEARNING_FALLBACK_MAX_CHARS || '', 10);
-  if (Number.isFinite(n) && n >= 200) return Math.min(8000, n);
-  return 1200;
-}
-
-/**
- * @param {string[]} lines
- * @param {RegExp} headingLineRegex — anchored line match, e.g. /^##\s+Executive summary\s*$/i
- */
-function sliceSingleMarkdownSection(lines, headingLineRegex) {
-  let start = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (headingLineRegex.test(lines[i].trim())) {
-      start = i;
-      break;
-    }
-  }
-  if (start < 0) return '';
-  const out = [];
-  for (let i = start; i < lines.length; i++) {
-    const line = lines[i];
-    if (i > start && /^##\s+/.test(line)) break;
-    out.push(line);
-  }
-  return out.join('\n').trim();
-}
-
-/**
- * Narrow stored IntelPro markdown before putting it in the model context (no extra LLM call).
- * Modes: full | exec_summary | exec_summary_themes (via PLAYSHARE_DIAG_PRIOR_LEARNING_PROMPT_MODE).
- * @param {string} fullMd
- * @param {string} [modeOverride]
- */
-function narrowPriorLearningMarkdownForPrompt(fullMd, modeOverride) {
-  const md = String(fullMd || '').trim();
-  if (!md) return '';
-  const mode = (modeOverride || getPriorLearningPromptMode()).toLowerCase();
-  if (mode === 'full' || mode === '') return md;
-
-  const lines = md.split(/\r?\n/);
-  const exec = sliceSingleMarkdownSection(lines, /^##\s+executive\s+summary\s*$/i);
-  if (!exec) {
-    const cap = getFallbackHeadChars();
-    return md.length <= cap ? md : `${md.slice(0, cap)}\n…(truncated — no "## Executive summary" section in saved digest)`;
-  }
-  if (mode === 'exec_summary' || mode === 'compact') return exec;
-
-  if (mode === 'exec_summary_themes') {
-    const themes = sliceSingleMarkdownSection(lines, /^##\s+themes\b/i);
-    return themes ? `${exec}\n\n${themes}` : exec;
-  }
-
-  return exec;
-}
 
 /**
  * Recent human labels on cases/clusters — ground IntelPro in known triage outcomes.
@@ -133,20 +56,16 @@ async function fetchPriorLearningsForPrompt(supabase, options = {}) {
     .limit(limit);
   if (error) throw error;
 
-  const perEntryMax = getPerEntryMaxChars();
-  const maxInject = getMaxInjectTotalChars();
-  const promptMode = getPriorLearningPromptMode();
-
   /** @type {Array<Record<string, unknown>>} */
   const prior_runs_from_database = [];
   let total = 0;
   for (const row of data || []) {
     const md = String(row.digest_markdown || '');
-    let excerpt = narrowPriorLearningMarkdownForPrompt(md, promptMode);
-    if (excerpt.length > perEntryMax) {
-      excerpt = excerpt.slice(0, perEntryMax) + '\n…(truncated for prompt size)';
+    let excerpt = md;
+    if (excerpt.length > PER_ENTRY_MAX_CHARS) {
+      excerpt = excerpt.slice(0, PER_ENTRY_MAX_CHARS) + '\n…(truncated for prompt size)';
     }
-    if (total + excerpt.length > maxInject) break;
+    if (total + excerpt.length > MAX_INJECT_TOTAL_CHARS) break;
     prior_runs_from_database.push({
       saved_at: row.created_at,
       source: row.source,
@@ -236,7 +155,6 @@ module.exports = {
   saveBriefAsLearning,
   listKnowledge,
   getKnowledgeOne,
-  narrowPriorLearningMarkdownForPrompt,
   DEFAULT_LEARNING_LIMIT,
   DEFAULT_FEEDBACK_LIMIT,
   PER_ENTRY_MAX_CHARS
