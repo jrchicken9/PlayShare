@@ -5086,6 +5086,10 @@
     const extensionOpsStore = { ...EXTENSION_OPS_DEFAULTS };
     const messagingStore = { ...MESSAGING_DEFAULTS };
     let diagExportAccumulateActive = () => false;
+    let recorderMarkerDashDismissed = false;
+    let recorderMarkerDashEl = null;
+    let recorderMarkerDashPersistTimer = 0;
+    let recorderMarkerDashResizeBound = false;
     const diag = {
       connectionStatus: "unknown",
       connectionMessage: "",
@@ -8705,6 +8709,7 @@
       const layers = [
         [sidebarFrame, "2147483645"],
         [sidebarToggleBtn, "2147483646"],
+        [recorderMarkerDashEl, "2147483646"],
         [clusterSyncBadge, "2147483630"],
         [primeHudEl, "2147483642"],
         [diagToggleBtn, "2147483643"],
@@ -9434,6 +9439,7 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
       diag.profilerExportPending = false;
       diag.peerRecordingSamples.byClient = {};
       getVideoProfiler().start();
+      recorderMarkerDashDismissed = false;
       broadcastProfilerCollectionState(true);
       diagLog("DIAG", { videoProfiler: "started", peerCollection: true });
       updateDiagnosticOverlay();
@@ -9922,7 +9928,16 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
           const canStart = !!v;
           if (profilerMarkerBtn) {
             profilerMarkerBtn.disabled = !recording;
-            profilerMarkerBtn.title = recording ? "Mark a moment (ad/sync/buffer…) — sent with upload for IntelPro" : "Start recording first to add markers";
+            if (!recording) {
+              profilerMarkerBtn.textContent = "Marker bar";
+              profilerMarkerBtn.title = "Start recording to show the movable on-screen marker bar";
+            } else if (recorderMarkerDashDismissed) {
+              profilerMarkerBtn.textContent = "Show marker bar";
+              profilerMarkerBtn.title = "Show the floating marker bar (drag the header to move)";
+            } else {
+              profilerMarkerBtn.textContent = "Hide marker bar";
+              profilerMarkerBtn.title = "Hide the floating bar; drag its header to move it when visible";
+            }
           }
           if (recToggle && recLabel) {
             recToggle.classList.toggle("ws-diag-compact-rec-active", recording);
@@ -9932,10 +9947,14 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
             recToggle.title = recording ? "Stop recording (may trigger auto-upload to intelligence pipeline)" : !canStart ? "Start playback first — then record" : "Start profiler recording for export + optional server intelligence";
           }
         } catch {
-          if (profilerMarkerBtn) profilerMarkerBtn.disabled = true;
+          if (profilerMarkerBtn) {
+            profilerMarkerBtn.disabled = true;
+            profilerMarkerBtn.textContent = "Marker bar";
+          }
           if (recToggle) recToggle.disabled = false;
           if (recLabel) recLabel.textContent = "Record";
         }
+        syncRecorderMarkerDashboard();
         if (findVideoEl) {
           const fv = diag.findVideo;
           findVideoEl.innerHTML = `<div class="ws-diag-row">cache hits: ${fv.cacheReturns} | full scans: ${fv.fullScans} | invalidations: ${fv.invalidations} | attaches: ${fv.videoAttachCount}</div>`;
@@ -10172,6 +10191,195 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
       }
       if (siteSync.key === "prime") syncPrimeTelemetryPolling();
     }
+    function escapeAttrForTitle(s) {
+      return String(s || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+    }
+    function clampRecorderMarkerDashToViewport(el) {
+      if (!el || el.hidden) return;
+      const rect = el.getBoundingClientRect();
+      const pad = 8;
+      let left = rect.left;
+      let top = rect.top;
+      const maxL = window.innerWidth - rect.width - pad;
+      const maxT = window.innerHeight - rect.height - pad;
+      left = Math.max(pad, Math.min(left, maxL));
+      top = Math.max(pad, Math.min(top, maxT));
+      el.style.left = `${left}px`;
+      el.style.top = `${top}px`;
+      el.style.right = "auto";
+      el.style.bottom = "auto";
+    }
+    function schedulePersistRecorderMarkerDashPosition(el) {
+      if (recorderMarkerDashPersistTimer) window.clearTimeout(recorderMarkerDashPersistTimer);
+      recorderMarkerDashPersistTimer = window.setTimeout(() => {
+        recorderMarkerDashPersistTimer = 0;
+        try {
+          const rect = el.getBoundingClientRect();
+          chrome.storage.local.set({
+            playshare_diag_marker_dash_left: Math.round(rect.left),
+            playshare_diag_marker_dash_top: Math.round(rect.top)
+          });
+        } catch {
+        }
+      }, 400);
+    }
+    function applyStoredRecorderMarkerDashPosition(el) {
+      try {
+        chrome.storage.local.get(["playshare_diag_marker_dash_left", "playshare_diag_marker_dash_top"], (r) => {
+          const l = r.playshare_diag_marker_dash_left;
+          const t = r.playshare_diag_marker_dash_top;
+          if (typeof l === "number" && typeof t === "number" && Number.isFinite(l) && Number.isFinite(t)) {
+            el.style.left = `${l}px`;
+            el.style.top = `${t}px`;
+            el.style.right = "auto";
+            el.style.bottom = "auto";
+          } else {
+            el.style.left = "auto";
+            el.style.right = "12px";
+            el.style.top = "72px";
+            el.style.bottom = "auto";
+          }
+          requestAnimationFrame(() => clampRecorderMarkerDashToViewport(el));
+        });
+      } catch {
+        el.style.left = "auto";
+        el.style.right = "12px";
+        el.style.top = "72px";
+        el.style.bottom = "auto";
+      }
+    }
+    function bindRecorderMarkerDashDrag(el) {
+      const head = el.querySelector(".ws-diag-marker-dash-head");
+      if (!head || head.dataset.dragBound) return;
+      head.dataset.dragBound = "1";
+      let dragStartX = 0;
+      let dragStartY = 0;
+      let origLeft = 0;
+      let origTop = 0;
+      function onMove(ev) {
+        const dx = ev.clientX - dragStartX;
+        const dy = ev.clientY - dragStartY;
+        let nl = origLeft + dx;
+        let nt = origTop + dy;
+        const pad = 8;
+        const w = el.offsetWidth;
+        const h = el.offsetHeight;
+        nl = Math.max(pad, Math.min(nl, window.innerWidth - w - pad));
+        nt = Math.max(pad, Math.min(nt, window.innerHeight - h - pad));
+        el.style.left = `${nl}px`;
+        el.style.top = `${nt}px`;
+        el.style.right = "auto";
+        el.style.bottom = "auto";
+      }
+      function onUp() {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        schedulePersistRecorderMarkerDashPosition(el);
+      }
+      head.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return;
+        if (
+          /** @type {Element} */
+          e.target.closest("button")
+        ) return;
+        e.preventDefault();
+        const rect = el.getBoundingClientRect();
+        origLeft = rect.left;
+        origTop = rect.top;
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+        el.style.left = `${origLeft}px`;
+        el.style.top = `${origTop}px`;
+        el.style.right = "auto";
+        el.style.bottom = "auto";
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+      });
+    }
+    function ensureRecorderMarkerDashboard() {
+      if (recorderMarkerDashEl) return recorderMarkerDashEl;
+      const dash = document.createElement("div");
+      dash.id = "diagRecorderMarkerDash";
+      dash.className = "ws-diag-marker-dash";
+      dash.setAttribute("role", "region");
+      dash.setAttribute("aria-label", "Recorder markers for IntelPro");
+      dash.hidden = true;
+      dash.innerHTML = `
+      <div class="ws-diag-marker-dash-head">
+        <span class="ws-diag-marker-dash-drag" aria-hidden="true">⋮⋮</span>
+        <span class="ws-diag-marker-dash-title">Mark event</span>
+        <button type="button" class="ws-diag-marker-dash-close" title="Hide bar (show again from Analytics panel)" aria-label="Hide marker bar">×</button>
+      </div>
+      <p class="ws-diag-marker-dash-hint">Tap a label — fast timestamp for IntelPro</p>
+      <div class="ws-diag-marker-dash-grid">
+        ${DIAG_RECORDER_MARKER_PRESETS.map(
+        (p) => `<button type="button" class="ws-diag-marker-dash-chip" data-recorder-marker="${p.code}" title="${escapeAttrForTitle(
+          p.hint || p.label
+        )}">${p.label}</button>`
+      ).join("")}
+      </div>
+      <button type="button" class="ws-diag-marker-dash-chip ws-diag-marker-dash-chip-muted" data-recorder-marker-custom title="Free-text note only (no preset code)">Custom note…</button>
+    `;
+      document.body.appendChild(dash);
+      try {
+        reparentPlayShareUiForFullscreen();
+      } catch {
+      }
+      if (!recorderMarkerDashResizeBound) {
+        recorderMarkerDashResizeBound = true;
+        window.addEventListener("resize", () => {
+          if (recorderMarkerDashEl && !recorderMarkerDashEl.hidden) {
+            clampRecorderMarkerDashToViewport(recorderMarkerDashEl);
+          }
+        });
+      }
+      bindRecorderMarkerDashDrag(dash);
+      dash.querySelectorAll("[data-recorder-marker]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const code = btn.getAttribute("data-recorder-marker");
+          if (!getVideoProfiler().isRecording()) return;
+          if (code) getVideoProfiler().dropMarker({ code });
+          updateDiagnosticOverlay();
+        });
+      });
+      const customBtn = dash.querySelector("[data-recorder-marker-custom]");
+      if (customBtn) {
+        customBtn.addEventListener("click", () => {
+          if (!getVideoProfiler().isRecording()) return;
+          const raw = typeof window !== "undefined" && window.prompt ? window.prompt("Short note (optional, no preset code):", "") : "";
+          const note = raw != null ? String(raw).trim() : "";
+          if (note) getVideoProfiler().dropMarker(note);
+          updateDiagnosticOverlay();
+        });
+      }
+      const closeBtn = dash.querySelector(".ws-diag-marker-dash-close");
+      if (closeBtn) {
+        closeBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          recorderMarkerDashDismissed = true;
+          syncRecorderMarkerDashboard();
+          updateDiagnosticOverlay();
+        });
+      }
+      recorderMarkerDashEl = /** @type {HTMLDivElement} */
+      dash;
+      return recorderMarkerDashEl;
+    }
+    function syncRecorderMarkerDashboard() {
+      const el = ensureRecorderMarkerDashboard();
+      el.classList.toggle("ws-diag-marker-dash-light", diag.theme === "light");
+      const recording = getVideoProfiler().isRecording();
+      if (!recording) {
+        el.hidden = true;
+        return;
+      }
+      if (recorderMarkerDashDismissed) {
+        el.hidden = true;
+        return;
+      }
+      el.hidden = false;
+      applyStoredRecorderMarkerDashPosition(el);
+    }
     function mountDeveloperDiagnosticsUi() {
       if (diagToggleBtn) return;
       diagToggleBtn = document.createElement("button");
@@ -10262,16 +10470,7 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
             </button>
           </div>
           <div class="ws-diag-simple-inline-tools ws-diag-unified-tools">
-            <div class="ws-diag-marker-wrap">
-              <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerMarker" aria-haspopup="true" aria-expanded="false" title="Add an IntelPro marker while recording">Mark…</button>
-              <div class="ws-diag-marker-menu" id="diagMarkerMenu" hidden role="menu" aria-label="Session markers (uploaded with recording)">
-                <div class="ws-diag-marker-menu-hint">What did you notice? Presets are privacy-safe labels for the AI brief.</div>
-                ${DIAG_RECORDER_MARKER_PRESETS.map(
-        (p) => `<button type="button" role="menuitem" class="ws-diag-marker-item" data-recorder-marker="${p.code}">${p.label}</button>`
-      ).join("")}
-                <button type="button" role="menuitem" class="ws-diag-marker-item ws-diag-marker-item-muted" data-recorder-marker-custom>Custom note only…</button>
-              </div>
-            </div>
+            <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerMarker" title="Show or hide the floating marker bar while recording">Marker bar</button>
             <button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm" id="diagVideoProfilerClear" title="Discard captured data without saving">Clear</button>
             ${siteSync.key === "prime" ? `<button type="button" class="ws-diag-btn ws-diag-btn-secondary ws-diag-btn-sm ws-diag-btn-missed-ad diag-prime-missed-ad-btn" title="Prime ad-debug JSON (separate file)">Ad snap</button>` : ""}
           </div>
@@ -10683,55 +10882,18 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
       });
       const diagSyncReset = diagPanel.querySelector("#diagSyncReset");
       if (diagSyncReset) diagSyncReset.addEventListener("click", resetSyncMetrics);
-      (function bindDiagRecorderMarkerMenu() {
+      (function bindDiagRecorderMarkerBarToggle() {
         const panel = diagPanel;
-        if (!panel || panel.dataset.markerMenuBound) return;
-        panel.dataset.markerMenuBound = "1";
+        if (!panel || panel.dataset.markerBarBound) return;
+        panel.dataset.markerBarBound = "1";
         const btn = panel.querySelector("#diagVideoProfilerMarker");
-        const menu = panel.querySelector("#diagMarkerMenu");
-        if (!btn || !menu) return;
-        function closeMenu() {
-          menu.hidden = true;
-          btn.setAttribute("aria-expanded", "false");
-        }
-        function openMenu() {
-          menu.hidden = false;
-          btn.setAttribute("aria-expanded", "true");
-        }
+        if (!btn) return;
         btn.addEventListener("click", (e) => {
           e.stopPropagation();
           if (!getVideoProfiler().isRecording()) return;
-          if (menu.hidden) openMenu();
-          else closeMenu();
-        });
-        menu.addEventListener("click", (e) => e.stopPropagation());
-        menu.querySelectorAll("[data-recorder-marker]").forEach((el) => {
-          el.addEventListener("click", () => {
-            const code = el.getAttribute("data-recorder-marker");
-            if (code) getVideoProfiler().dropMarker({ code });
-            closeMenu();
-            updateDiagnosticOverlay();
-          });
-        });
-        const customBtn = menu.querySelector("[data-recorder-marker-custom]");
-        if (customBtn) {
-          customBtn.addEventListener("click", () => {
-            closeMenu();
-            if (!getVideoProfiler().isRecording()) return;
-            const raw = typeof window !== "undefined" && window.prompt ? window.prompt("Short note (optional, no preset code):", "") : "";
-            const note = raw != null ? String(raw).trim() : "";
-            if (note) getVideoProfiler().dropMarker(note);
-            updateDiagnosticOverlay();
-          });
-        }
-        document.addEventListener("click", (ev) => {
-          if (menu.hidden) return;
-          if (ev.target && /** @type {Element} */
-          ev.target.closest && /** @type {Element} */
-          ev.target.closest(".ws-diag-marker-wrap")) {
-            return;
-          }
-          closeMenu();
+          recorderMarkerDashDismissed = !recorderMarkerDashDismissed;
+          syncRecorderMarkerDashboard();
+          updateDiagnosticOverlay();
         });
       })();
       diagPanel.querySelector("#diagVideoProfilerClear")?.addEventListener("click", () => {
@@ -11520,33 +11682,117 @@ Bundled: extension report (${extension.reportSchemaVersion || "?"} — sync metr
         margin-top:4px;
       }
       .ws-diag-unified-tools { margin-top:6px;margin-bottom:0; }
-      .ws-diag-marker-wrap { position:relative; display:inline-block; }
-      .ws-diag-marker-menu {
-        position:absolute; z-index:120;
-        left:0; top:calc(100% + 4px);
-        min-width:min(280px, 92vw);
-        max-height:min(320px, 52vh);
+      .ws-diag-marker-dash {
+        position:fixed;
+        z-index:2147483646;
+        width:min(288px, calc(100vw - 24px));
+        max-height:min(420px, calc(100vh - 24px));
+        overflow-x:hidden;
         overflow-y:auto;
-        padding:8px;
-        border-radius:10px;
-        border:1px solid var(--ws-diag-border);
-        background:var(--ws-diag-bg1);
-        box-shadow:0 8px 28px rgba(0,0,0,0.45);
+        border-radius:12px;
+        border:1px solid rgba(56,189,248,0.22);
+        background:linear-gradient(165deg, rgba(18,21,28,0.98) 0%, rgba(10,12,16,0.99) 100%);
+        box-shadow:0 12px 40px rgba(0,0,0,0.52), 0 0 0 1px rgba(34,211,238,0.08);
+        color:#e8edf4;
+        font-size:12px;
+        line-height:1.35;
+        -webkit-font-smoothing:antialiased;
       }
-      .ws-diag-marker-menu-hint {
-        font-size:10px; line-height:1.35; color:var(--ws-diag-muted);
-        margin:0 4px 8px;
+      .ws-diag-marker-dash-light {
+        border-color:rgba(14,116,144,0.28);
+        background:linear-gradient(165deg, rgba(248,250,252,0.98) 0%, rgba(226,232,240,0.98) 100%);
+        color:#0f172a;
+        box-shadow:0 12px 36px rgba(15,23,42,0.12);
       }
-      .ws-diag-marker-item {
-        display:block; width:100%; text-align:left;
-        margin:0 0 4px; padding:8px 10px;
-        border:none; border-radius:8px;
-        font-size:12px; cursor:pointer;
-        color:var(--ws-diag-text);
-        background:rgba(255,255,255,0.04);
+      .ws-diag-marker-dash-head {
+        display:flex;
+        align-items:center;
+        gap:6px;
+        padding:8px 10px;
+        border-bottom:1px solid rgba(148,163,184,0.14);
+        cursor:grab;
+        user-select:none;
       }
-      .ws-diag-marker-item:hover { background:var(--ws-diag-accent-dim); color:var(--ws-diag-accent); }
-      .ws-diag-marker-item-muted { opacity:0.92; font-size:11px; }
+      .ws-diag-marker-dash-head:active { cursor:grabbing; }
+      .ws-diag-marker-dash-drag {
+        font-size:10px;
+        opacity:0.55;
+        letter-spacing:-1px;
+        flex-shrink:0;
+      }
+      .ws-diag-marker-dash-title {
+        flex:1;
+        font-weight:700;
+        font-size:11px;
+        letter-spacing:0.06em;
+        text-transform:uppercase;
+        color:#94a3b8;
+      }
+      .ws-diag-marker-dash-light .ws-diag-marker-dash-title { color:#475569; }
+      .ws-diag-marker-dash-close {
+        flex-shrink:0;
+        width:26px;height:26px;
+        padding:0;
+        border:none;border-radius:8px;
+        cursor:pointer;
+        font-size:16px;line-height:1;
+        color:#94a3b8;
+        background:rgba(255,255,255,0.06);
+      }
+      .ws-diag-marker-dash-close:hover {
+        background:rgba(248,113,113,0.2);
+        color:#fecaca;
+      }
+      .ws-diag-marker-dash-light .ws-diag-marker-dash-close { color:#64748b; background:rgba(15,23,42,0.06); }
+      .ws-diag-marker-dash-hint {
+        margin:8px 10px 0;
+        font-size:10px;
+        color:#8b95a8;
+        line-height:1.35;
+      }
+      .ws-diag-marker-dash-light .ws-diag-marker-dash-hint { color:#64748b; }
+      .ws-diag-marker-dash-grid {
+        display:grid;
+        grid-template-columns:1fr 1fr;
+        gap:6px;
+        padding:10px 10px 0;
+      }
+      .ws-diag-marker-dash-chip {
+        margin:0;
+        min-height:42px;
+        padding:6px 8px;
+        border:none;
+        border-radius:8px;
+        cursor:pointer;
+        text-align:center;
+        font-size:11px;
+        font-weight:600;
+        color:#e8edf4;
+        background:rgba(255,255,255,0.06);
+        border:1px solid rgba(148,163,184,0.1);
+      }
+      .ws-diag-marker-dash-chip:hover {
+        background:rgba(34,211,238,0.14);
+        border-color:rgba(34,211,238,0.35);
+        color:#67e8f9;
+      }
+      .ws-diag-marker-dash-light .ws-diag-marker-dash-chip {
+        color:#0f172a;
+        background:rgba(255,255,255,0.75);
+        border-color:rgba(148,163,184,0.35);
+      }
+      .ws-diag-marker-dash-light .ws-diag-marker-dash-chip:hover {
+        background:rgba(34,211,238,0.2);
+        border-color:rgba(8,145,178,0.45);
+        color:#0e7490;
+      }
+      .ws-diag-marker-dash-chip-muted {
+        grid-column:1 / -1;
+        margin:8px 10px 2px;
+        font-weight:500;
+        opacity:0.92;
+        min-height:36px;
+      }
       .ws-diag-report-divider {
         height:1px;
         margin:12px 0 8px;
