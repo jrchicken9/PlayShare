@@ -168,6 +168,7 @@ function pickNormalizedMetricsForStorage(summary) {
     'sync_apply_reject_total',
     'progression_max_timeupdate_gap_ms',
     'video_element_rebounds',
+    'profiler_event_counts',
     'handler_key',
     'platform',
     'role',

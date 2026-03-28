@@ -1,5 +1,12 @@
 #!/usr/bin/env node
 
+const path = require('path');
+try {
+  require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+} catch (_) {
+  /* same pattern as server.js */
+}
+
 const { getSupabaseAdmin } = require('../server/diag-upload');
 const { runCliWorker } = require('../server/diag-ai-worker');
 

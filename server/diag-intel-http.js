@@ -654,7 +654,9 @@ async function handleDiagIntel(req, res, hostBase = 'http://127.0.0.1') {
         clusterLimit: normalized.clusterLimit,
         metricsSample: normalized.metricsSample,
         includePriorLearnings: normalized.includePriorLearnings,
-        priorLearningLimit: normalized.priorLearningLimit
+        priorLearningLimit: normalized.priorLearningLimit,
+        includeEngineerFeedback: normalized.includeEngineerFeedback,
+        engineerFeedbackLimit: normalized.engineerFeedbackLimit
       });
       const fallbackMarkdown = buildFallbackMarkdown(context);
 
@@ -1143,6 +1145,125 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
       font-family: ui-monospace, monospace;
       resize: vertical;
     }
+    .intelpro-run-meta {
+      margin-bottom: 14px;
+      padding: 12px 16px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      font-size: 13px;
+      line-height: 1.55;
+      color: #cbd5e1;
+    }
+    .intelpro-card {
+      margin-top: 4px;
+      background: linear-gradient(160deg, rgba(30, 41, 59, 0.5) 0%, var(--surface) 45%);
+      border: 1px solid rgba(148, 163, 184, 0.14);
+      border-radius: 16px;
+      padding: 20px 20px 18px;
+      box-shadow: 0 14px 44px rgba(0, 0, 0, 0.22);
+    }
+    .intelpro-card__head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px 20px;
+      margin-bottom: 14px;
+    }
+    .intelpro-card__eyebrow {
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin: 0 0 8px;
+    }
+    .intelpro-card__lede {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.55;
+      color: #cbd5e1;
+      max-width: 56ch;
+    }
+    .intelpro-model-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.55);
+      border: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .intelpro-model-pill code {
+      color: #e2e8f0;
+      font-size: 12px;
+      background: transparent;
+      padding: 0;
+      border: none;
+    }
+    .intelpro-model-pill__label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--muted);
+    }
+    .intelpro-field-label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--muted);
+      margin: 0 0 8px;
+    }
+    textarea.brief-ta--intelpro {
+      min-height: 280px;
+      background: rgba(15, 23, 42, 0.94);
+      border: 1px solid rgba(56, 189, 248, 0.14);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      line-height: 1.52;
+      border-radius: 12px;
+      padding: 14px 16px;
+    }
+    .intelpro-card__actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px 12px;
+      margin-top: 14px;
+      padding-top: 16px;
+      border-top: 1px solid rgba(148, 163, 184, 0.12);
+    }
+    .intelpro-card__actions .primary {
+      padding: 10px 20px;
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: 10px;
+    }
+    .intelpro-copy-hint {
+      font-size: 12px;
+      color: var(--ok);
+      min-height: 1.2em;
+      flex: 1;
+      min-width: 120px;
+    }
+    .intelpro-card--datapack {
+      margin-top: 20px;
+      background: var(--surface2);
+      border-color: var(--border);
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
+    }
+    .intelpro-card--datapack .intelpro-card__eyebrow {
+      color: #94a3b8;
+    }
+    .ai-brief-result-host {
+      margin-top: 20px;
+    }
     .gate-screen {
       min-height: 100vh;
       display: flex;
@@ -1432,7 +1553,9 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
               <code>HttpOnly</code> session cookie plus a CSRF header for later writes, so the raw secret is not replayed on each AI request.
             </p>
             <p style="margin: 12px 0 0">
-              <strong>OpenAI:</strong> optional; expand below. Leave blank if this host already has an IntelPro-compatible LLM key in env.
+              <strong>IntelPro LLM key:</strong> optional; expand below. Set <code>PLAYSHARE_DIAG_AI_API_KEY</code> or
+              <code>OPENAI_API_KEY</code> in <strong>.env</strong> (local) or <strong>Railway Variables</strong> (deployed)
+              and leave this field empty, or paste a key here. Background IntelPro jobs use the <em>server</em> key only.
             </p>
           </div>
         </details>
@@ -1462,7 +1585,11 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
               aria-describedby="gateErr"
             />
             <p id="gateServerLlmHint" class="muted" style="display: none; margin-top: 10px; font-size: 12px; line-height: 1.45">
-              This host reports an LLM key in its environment — you may leave this field empty for IntelPro.
+              This host has an LLM API key in its environment — leave this field empty; IntelPro will use the server key.
+            </p>
+            <p id="gateNoServerLlmHint" class="muted" style="display: none; margin-top: 10px; font-size: 12px; line-height: 1.45">
+              This host has <strong>no</strong> <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code> — paste a key
+              here <em>or</em> set one in <code>.env</code> / Railway and redeploy so you do not need to paste it again.
             </p>
           </div>
         </details>
@@ -1578,7 +1705,11 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
             IntelPro uses <strong>live data</strong> from diagnostic recordings (<code>diag_cases</code> / clusters). Each successful run can be <strong>saved</strong> into <code>diag_intel_knowledge</code>; the next run automatically includes those excerpts so the tool <strong>accumulates context</strong> about the extension over time.
           </p>
           <p class="muted" style="margin:0 0 10px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);font-size:13px;line-height:1.5">
-            IntelPro runs with the server-side LLM key from Railway <code>PLAYSHARE_DIAG_AI_API_KEY</code> / <code>OPENAI_API_KEY</code>. If you see <strong>IntelPro not configured</strong>, set one of those env vars or use <strong>Data pack only</strong>. <strong>401</strong> on requests now usually means the explorer session expired — use <strong>Change credentials</strong>. No live room is required for IntelPro.
+            IntelPro uses the <strong>server-side</strong> LLM key (<code>PLAYSHARE_DIAG_AI_API_KEY</code> /
+            <code>OPENAI_API_KEY</code> in Railway or <code>.env</code>). Optional: paste a key at unlock for this browser.
+            If you see <strong>IntelPro not configured</strong>, set an env var or use <strong>Data pack only</strong>.
+            <strong>401</strong> usually means the explorer session expired — use <strong>Change credentials</strong>.
+            No live room is required.
           </p>
           <p class="muted" style="margin:0 0 14px;font-size:12px">
             <strong>Supabase:</strong> apply migration <code>20260330120000_diag_intel_knowledge.sql</code>. Optional server env: <code>PLAYSHARE_DIAG_AI_BASE_URL</code>, <code>PLAYSHARE_DIAG_AI_MODEL</code> (default <code>gpt-4o-mini</code>). <strong>Primer:</strong> <code>npm run generate:primer</code> · <code>playshare-extension-primer.static.md</code> / <code>playshare-extension-primer.js</code>.
@@ -1601,7 +1732,7 @@ function explorerHtml(clientJsSrc = '/diag/intel/explorer-client.js') {
             <button type="button" class="primary" id="btnAiBrief">Run IntelPro</button>
             <span id="aiBriefStatus" class="path"></span>
           </div>
-          <div id="aiBriefResult" style="margin-top:16px"></div>
+          <div id="aiBriefResult" class="ai-brief-result-host"></div>
           <h3 class="muted" style="margin:22px 0 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em">Saved learnings</h3>
           <p class="muted" style="margin:0 0 10px;font-size:12px">Append-only history of IntelPro and manual notes. Open loads full markdown.</p>
           <div class="row" style="margin-bottom:10px">

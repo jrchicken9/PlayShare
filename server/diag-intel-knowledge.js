@@ -5,6 +5,41 @@
 const DEFAULT_LEARNING_LIMIT = 14;
 const PER_ENTRY_MAX_CHARS = 3800;
 const MAX_INJECT_TOTAL_CHARS = 32000;
+const DEFAULT_FEEDBACK_LIMIT = 18;
+const FEEDBACK_NOTE_MAX_CHARS = 480;
+
+/**
+ * Recent human labels on cases/clusters — ground IntelPro in known triage outcomes.
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {{ limit?: number }} [options]
+ */
+async function fetchEngineerFeedbackForPrompt(supabase, options = {}) {
+  const limit = Math.min(40, Math.max(0, options.limit != null ? options.limit : DEFAULT_FEEDBACK_LIMIT));
+  if (limit === 0) return [];
+  const { data, error } = await supabase
+    .from('diag_case_feedback')
+    .select('created_at,label,engineer_note,cluster_signature,report_id')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  /** @type {Array<Record<string, unknown>>} */
+  const out = [];
+  for (const row of data || []) {
+    const note = row.engineer_note != null ? String(row.engineer_note).trim() : '';
+    out.push({
+      recorded_at: row.created_at,
+      label: row.label,
+      engineer_note: note
+        ? note.length > FEEDBACK_NOTE_MAX_CHARS
+          ? note.slice(0, FEEDBACK_NOTE_MAX_CHARS) + '…'
+          : note
+        : null,
+      cluster_signature: row.cluster_signature || null,
+      report_id: row.report_id || null
+    });
+  }
+  return out;
+}
 
 /**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
@@ -116,9 +151,11 @@ async function getKnowledgeOne(supabase, id) {
 
 module.exports = {
   fetchPriorLearningsForPrompt,
+  fetchEngineerFeedbackForPrompt,
   saveBriefAsLearning,
   listKnowledge,
   getKnowledgeOne,
   DEFAULT_LEARNING_LIMIT,
+  DEFAULT_FEEDBACK_LIMIT,
   PER_ENTRY_MAX_CHARS
 };

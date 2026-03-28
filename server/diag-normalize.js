@@ -12,6 +12,24 @@ function countProfilerEvents(events, type) {
   return events.filter((e) => e && e.type === type).length;
 }
 
+/**
+ * Privacy-safe histogram of profiler event types (no URLs / custom strings).
+ * @param {unknown[]} events
+ * @returns {Record<string, number>|null}
+ */
+function profilerEventTypeHistogram(events) {
+  if (!Array.isArray(events) || !events.length) return null;
+  /** @type {Record<string, number>} */
+  const o = {};
+  for (const e of events) {
+    if (!e || typeof e !== 'object' || typeof e.type !== 'string') continue;
+    const t = e.type.trim().slice(0, 64);
+    if (!t) continue;
+    o[t] = (o[t] || 0) + 1;
+  }
+  return Object.keys(o).length ? o : null;
+}
+
 function countEventsCorrectionReason(events, reason) {
   if (!Array.isArray(events)) return 0;
   return events.filter((e) => e && e.correctionReason === reason).length;
@@ -29,6 +47,7 @@ function normalizeDiagnosticReport(args) {
   const sw = ext.serviceWorkerTransport || {};
   const prof = unified.videoPlayerProfiler || {};
   const profEvents = prof.events || [];
+  const profilerEventCounts = profilerEventTypeHistogram(profEvents);
   const rollup = prof.session?.rollup || {};
   const prog = prof.session?.summary?.progressionQuality || {};
 
@@ -115,7 +134,8 @@ function normalizeDiagnosticReport(args) {
     cooldown_reject_count: num(eo.syncDecisionRejectedCooldown, 0),
     converging_reject_count: num(eo.syncDecisionRejectedConverging, 0),
     reconnect_settle_reject_count: num(eo.syncDecisionRejectedReconnectSettle, 0),
-    netflix_safety_reject_count: num(eo.syncDecisionNetflixSafetyNoop, 0)
+    netflix_safety_reject_count: num(eo.syncDecisionNetflixSafetyNoop, 0),
+    profiler_event_counts: profilerEventCounts
   };
 
   summary.sync_apply_reject_total =
@@ -150,8 +170,11 @@ function normalizeDiagnosticReport(args) {
   if (num(ext.findVideo?.invalidations, 0) > 15 || num(rollup.videoElementRebounds, 0) > 2) {
     tags.push('likely_video_rebind_issue');
   }
+  if (waiting + stalled > 0 && !tags.includes('likely_buffer_issue')) {
+    tags.push('buffering_signal_mild');
+  }
 
   return { summary, derived_tags: [...new Set(tags)] };
 }
 
-module.exports = { normalizeDiagnosticReport };
+module.exports = { normalizeDiagnosticReport, profilerEventTypeHistogram };

@@ -585,9 +585,16 @@
     .then(function (t) {
       try {
         var j = JSON.parse(t || '{}');
-        if (j && j.ok && j.server_llm_configured) {
-          var gh = $('gateServerLlmHint');
-          if (gh) gh.style.display = 'block';
+        var gh = $('gateServerLlmHint');
+        var gn = $('gateNoServerLlmHint');
+        if (j && j.ok) {
+          if (j.server_llm_configured) {
+            if (gh) gh.style.display = 'block';
+            if (gn) gn.style.display = 'none';
+          } else {
+            if (gh) gh.style.display = 'none';
+            if (gn) gn.style.display = 'block';
+          }
         }
       } catch (eParse) {}
     })
@@ -1186,12 +1193,18 @@
 
     if (j.fallback_markdown) {
       parts.push(
-        '<h3 class="muted" style="margin:16px 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em">Data pack (markdown)</h3>' +
-          '<p class="muted" style="margin:0 0 8px;font-size:12px">Safe to paste into Cursor as context together with the Cursor message.</p>' +
-          '<textarea id="aiFallbackTa" class="brief-ta" readonly></textarea>' +
-          '<div class="row" style="margin-top:8px;align-items:center">' +
+        '<section class="intelpro-card intelpro-card--datapack" aria-labelledby="intelproDatapackHeading">' +
+          '<header class="intelpro-card__head">' +
+          '<div>' +
+          '<p class="intelpro-card__eyebrow" id="intelproDatapackHeading">Diagnostic data pack</p>' +
+          '<p class="intelpro-card__lede">Structured markdown from your telemetry (no LLM required). Paste into Cursor <strong>together with</strong> the short Cursor message above, or use it alone as context.</p>' +
+          '</div></header>' +
+          '<label class="intelpro-field-label" for="aiFallbackTa">Markdown</label>' +
+          '<textarea id="aiFallbackTa" class="brief-ta brief-ta--intelpro" readonly spellcheck="false"></textarea>' +
+          '<div class="intelpro-card__actions">' +
           '<button type="button" class="ghost" id="btnCopyFallback">Copy data pack</button>' +
-          '<span id="copyFbHint" class="path"></span></div>'
+          '<span id="copyFbHint" class="intelpro-copy-hint path"></span></div>' +
+          '</section>'
       );
     }
 
@@ -1200,15 +1213,25 @@
       window.__playshareCursorBrief = cursorMsg;
       window.__playshareAiBriefFull = j.assistant_markdown;
       parts.unshift(
-        '<h3 class="muted" style="margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em">IntelPro report</h3>' +
-          '<p class="muted" style="margin:0 0 8px;font-size:12px">Model: <code>' +
-          esc(j.model || '') +
-          '</code> · Use <strong>Copy Cursor message</strong> for the short paste; the section <code>COPY_PASTE_FOR_CURSOR_AI</code> in the text is the same.</p>' +
-          '<textarea id="aiMainTa" class="brief-ta" readonly></textarea>' +
-          '<div class="row" style="margin-top:8px;align-items:center;flex-wrap:wrap;gap:8px">' +
-          '<button type="button" class="primary" id="btnCopyCursor">Copy Cursor message</button> ' +
+        '<section class="intelpro-card" aria-labelledby="intelproReportHeading">' +
+          '<header class="intelpro-card__head">' +
+          '<div>' +
+          '<p class="intelpro-card__eyebrow" id="intelproReportHeading">IntelPro report</p>' +
+          '<p class="intelpro-card__lede">Read the analysis below. The quick action is <strong>Copy Cursor message</strong> — that grabs only the short prompt inside <code>COPY_PASTE_FOR_CURSOR_AI</code>. Copy the full report if you want the complete markdown.</p>' +
+          '</div>' +
+          '<div class="intelpro-model-pill" title="Model used for this run">' +
+          '<span class="intelpro-model-pill__label">Model</span> ' +
+          '<code>' +
+          esc(j.model || '—') +
+          '</code></div>' +
+          '</header>' +
+          '<label class="intelpro-field-label" for="aiMainTa">Full report</label>' +
+          '<textarea id="aiMainTa" class="brief-ta brief-ta--intelpro" readonly spellcheck="false"></textarea>' +
+          '<div class="intelpro-card__actions">' +
+          '<button type="button" class="primary" id="btnCopyCursor">Copy Cursor message</button>' +
           '<button type="button" class="ghost" id="btnCopyAiFull">Copy full IntelPro report</button>' +
-          '<span id="copyAiHint" class="path"></span></div>'
+          '<span id="copyAiHint" class="intelpro-copy-hint path"></span></div>' +
+          '</section>'
       );
       var metaBits = [];
       if (j.prior_runs_in_prompt != null) {
@@ -1217,12 +1240,11 @@
       if (j.learning_id) {
         metaBits.push('Saved to knowledge table <code class="mono-sm">' + esc(j.learning_id) + '</code> — future runs will use it.');
       }
+      if (j.learning_persist_error) {
+        metaBits.push('<span style="color:#fbbf24">Brief not saved: ' + esc(j.learning_persist_error) + '</span>');
+      }
       if (metaBits.length) {
-        parts.unshift(
-          '<div style="margin-bottom:12px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);font-size:13px;line-height:1.5">' +
-            metaBits.join('<br/>') +
-            '</div>'
-        );
+        parts.unshift('<div class="intelpro-run-meta" role="status">' + metaBits.join('<br/>') + '</div>');
       }
     } else if (j.ok && j.dry_run) {
       window.__playshareDryContext = j.context;

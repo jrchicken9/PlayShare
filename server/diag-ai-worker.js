@@ -34,11 +34,13 @@ function jobOptions(row) {
     focusPlatform: opts.focus_platform ? String(opts.focus_platform).slice(0, 64) : row.focus_platform || null,
     engineerNotes: opts.engineer_notes ? String(opts.engineer_notes).slice(0, 8000) : row.engineer_notes || '',
     includePriorLearnings: opts.include_prior_learnings !== false,
+    includeEngineerFeedback: opts.include_engineer_feedback !== false,
     persistLearning: opts.persist_learning !== false,
     caseLimit: Number.isFinite(opts.case_limit) ? opts.case_limit : undefined,
     clusterLimit: Number.isFinite(opts.cluster_limit) ? opts.cluster_limit : undefined,
     metricsSample: Number.isFinite(opts.metrics_sample) ? opts.metrics_sample : undefined,
-    priorLearningLimit: Number.isFinite(opts.prior_learning_limit) ? opts.prior_learning_limit : undefined
+    priorLearningLimit: Number.isFinite(opts.prior_learning_limit) ? opts.prior_learning_limit : undefined,
+    engineerFeedbackLimit: Number.isFinite(opts.engineer_feedback_limit) ? opts.engineer_feedback_limit : undefined
   };
 }
 
@@ -76,7 +78,9 @@ async function processAiBriefJob(supabase, row, workerId) {
             clusterLimit: options.clusterLimit,
             metricsSample: options.metricsSample,
             includePriorLearnings: options.includePriorLearnings,
-            priorLearningLimit: options.priorLearningLimit
+            includeEngineerFeedback: options.includeEngineerFeedback,
+            priorLearningLimit: options.priorLearningLimit,
+            engineerFeedbackLimit: options.engineerFeedbackLimit
           });
     const fallbackMarkdown = row.fallback_markdown || buildFallbackMarkdown(context);
     const assistantMarkdown = await generateAssistantBrief(cfg, context, options.engineerNotes);

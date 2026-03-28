@@ -17,8 +17,11 @@ function normalizeAiBriefRequest(body = {}) {
   const clusterLimit = body.cluster_limit != null ? parseInt(body.cluster_limit, 10) : undefined;
   const metricsSample = body.metrics_sample != null ? parseInt(body.metrics_sample, 10) : undefined;
   const includePriorLearnings = body.include_prior_learnings !== false;
+  const includeEngineerFeedback = body.include_engineer_feedback !== false;
   const persistLearning = body.persist_learning !== false;
   const priorLearningLimit = body.prior_learning_limit != null ? parseInt(body.prior_learning_limit, 10) : undefined;
+  const engineerFeedbackLimit =
+    body.engineer_feedback_limit != null ? parseInt(body.engineer_feedback_limit, 10) : undefined;
   const bodyLlmKey = body.llm_api_key != null ? String(body.llm_api_key).trim().slice(0, 512) : '';
   return {
     dryRun,
@@ -28,8 +31,10 @@ function normalizeAiBriefRequest(body = {}) {
     clusterLimit: Number.isFinite(clusterLimit) ? clusterLimit : undefined,
     metricsSample: Number.isFinite(metricsSample) ? metricsSample : undefined,
     includePriorLearnings,
+    includeEngineerFeedback,
     persistLearning,
     priorLearningLimit: Number.isFinite(priorLearningLimit) ? priorLearningLimit : undefined,
+    engineerFeedbackLimit: Number.isFinite(engineerFeedbackLimit) ? engineerFeedbackLimit : undefined,
     bodyLlmKey
   };
 }
@@ -39,11 +44,14 @@ function queueRequestOptions(normalized) {
     focus_platform: normalized.focusPlatform,
     engineer_notes: normalized.engineerNotes || null,
     include_prior_learnings: normalized.includePriorLearnings,
+    include_engineer_feedback: normalized.includeEngineerFeedback,
     persist_learning: normalized.persistLearning,
     case_limit: normalized.caseLimit != null ? normalized.caseLimit : null,
     cluster_limit: normalized.clusterLimit != null ? normalized.clusterLimit : null,
     metrics_sample: normalized.metricsSample != null ? normalized.metricsSample : null,
-    prior_learning_limit: normalized.priorLearningLimit != null ? normalized.priorLearningLimit : null
+    prior_learning_limit: normalized.priorLearningLimit != null ? normalized.priorLearningLimit : null,
+    engineer_feedback_limit:
+      normalized.engineerFeedbackLimit != null ? normalized.engineerFeedbackLimit : null
   };
 }
 

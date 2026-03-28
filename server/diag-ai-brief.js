@@ -4,11 +4,53 @@
  */
 
 const { buildRecommendationsFromCases } = require('./diag-intelligence');
-const { fetchPriorLearningsForPrompt } = require('./diag-intel-knowledge');
+const {
+  fetchPriorLearningsForPrompt,
+  fetchEngineerFeedbackForPrompt
+} = require('./diag-intel-knowledge');
 const { EXTENSION_PRIMER_MARKDOWN, EXTENSION_PRIMER_VERSION } = require('./playshare-extension-primer');
 
 const DEFAULT_MODEL = 'gpt-4o-mini';
 const MAX_USER_JSON_CHARS = 72000;
+
+/**
+ * @param {Array<Record<string, unknown>>} cases — raw diag_cases rows (pre-slim)
+ */
+function computeAggregateWindowStats(cases) {
+  const rows = cases || [];
+  const n = rows.length;
+  if (!n) {
+    return {
+      case_count: 0,
+      platform_counts: {},
+      fraction_member_count_lte_1_among_known: null,
+      cases_with_known_member_count: 0
+    };
+  }
+  /** @type {Record<string, number>} */
+  const platform_counts = {};
+  let soloish = 0;
+  let memberKnown = 0;
+  for (const c of rows) {
+    const p = String(c.platform || 'unknown').slice(0, 48);
+    platform_counts[p] = (platform_counts[p] || 0) + 1;
+    const m =
+      c.normalized_metrics && typeof c.normalized_metrics === 'object'
+        ? /** @type {Record<string, unknown>} */ (c.normalized_metrics).member_count
+        : null;
+    if (typeof m === 'number' && Number.isFinite(m)) {
+      memberKnown += 1;
+      if (m <= 1) soloish += 1;
+    }
+  }
+  return {
+    case_count: n,
+    platform_counts,
+    fraction_member_count_lte_1_among_known:
+      memberKnown > 0 ? Math.round((soloish / memberKnown) * 1000) / 1000 : null,
+    cases_with_known_member_count: memberKnown
+  };
+}
 
 /** Explorer can send a per-session key (header or JSON body) when Railway has no IntelPro LLM env. */
 function readClientAiApiKey(req) {
@@ -48,7 +90,9 @@ function getServerDiagAiConfig() {
  *   metricsSample?: number,
  *   focusPlatform?: string | null,
  *   includePriorLearnings?: boolean,
- *   priorLearningLimit?: number
+ *   priorLearningLimit?: number,
+ *   includeEngineerFeedback?: boolean,
+ *   engineerFeedbackLimit?: number
  * }} [options]
  */
 async function gatherBriefContext(supabase, options = {}) {
@@ -91,6 +135,8 @@ async function gatherBriefContext(supabase, options = {}) {
 
   const rec = buildRecommendationsFromCases(metricsRows || []);
 
+  const aggregate_window_stats = computeAggregateWindowStats(cases || []);
+
   /** @type {Record<string, number>} */
   const extensionVersions = {};
   for (const c of cases || []) {
@@ -98,14 +144,22 @@ async function gatherBriefContext(supabase, options = {}) {
     extensionVersions[v] = (extensionVersions[v] || 0) + 1;
   }
 
-  /** @type {Array<Record<string, unknown>>} */
-  let prior_runs_from_database = [];
   const loadPrior = options.includePriorLearnings !== false;
-  if (loadPrior) {
-    prior_runs_from_database = await fetchPriorLearningsForPrompt(supabase, {
-      limit: options.priorLearningLimit
-    });
-  }
+  const loadFeedback = options.includeEngineerFeedback !== false;
+  const feedbackLimit =
+    options.engineerFeedbackLimit != null && Number.isFinite(options.engineerFeedbackLimit)
+      ? options.engineerFeedbackLimit
+      : undefined;
+
+  /** @type {[Array<Record<string, unknown>>, Array<Record<string, unknown>>]} */
+  const [prior_runs_from_database, recent_engineer_feedback] = await Promise.all([
+    loadPrior
+      ? fetchPriorLearningsForPrompt(supabase, { limit: options.priorLearningLimit })
+      : Promise.resolve([]),
+    loadFeedback
+      ? fetchEngineerFeedbackForPrompt(supabase, { limit: feedbackLimit })
+      : Promise.resolve([])
+  ]);
 
   let prior_runs_note = '';
   if (!loadPrior) {
@@ -118,9 +172,21 @@ async function gatherBriefContext(supabase, options = {}) {
       'No prior saved briefs yet — after you persist this run, future prompts will include it and build cumulative context.';
   }
 
+  let engineer_feedback_note = '';
+  if (!loadFeedback) {
+    engineer_feedback_note = 'Engineer feedback rows were not loaded (include_engineer_feedback=false).';
+  } else if (recent_engineer_feedback.length > 0) {
+    engineer_feedback_note =
+      'Human labels from diag_case_feedback (newest first). Prefer aligning hypotheses with these when applicable.';
+  } else {
+    engineer_feedback_note =
+      'No rows in diag_case_feedback yet — POST /diag/intel/feedback to record triage labels for richer prompts.';
+  }
+
   return {
     generated_at: new Date().toISOString(),
     focus_platform: focusPlatform,
+    aggregate_window_stats,
     recent_cases: (cases || []).map(slimCaseRow),
     top_clusters: clusters || [],
     rule_based_recommendations: rec.recommendations || [],
@@ -129,6 +195,8 @@ async function gatherBriefContext(supabase, options = {}) {
     extension_version_counts: extensionVersions,
     prior_runs_from_database,
     prior_runs_note,
+    recent_engineer_feedback,
+    engineer_feedback_note,
     extension_primer_version: EXTENSION_PRIMER_VERSION,
     extension_architecture_primer_in_system_prompt: true
   };
@@ -152,11 +220,25 @@ function slimCaseRow(c) {
  * @param {Awaited<ReturnType<typeof gatherBriefContext>>} ctx
  */
 function buildFallbackMarkdown(ctx) {
+  const win = ctx.aggregate_window_stats && typeof ctx.aggregate_window_stats === 'object' ? ctx.aggregate_window_stats : null;
+  const fbN = Array.isArray(ctx.recent_engineer_feedback) ? ctx.recent_engineer_feedback.length : 0;
   const lines = [
     '# PlayShare IntelPro data pack (no LLM run — paste into your coding assistant)',
     '',
     `_Generated ${ctx.generated_at}${ctx.focus_platform ? ` · platform filter: ${ctx.focus_platform}` : ''}_ · primer **v${EXTENSION_PRIMER_VERSION}**`,
-    '',
+    ''
+  ];
+  if (win && typeof win.case_count === 'number') {
+    let w = `- **Case window:** ${win.case_count} cases · platforms: \`${JSON.stringify(win.platform_counts || {})}\``;
+    if (win.fraction_member_count_lte_1_among_known != null) {
+      w += ` · share with member_count≤1 (among ${win.cases_with_known_member_count} known): **${win.fraction_member_count_lte_1_among_known}**`;
+    }
+    lines.push(w, '');
+  }
+  if (fbN) {
+    lines.push(`- **Engineer feedback rows in AI context:** ${fbN}`, '');
+  }
+  lines.push(
     '## Extension architecture primer (same text the AI sees in its system prompt)',
     '',
     EXTENSION_PRIMER_MARKDOWN,
@@ -165,7 +247,7 @@ function buildFallbackMarkdown(ctx) {
     '',
     '## Rule-based recommendations (from server)',
     ''
-  ];
+  );
   if (!ctx.rule_based_recommendations.length) {
     lines.push('_None in this sample._', '');
   } else {
@@ -210,15 +292,19 @@ const SYSTEM_PROMPT_TASK = `You are a senior engineer helping improve the PlaySh
 
 The **first block** of this system message (above the --- separator) is the **extension architecture primer** — treat it as ground truth for repo layout, purpose, and data flow. If telemetry suggests something that contradicts the primer, prefer the primer for *structure* and explain the conflict.
 
-You receive ONLY privacy-safe aggregates: short case summaries, derived tags, normalized numeric metrics, cluster rollups, rule-based recommendations, and optionally **prior_runs_from_database** — excerpts from earlier successful analyses saved when engineers ran this tool. Those excerpts are cumulative memory from past diagnostic recordings (tests).
+You receive ONLY privacy-safe aggregates: short case summaries, derived tags, normalized metrics (including optional **profiler_event_counts** histograms), **aggregate_window_stats**, **recent_engineer_feedback**, cluster rollups, rule-based recommendations, and optionally **prior_runs_from_database** — excerpts from earlier successful AI/manual briefs. Those excerpts are cumulative memory from past diagnostic recordings (tests).
 
 When prior_runs_from_database is non-empty:
 - Treat it as institutional knowledge about the extension; **build on it** and call out what changed or what is newly confirmed.
 - If fresh telemetry **contradicts** an earlier conclusion, say so explicitly and prefer the newer evidence.
 - Merge themes across runs so the user gets a progressively deeper picture of the codebase over time.
 
+**aggregate_window_stats** summarizes the current case window (platform mix, how often member_count≤1 when known). If the window is almost entirely one platform or solo/low member counts, **say so** in Risks and unknowns — do **not** infer multi-peer or cross-site defects without evidence.
+
+**recent_engineer_feedback** (from diag_case_feedback) is human triage. When a label applies to the same cluster/symptom, **prefer it** over speculative root causes; cite the label in Themes when relevant.
+
 Your job:
-1. Read the data and infer themes (e.g. buffering vs sync rejects vs ad divergence vs Netflix safety path).
+1. Read the data and infer themes (e.g. buffering vs sync rejects vs ad divergence vs Netflix safety path). Tie claims to **specific metrics, derived_tags, profiler_event_counts, or engineer feedback** when possible; mark generic advice as low-confidence when the window is narrow or homogeneous.
 2. Propose concrete, actionable extension work: which subsystems to inspect (sync engine, ad detection, site adapters, service worker bridge, profiler).
 3. Produce output the user can paste into Cursor or another coding AI.
 
@@ -239,6 +325,7 @@ What we cannot conclude from this data alone.
 ## COPY_PASTE_FOR_CURSOR_AI
 One fenced code block (language tag: text) containing a SINGLE paragraph the user can paste as their next message to a coding assistant. It must:
 - State that PlayShare diagnostic aggregates are attached above or in context
+- Reference at least one concrete signal (metric name, tag, profiler_event_counts key, or engineer feedback label) when asking for code changes
 - Ask for specific code changes or investigations
 - Stay under 1200 characters inside the block
 - Be written in first person ("I need you to…")`;

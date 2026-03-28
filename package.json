@@ -21,7 +21,7 @@
     "start": "node server.js",
     "dev": "node server.js",
     "worker:diag-ai": "node scripts/run-diag-ai-worker.js",
-    "test": "node test/diag-privacy.test.js && node test/diag-intelligence.test.js && node test/diag-intel-auth.test.js",
+    "test": "node test/diag-privacy.test.js && node test/diag-intelligence.test.js && node test/diag-intel-auth.test.js && node test/diag-normalize.test.js",
     "test:sync": "node test-sync.js",
     "icons": "node scripts/build-extension-icons.mjs",
     "postinstall": "mkdir -p lib && cp node_modules/@supabase/supabase-js/dist/umd/supabase.js lib/supabase.min.js 2>/dev/null || true"
