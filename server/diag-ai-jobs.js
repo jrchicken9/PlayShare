@@ -158,12 +158,17 @@ async function cancelAiBriefJob(supabase, id) {
   return data;
 }
 
+function postgrestOrFilterStaleRunning(staleBeforeIso) {
+  const v = String(staleBeforeIso || '').replace(/"/g, '\\"');
+  return `status.eq.queued,and(status.eq.running,or(last_heartbeat_at.is.null,last_heartbeat_at.lt."${v}"))`;
+}
+
 async function claimNextAiBriefJob(supabase, workerId) {
   const staleBefore = new Date(Date.now() - RUNNING_STALE_MS).toISOString();
   const { data, error } = await supabase
     .from('diag_ai_brief_jobs')
     .select('*')
-    .or(`status.eq.queued,and(status.eq.running,last_heartbeat_at.lt.${staleBefore})`)
+    .or(postgrestOrFilterStaleRunning(staleBefore))
     .order('created_at', { ascending: true })
     .limit(6);
   if (error) throw error;
