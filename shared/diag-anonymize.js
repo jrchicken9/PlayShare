@@ -34,8 +34,10 @@
   /**
    * @param {object} body unified export (playshareUnifiedExport root)
    * @param {{ roomCode?: string|null, clientId?: string|null, username?: string|null, salt?: string }} hashSecrets
+   * @param {{ retainPeerDevDiag?: boolean }} [opts]
    */
-  async function anonymizePlayShareUnifiedExport(body, hashSecrets) {
+  async function anonymizePlayShareUnifiedExport(body, hashSecrets, opts) {
+    const retainPeerDevDiag = !!(opts && opts.retainPeerDevDiag);
     const salt = hashSecrets?.salt || 'playshare-diag-anon-v1';
     const roomHash = hashSecrets?.roomCode
       ? (await sha256Hex(`${salt}|room|${hashSecrets.roomCode}`)).slice(0, 40)
@@ -122,7 +124,7 @@
       for (const p of peers.peers) {
         if (p && typeof p === 'object') {
           delete p.clientId;
-          if (Array.isArray(p.samples)) {
+          if (Array.isArray(p.samples) && !retainPeerDevDiag) {
             for (const s of p.samples) {
               if (s && s.devDiag && typeof s.devDiag === 'object') {
                 delete s.devDiag;

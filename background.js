@@ -616,7 +616,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             return;
           }
           const uploadUrl = `${httpOrigin}/diag/upload`;
-          const anon = await self.diagAnonymizePlayShareUnifiedExport(msg.payload, msg.hashSecrets || {});
+          const devInstall = await playShareIsDevelopmentInstall();
+          const anon = await self.diagAnonymizePlayShareUnifiedExport(msg.payload, msg.hashSecrets || {}, {
+            retainPeerDevDiag: devInstall
+          });
           if (msg.enrichment && typeof msg.enrichment === 'object') {
             anon.enrichment = msg.enrichment;
           }
@@ -636,7 +639,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           ]);
           let bootstrapSecret =
             (extraTok.playshare_diag_upload_bearer && String(extraTok.playshare_diag_upload_bearer).trim()) || '';
-          const devInstall = await playShareIsDevelopmentInstall();
           if (!bootstrapSecret && devInstall) bootstrapSecret = DEFAULT_DIAG_UPLOAD_BEARER;
           let scopedToken =
             (extraTok.playshare_diag_upload_session_token &&

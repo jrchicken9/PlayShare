@@ -242,11 +242,12 @@ function enforceUnifiedDiagnosticPrivacy(unified, opts) {
   scrubUsernameLikeFields(scrubbed);
   stripProfilerUnsafe(scrubbed);
 
+  const retainPeerDevDiag = String(process.env.PLAYSHARE_DIAG_RETAIN_PEER_DEV_DIAG || '').trim() === '1';
   if (scrubbed.peerRecordingDiagnostics && Array.isArray(scrubbed.peerRecordingDiagnostics.peers)) {
     for (const p of scrubbed.peerRecordingDiagnostics.peers) {
       if (p && typeof p === 'object') {
         delete p.clientId;
-        if (Array.isArray(p.samples)) {
+        if (Array.isArray(p.samples) && !retainPeerDevDiag) {
           for (const s of p.samples) {
             if (s && s.devDiag) delete s.devDiag;
           }

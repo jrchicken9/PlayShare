@@ -6048,7 +6048,41 @@
         },
         playback,
         videoProfiler,
-        pendingSyncStateQueued: !!diag.pendingSyncStateQueued
+        pendingSyncStateQueued: !!diag.pendingSyncStateQueued,
+        /** Dev / profiler peer samples only: helps the recording tab compare ad + room vs remote viewer. */
+        room: roomState && typeof roomState === "object" ? {
+          isHost: !!roomState.isHost,
+          memberCount: Array.isArray(roomState.members) ? roomState.members.length : 0
+        } : null,
+        adBreak: {
+          localAdBreakActive: !!localAdBreakActive,
+          peersInAdCount: peersInAdBreak.size
+        },
+        siteAdapterKey: siteSync.key,
+        sitePlayback: (() => {
+          try {
+            const v = findVideo() || video;
+            if (!v || v.tagName !== "VIDEO") return null;
+            if (siteSync.key === "prime") {
+              const snap = getPrimeAdDetectionSnapshot(v);
+              return {
+                kind: "prime",
+                primeAd: {
+                  likelyAd: !!snap.likelyAd,
+                  score: snap.score,
+                  reasons: (snap.reasons || []).slice(0, 8),
+                  channels: snap.channels ? { ...snap.channels } : null
+                }
+              };
+            }
+            if (siteSync.key === "netflix") {
+              return { kind: "netflix", netflixHeuristicAd: !!detectNetflixAdPlaying(v) };
+            }
+            return { kind: siteSync.key || "generic" };
+          } catch {
+            return { kind: siteSync.key || "generic", readError: true };
+          }
+        })()
       };
     }
     function detachVideo() {
