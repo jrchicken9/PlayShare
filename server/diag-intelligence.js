@@ -77,6 +77,16 @@ function buildCaseSummaryText(summary, derived_tags, extensionVersion) {
   const lag = nz(/** @type {number} */ (summary.laggard_anchor_count));
   const rej = nz(/** @type {number} */ (summary.sync_apply_reject_total));
   const nfSafe = nz(/** @type {number} */ (summary.netflix_safety_reject_count));
+  const rbufDef = nz(/** @type {number} */ (summary.video_rebuffer_sync_defer_count));
+  const prOverlap = summary.profiler_rebuffer_remote_sync;
+  const prAppliedInBuf =
+    prOverlap && typeof prOverlap === 'object'
+      ? nz(/** @type {number} */ (prOverlap.remote_correction_applied_during_buffer))
+      : 0;
+  const ctMatched =
+    summary.correlation_trace_delivery && typeof summary.correlation_trace_delivery === 'object'
+      ? nz(/** @type {number} */ (/** @type {Record<string, unknown>} */ (summary.correlation_trace_delivery).matched))
+      : 0;
   const driftM = summary.drift_max_sec != null ? `${Number(summary.drift_max_sec).toFixed(2)}s max drift` : 'drift n/a';
   const apply =
     summary.sync_apply_success_rate != null
@@ -95,6 +105,9 @@ function buildCaseSummaryText(summary, derived_tags, extensionVersion) {
     lag > 0 ? `${lag} laggard anchor(s)` : null,
     rej > 0 ? `${rej} sync decision reject(s)` : null,
     nfSafe > 0 ? `${nfSafe} Netflix safety no-op(s)` : null,
+    rbufDef > 0 ? `${rbufDef} soft SYNC defer(s) after video rebuffer signal` : null,
+    prAppliedInBuf > 0 ? `${prAppliedInBuf} remote apply during profiler buffer window(s)` : null,
+    ctMatched > 0 ? `trace/corr matched ${ctMatched}` : null,
     `tags: ${tags}`
   ].filter(Boolean);
 
@@ -176,6 +189,15 @@ function pickNormalizedMetricsForStorage(summary) {
     'user_marker_code_counts',
     'profiler_export_compact',
     'diag_upload_depth',
+    'correlation_trace_delivery',
+    'profiler_rebuffer_remote_sync',
+    'extension_ops_intel',
+    'signaling_counts',
+    'timeupdate_significant_jump_count',
+    'messaging_failures',
+    'video_rebuffer_sync_defer_count',
+    'profiler_rebuffer_overlap_flag',
+    'profiler_rebuffer_applied_in_buffer',
     'handler_key',
     'platform',
     'role',
@@ -309,6 +331,10 @@ function explainCase(caseRow, similar) {
     likely.push('Netflix safety no-op path firing often (may be protective)');
     reasons.push('derived_tag:likely_netflix_safety_issue');
   }
+  if (tags.includes('likely_rebuffer_sync_overlap')) {
+    likely.push('Remote sync corrections overlapping video rebuffer windows (profiler)');
+    reasons.push('derived_tag:likely_rebuffer_sync_overlap');
+  }
 
   if (nz(/** @type {number} */ (m.hard_correction_count)) > 2) {
     likely.push('Above-average hard corrections');
@@ -337,6 +363,10 @@ function explainCase(caseRow, similar) {
   }
   if (tags.includes('likely_ws_instability')) {
     inspectHints.transport = 'service worker bridge, connectionDetail, reconnect policy';
+  }
+  if (tags.includes('likely_rebuffer_sync_overlap') || nz(/** @type {number} */ (m.profiler_rebuffer_applied_in_buffer)) > 0) {
+    inspectHints.rebuffer =
+      'sync-decision-engine + applySyncState (rebuffer defer), content/src/sites/* playback profiles, video-player-profiler buffer_recovery_*';
   }
   inspectHints.thresholds = 'enrichment.syncConfigSnapshot.driftThresholds in export / diag_cases.config_snapshot';
 
@@ -385,6 +415,8 @@ function buildRecommendationsFromCases(cases) {
     let sumHard = 0;
     let sumLag = 0;
     let adTagged = 0;
+    let sumRebufDefer = 0;
+    let sumProfApplyInBuf = 0;
     for (const r of rows) {
       const m = r.normalized_metrics && typeof r.normalized_metrics === 'object' ? r.normalized_metrics : {};
       sumRecon += nz(/** @type {number} */ (m.reconnect_settle_reject_count));
@@ -392,6 +424,8 @@ function buildRecommendationsFromCases(cases) {
       sumNetflix += nz(/** @type {number} */ (m.netflix_safety_reject_count));
       sumHard += nz(/** @type {number} */ (m.hard_correction_count));
       sumLag += nz(/** @type {number} */ (m.laggard_anchor_count));
+      sumRebufDefer += nz(/** @type {number} */ (m.video_rebuffer_sync_defer_count));
+      sumProfApplyInBuf += nz(/** @type {number} */ (m.profiler_rebuffer_applied_in_buffer));
       const tags = Array.isArray(r.derived_tags) ? r.derived_tags : [];
       if (tags.includes('likely_ad_divergence')) adTagged++;
     }
@@ -400,6 +434,8 @@ function buildRecommendationsFromCases(cases) {
     const avgNetflix = sumNetflix / n;
     const avgHard = sumHard / n;
     const avgLag = sumLag / n;
+    const avgRebufDef = sumRebufDefer / n;
+    const avgProfApplyBuf = sumProfApplyInBuf / n;
 
     if (avgRecon >= 1.2) {
       out.push({
@@ -441,6 +477,22 @@ function buildRecommendationsFromCases(cases) {
         platforms: [plat]
       });
     }
+    if (avgProfApplyBuf >= 1.2) {
+      out.push({
+        text: `On ${plat}, remote corrections during profiler buffer windows average ${avgProfApplyBuf.toFixed(1)} per case — review soft SYNC vs CDN rebuffer (sync-decision-engine, site playback profiles).`,
+        confidence: 'medium',
+        evidence: [`platform=${plat}`, `n=${n}`, `avg_profiler_apply_in_buffer=${avgProfApplyBuf.toFixed(2)}`],
+        platforms: [plat]
+      });
+    }
+    if (avgRebufDef >= 2) {
+      out.push({
+        text: `On ${plat}, soft SYNC defer-after-rebuffer triggers often (avg ${avgRebufDef.toFixed(1)}/case) — confirms aggressive drift policy vs unstable buffers; tune defer window or drift tiers if needed.`,
+        confidence: 'low',
+        evidence: [`platform=${plat}`, `n=${n}`, `avg_video_rebuffer_sync_defer=${avgRebufDef.toFixed(2)}`],
+        platforms: [plat]
+      });
+    }
   }
 
   return {
@@ -473,7 +525,11 @@ function regressionCompare(baselineRows, targetRows, filter = {}) {
     'ws_disconnect_count',
     'netflix_safety_reject_count',
     'source_swap_count',
-    'sync_apply_reject_total'
+    'sync_apply_reject_total',
+    'video_rebuffer_sync_defer_count',
+    'profiler_rebuffer_overlap_flag',
+    'profiler_rebuffer_applied_in_buffer',
+    'timeupdate_significant_jump_count'
   ];
 
   /** @param {Record<string, unknown>[]} rows */

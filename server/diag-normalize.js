@@ -252,6 +252,170 @@ function countEventsCorrectionReason(events, reason) {
 }
 
 /**
+ * Same stack logic as client `computeProfilerRebufferRemoteSyncOverlap` — server-side so IntelPro
+ * gets overlap stats even on older extension builds (when profiler.events are present).
+ * @param {unknown[]} events
+ */
+function computeProfilerRebufferOverlapFromEvents(events) {
+  if (!Array.isArray(events) || !events.length) {
+    return {
+      profilerEventsConsidered: 0,
+      closedBufferWindows: 0,
+      openBufferDepthAtExportEnd: 0,
+      remoteCorrectionAppliedDuringBuffer: 0,
+      remoteCorrectionReceivedDuringBuffer: 0,
+      overlapSuspicious: false
+    };
+  }
+  const norm = [];
+  for (const e of events) {
+    if (!e || typeof e !== 'object') continue;
+    const type = typeof e.type === 'string' ? e.type.trim() : '';
+    if (!type) continue;
+    const mono = typeof e.monoMs === 'number' && Number.isFinite(e.monoMs) ? e.monoMs : null;
+    const wall = typeof e.t === 'number' && Number.isFinite(e.t) ? e.t : null;
+    norm.push({ type, mono, wall });
+  }
+  norm.sort((a, b) => {
+    const ta = a.mono != null ? a.mono : a.wall ?? 0;
+    const tb = b.mono != null ? b.mono : b.wall ?? 0;
+    return ta - tb;
+  });
+  function tOf(e) {
+    return e.mono != null ? e.mono : e.wall ?? 0;
+  }
+  const stack = [];
+  let closedBufferWindows = 0;
+  let appliedDuring = 0;
+  let receivedDuring = 0;
+  for (const e of norm) {
+    if (e.type === 'buffer_recovery_start') {
+      stack.push(tOf(e));
+    } else if (e.type === 'buffer_recovery_end') {
+      if (stack.length) {
+        stack.pop();
+        closedBufferWindows++;
+      }
+    } else if (e.type === 'remote_correction_applied') {
+      if (stack.length) appliedDuring++;
+    } else if (e.type === 'remote_correction_received') {
+      if (stack.length) receivedDuring++;
+    }
+  }
+  const overlapSuspicious =
+    appliedDuring >= 3 || (appliedDuring >= 1 && closedBufferWindows >= 2 && appliedDuring + receivedDuring >= 4);
+  return {
+    profilerEventsConsidered: norm.length,
+    closedBufferWindows,
+    openBufferDepthAtExportEnd: stack.length,
+    remoteCorrectionAppliedDuringBuffer: appliedDuring,
+    remoteCorrectionReceivedDuringBuffer: receivedDuring,
+    overlapSuspicious
+  };
+}
+
+/** @param {unknown} analytics */
+function sanitizeCorrelationTraceDelivery(analytics) {
+  const ctd =
+    analytics && typeof analytics === 'object' && analytics.correlationTraceDelivery && typeof analytics.correlationTraceDelivery === 'object'
+      ? analytics.correlationTraceDelivery
+      : null;
+  if (!ctd) return null;
+  const s = ctd.summary && typeof ctd.summary === 'object' ? ctd.summary : {};
+  const out = {
+    matched: num(ctd.matched, 0),
+    trace_events_considered: num(ctd.traceEventsWithIdConsidered, 0),
+    clock_skew_suspected: ctd.clockSkewSuspected === true,
+    latency_ms_count: num(s.count, 0),
+    latency_ms_avg: typeof s.avg === 'number' && Number.isFinite(s.avg) ? Math.round(s.avg) : null,
+    latency_ms_p50: typeof s.p50 === 'number' && Number.isFinite(s.p50) ? Math.round(s.p50) : null,
+    latency_ms_p90: typeof s.p90 === 'number' && Number.isFinite(s.p90) ? Math.round(s.p90) : null
+  };
+  return out.matched > 0 || out.trace_events_considered > 0 ? out : null;
+}
+
+const INTEL_EXTOP_KEYS = [
+  'syncStateInbound',
+  'syncStateApplied',
+  'syncStateSkippedRedundant',
+  'syncStateDeferredNoVideo',
+  'syncStateDeferredStaleOrMissing',
+  'syncStateDeferredRebuffer',
+  'syncStateHeldForAd',
+  'syncStateDeniedSyncLock',
+  'syncStateDeniedPlaybackDebounce',
+  'remoteApplyDeniedSyncLock',
+  'remoteApplyDeniedPlaybackDebounce',
+  'remoteApplyDeferredTabHidden',
+  'hostPlaybackPositionSent',
+  'viewerSyncRequestSent',
+  'positionReportSent',
+  'positionSnapshotInbound',
+  'wsDisconnectEvents',
+  'syncDecisionRejectedCooldown',
+  'syncDecisionRejectedConverging',
+  'syncDecisionRejectedReconnectSettle',
+  'syncDecisionNetflixSafetyNoop',
+  'softDriftPlaybackStarts',
+  'localControlBlockedHostOnly',
+  'playbackOutboundSuppressedLocalAd'
+];
+
+/** @param {unknown} eo */
+function summarizeExtensionOpsIntel(eo) {
+  if (!eo || typeof eo !== 'object') return null;
+  /** @type {Record<string, number>} */
+  const o = {};
+  for (const k of INTEL_EXTOP_KEYS) {
+    const v = eo[k];
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      o[k] = Math.min(Math.max(Math.round(v), 0), 1e6);
+    }
+  }
+  return Object.keys(o).length ? o : null;
+}
+
+/** @param {unknown} analytics */
+function signalingCountsFromAnalytics(analytics) {
+  const s =
+    analytics && typeof analytics === 'object' && analytics.signalingThisDevice && typeof analytics.signalingThisDevice === 'object'
+      ? analytics.signalingThisDevice
+      : null;
+  if (!s) return null;
+  /** @type {Record<string, number>} */
+  const o = {};
+  for (const ev of ['play', 'pause', 'seek']) {
+    const b = s[ev];
+    if (!b || typeof b !== 'object') continue;
+    if (typeof b.sent === 'number' && Number.isFinite(b.sent)) o[`${ev}_sent`] = Math.min(Math.max(Math.round(b.sent), 0), 1e6);
+    if (typeof b.recv === 'number' && Number.isFinite(b.recv)) o[`${ev}_recv`] = Math.min(Math.max(Math.round(b.recv), 0), 1e6);
+  }
+  return Object.keys(o).length ? o : null;
+}
+
+/** @param {unknown} analytics */
+function timeupdateSignificantJumpCount(analytics) {
+  if (!analytics || typeof analytics !== 'object') return null;
+  const a = num(analytics.timeupdateSignificantJumps, -1);
+  if (a >= 0) return Math.min(a, 1e5);
+  const b = num(analytics.timeupdateLargeJumps, -1);
+  if (b >= 0) return Math.min(b, 1e5);
+  return null;
+}
+
+/** @param {unknown} msg */
+function messagingFailureCounts(msg) {
+  if (!msg || typeof msg !== 'object') return null;
+  const rf = num(msg.runtimeSendFailures, 0);
+  const st = num(msg.sendThrowCount, 0);
+  if (rf <= 0 && st <= 0) return null;
+  return {
+    runtime_send_failures: rf,
+    send_throw_count: st
+  };
+}
+
+/**
  * @param {{ payload: object, testRunId?: string|null }} args
  */
 function normalizeDiagnosticReport(args) {
@@ -264,6 +428,13 @@ function normalizeDiagnosticReport(args) {
   const prof = unified.videoPlayerProfiler || {};
   const profEvents = prof.events || [];
   const profilerEventCounts = profilerEventTypeHistogram(profEvents);
+  const profBufferOverlap = computeProfilerRebufferOverlapFromEvents(profEvents);
+  const correlationTrace = sanitizeCorrelationTraceDelivery(analytics);
+  const extensionOpsIntel = summarizeExtensionOpsIntel(eo);
+  const signalingCounts = signalingCountsFromAnalytics(analytics);
+  const tuJumpC = timeupdateSignificantJumpCount(analytics);
+  const messagingFails = messagingFailureCounts(ext.messaging);
+  const rebufferDefer = num(eo.syncStateDeferredRebuffer, 0);
   const rollup = prof.session?.rollup || {};
   const userMarkerCodeCounts = userMarkerCodeCountsFromProfiler(prof);
   const prog = prof.session?.summary?.progressionQuality || {};
@@ -369,7 +540,26 @@ function normalizeDiagnosticReport(args) {
     diag_upload_depth:
       unified.uploadClient && String(unified.uploadClient.diagUploadDepth || '').toLowerCase() === 'deep'
         ? 'deep'
-        : 'standard'
+        : 'standard',
+    correlation_trace_delivery: correlationTrace,
+    profiler_rebuffer_remote_sync:
+      profBufferOverlap.profilerEventsConsidered > 0
+        ? {
+            profiler_events_sampled: profBufferOverlap.profilerEventsConsidered,
+            closed_buffer_windows: profBufferOverlap.closedBufferWindows,
+            open_buffer_depth_at_end: profBufferOverlap.openBufferDepthAtExportEnd,
+            remote_correction_applied_during_buffer: profBufferOverlap.remoteCorrectionAppliedDuringBuffer,
+            remote_correction_received_during_buffer: profBufferOverlap.remoteCorrectionReceivedDuringBuffer,
+            overlap_suspicious: profBufferOverlap.overlapSuspicious === true
+          }
+        : null,
+    extension_ops_intel: extensionOpsIntel,
+    signaling_counts: signalingCounts,
+    timeupdate_significant_jump_count: tuJumpC,
+    messaging_failures: messagingFails,
+    video_rebuffer_sync_defer_count: rebufferDefer,
+    profiler_rebuffer_overlap_flag: profBufferOverlap.overlapSuspicious ? 1 : 0,
+    profiler_rebuffer_applied_in_buffer: profBufferOverlap.remoteCorrectionAppliedDuringBuffer
   };
 
   summary.sync_apply_reject_total =
@@ -407,13 +597,25 @@ function normalizeDiagnosticReport(args) {
   if (waiting + stalled > 0 && !tags.includes('likely_buffer_issue')) {
     tags.push('buffering_signal_mild');
   }
+  if (profBufferOverlap.overlapSuspicious) {
+    tags.push('likely_rebuffer_sync_overlap');
+  }
+
+  const serverIntelFlags = [];
+  if (profBufferOverlap.overlapSuspicious) {
+    serverIntelFlags.push('remote_sync_during_video_rebuffer_profiler');
+  }
 
   const derived_tags = mergeAnalyticsFlagsIntoDerivedTags(
     mergeMarkerDerivedTags([...new Set(tags)], userMarkerCodeCounts),
-    analytics.flags
+    [...(Array.isArray(analytics.flags) ? analytics.flags : []), ...serverIntelFlags]
   );
 
   return { summary, derived_tags };
 }
 
-module.exports = { normalizeDiagnosticReport, profilerEventTypeHistogram };
+module.exports = {
+  normalizeDiagnosticReport,
+  profilerEventTypeHistogram,
+  computeProfilerRebufferOverlapFromEvents
+};

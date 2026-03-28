@@ -145,6 +145,58 @@ function run() {
   assert.ok((marked.summary.diag_synopsis_codes || []).includes('undetected_ad'));
   assert.ok((marked.summary.diag_synopsis_codes || []).includes('export_data_truncated'));
 
+  const overlap = normalizeDiagnosticReport({
+    payload: {
+      extension: {
+        platform: { key: 'prime' },
+        room: { memberCount: 2 },
+        extensionOps: { syncStateDeferredRebuffer: 4 },
+        sync: { events: [] },
+        analytics: {
+          correlationTraceDelivery: {
+            matched: 3,
+            traceEventsWithIdConsidered: 5,
+            clockSkewSuspected: false,
+            summary: { count: 3, avg: 40, p50: 35, p90: 62 }
+          },
+          flags: [],
+          signalingThisDevice: {
+            play: { sent: 1, recv: 2 },
+            pause: { sent: 0, recv: 1 },
+            seek: { sent: 2, recv: 2 }
+          },
+          timeupdateSignificantJumps: 7
+        },
+        messaging: { runtimeSendFailures: 1, sendThrowCount: 0 },
+        timing: { lastRttMs: 30 }
+      },
+      videoPlayerProfiler: {
+        events: [
+          { type: 'buffer_recovery_start', monoMs: 0, t: 1e12 },
+          { type: 'remote_correction_received', monoMs: 10, t: 1e12 },
+          { type: 'remote_correction_applied', monoMs: 20, t: 1e12 },
+          { type: 'remote_correction_applied', monoMs: 30, t: 1e12 },
+          { type: 'remote_correction_applied', monoMs: 40, t: 1e12 },
+          { type: 'buffer_recovery_end', monoMs: 50, t: 1e12 }
+        ]
+      },
+      uploadClient: {},
+      anonymization: {},
+      ingestMeta: {}
+    }
+  });
+  assert.ok(overlap.summary.correlation_trace_delivery);
+  assert.strictEqual(overlap.summary.correlation_trace_delivery.matched, 3);
+  assert.strictEqual(overlap.summary.video_rebuffer_sync_defer_count, 4);
+  assert.strictEqual(overlap.summary.profiler_rebuffer_applied_in_buffer, 3);
+  assert.strictEqual(overlap.summary.profiler_rebuffer_overlap_flag, 1);
+  assert.ok(overlap.summary.extension_ops_intel && overlap.summary.extension_ops_intel.syncStateDeferredRebuffer === 4);
+  assert.ok(overlap.summary.signaling_counts && overlap.summary.signaling_counts.play_recv === 2);
+  assert.strictEqual(overlap.summary.timeupdate_significant_jump_count, 7);
+  assert.ok(overlap.summary.messaging_failures && overlap.summary.messaging_failures.runtime_send_failures === 1);
+  assert.ok(overlap.derived_tags.includes('likely_rebuffer_sync_overlap'));
+  assert.ok(overlap.derived_tags.includes('remote_sync_during_video_rebuffer_profiler'));
+
   console.log('diag-normalize.test.js: all passed');
 }
 
