@@ -234,6 +234,7 @@ export function runPlayShareContent() {
     syncStateApplied: 0,
     syncStateDeferredNoVideo: 0,
     syncStateDeferredStaleOrMissing: 0,
+    syncStateDeferredRebuffer: 0,
     syncStateDeniedSyncLock: 0,
     syncStateDeniedPlaybackDebounce: 0,
     remoteApplyDeniedSyncLock: 0,
@@ -995,6 +996,7 @@ export function runPlayShareContent() {
         extensionOps: {
           syncStateDeferredNoVideo: diag.extensionOps.syncStateDeferredNoVideo,
           syncStateDeferredStaleOrMissing: diag.extensionOps.syncStateDeferredStaleOrMissing,
+          syncStateDeferredRebuffer: diag.extensionOps.syncStateDeferredRebuffer,
           syncStateDeniedSyncLock: diag.extensionOps.syncStateDeniedSyncLock,
           syncStateDeniedPlaybackDebounce: diag.extensionOps.syncStateDeniedPlaybackDebounce,
           remoteApplyDeniedSyncLock: diag.extensionOps.remoteApplyDeniedSyncLock,
@@ -1229,7 +1231,8 @@ export function runPlayShareContent() {
       already_converging: 'correction_rejected_converging',
       server_ad_mode: 'correction_rejected_ad_mode',
       reconnect_settle: 'correction_rejected_reconnect_settle',
-      netflix_safety_noop: 'correction_rejected_netflix_safety'
+      netflix_safety_noop: 'correction_rejected_netflix_safety',
+      video_rebuffering: 'correction_rejected_rebuffer'
     };
     return m[reason] || 'remote_correction_rejected';
   }
@@ -3077,6 +3080,20 @@ export function runPlayShareContent() {
       text.startsWith(`✓ ${u}'s ad break ended`);
   }
 
+  /** Skip soft drift corrections briefly after <video> waiting/stalled so CDN rebuffer is not fought. */
+  const SOFT_SYNC_DEFER_MS_AFTER_BUFFER_MS = 2600;
+  function isRecentVideoRebufferingForSoftSyncDefer() {
+    const now = Date.now();
+    const vb = diag.videoBuffering;
+    const w = vb.lastWaitingAt;
+    const s = vb.lastStalledAt;
+    const win = SOFT_SYNC_DEFER_MS_AFTER_BUFFER_MS;
+    return (
+      (typeof w === 'number' && now - w < win) ||
+      (typeof s === 'number' && now - s < win)
+    );
+  }
+
   function applySyncState(state) {
     if (!state) return;
     const syncKind = state.syncKind === 'soft' ? 'soft' : 'hard';
@@ -3165,6 +3182,38 @@ export function runPlayShareContent() {
           currentTime: targetTime,
           skipped: true,
           syncDecision: syncDec.reason
+        });
+        return;
+      }
+      const crStr =
+        state.correctionReason != null ? String(state.correctionReason) : '';
+      if (
+        syncKind === 'soft' &&
+        crStr !== syncDecision.CORRECTION_REASONS.HOST_ANCHOR_SOFT &&
+        !syncDecision.isHardPriorityRemote({
+          syncKind,
+          correctionReason: state.correctionReason,
+          fromRoomJoin: state.correctionReason === syncDecision.CORRECTION_REASONS.JOIN
+        }) &&
+        isRecentVideoRebufferingForSoftSyncDefer()
+      ) {
+        diag.extensionOps.syncStateDeferredRebuffer++;
+        platformPlaybackLog('SYNC_DEFER_REBUFFER', {
+          remoteKind: 'SYNC_STATE',
+          syncKind,
+          correctionReason: state.correctionReason,
+          driftSec: driftPre
+        });
+        profilerEmitSyncRejection('SYNC_STATE', { ok: false, reason: 'video_rebuffering' }, {
+          driftSec: driftPre,
+          syncKind,
+          correctionReason: state.correctionReason
+        });
+        diagLog('SYNC_STATE', {
+          playing: state.playing,
+          currentTime: targetTime,
+          skipped: true,
+          syncDecision: 'video_rebuffering'
         });
         return;
       }
@@ -4526,6 +4575,16 @@ export function runPlayShareContent() {
     try {
       ver = chrome.runtime.getManifest()?.version || ver;
     } catch {}
+    /** @type {Array<Record<string, unknown>>|null} */
+    let profilerEventsForAnalytics = null;
+    try {
+      const p = getVideoProfiler();
+      if (p.isRecording() && typeof p.copyEventsForDiagAnalytics === 'function') {
+        profilerEventsForAnalytics = p.copyEventsForDiagAnalytics(600);
+      }
+    } catch {
+      profilerEventsForAnalytics = null;
+    }
     return buildDiagnosticExport({
       diag,
       roomState,
@@ -4535,7 +4594,8 @@ export function runPlayShareContent() {
       reportSession: diag.reportSession,
       pageHost: typeof location !== 'undefined' ? location.hostname : '',
       videoAttached: diag.videoAttached,
-      captureContext: diagExportCaptureContext
+      captureContext: diagExportCaptureContext,
+      profilerEventsForAnalytics
     });
   }
 

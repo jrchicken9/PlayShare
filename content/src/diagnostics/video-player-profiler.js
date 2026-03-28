@@ -1907,6 +1907,27 @@ export function createVideoPlayerProfiler(opts) {
       return payload;
     },
 
+    /**
+     * Lightweight ring snapshot for diagnostic analytics (rebuffer vs remote sync overlap).
+     * @param {number} [maxLen]
+     * @returns {Array<Record<string, unknown>>}
+     */
+    copyEventsForDiagAnalytics(maxLen = 500) {
+      const n = Math.max(0, Math.min(maxLen, events.length));
+      if (!n) return [];
+      const slice = events.slice(-n);
+      return slice.map((e) => {
+        if (!e || typeof e !== 'object') return {};
+        const o = /** @type {Record<string, unknown>} */ ({});
+        if (e.type != null) o.type = e.type;
+        if (typeof e.t === 'number') o.t = e.t;
+        if (typeof e.monoMs === 'number') o.monoMs = e.monoMs;
+        if (e.decision === true) o.decision = true;
+        if (e.derived === true) o.derived = true;
+        return o;
+      });
+    },
+
     clearSession() {
       const wasRec = recording;
       if (wasRec) this.stop();

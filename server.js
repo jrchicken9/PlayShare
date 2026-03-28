@@ -1218,6 +1218,7 @@ wss.on('connection', (ws) => {
       }
 
       case 'HEARTBEAT': {
+        // No server-side idle disconnect: closes usually mean client unload, network loss, or proxy/platform limits (e.g. hosting LB idle timeout — compare with client 5s heartbeats).
         sendTo(ws, { type: 'HEARTBEAT_ACK' });
         break;
       }

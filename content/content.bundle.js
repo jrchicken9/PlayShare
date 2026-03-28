@@ -363,6 +363,60 @@
       summary: summarizeLatencies(latencies)
     };
   }
+  function computeProfilerRebufferRemoteSyncOverlap(events) {
+    if (!Array.isArray(events) || events.length === 0) {
+      return {
+        profilerEventsConsidered: 0,
+        closedBufferWindows: 0,
+        remoteCorrectionAppliedDuringBuffer: 0,
+        remoteCorrectionReceivedDuringBuffer: 0,
+        overlapSuspicious: false,
+        note: "no_profiler_events_or_not_recording"
+      };
+    }
+    const norm = events.map((e) => {
+      const type = String(e && e.type || "");
+      const mono = typeof e.monoMs === "number" && Number.isFinite(e.monoMs) ? e.monoMs : null;
+      const wall = typeof e.t === "number" && Number.isFinite(e.t) ? e.t : null;
+      return { type, mono, wall };
+    }).filter((e) => e.type);
+    norm.sort((a, b) => {
+      const ta = a.mono != null ? a.mono : a.wall ?? 0;
+      const tb = b.mono != null ? b.mono : b.wall ?? 0;
+      return ta - tb;
+    });
+    function tOf(e) {
+      return e.mono != null ? e.mono : e.wall ?? 0;
+    }
+    const stack = [];
+    let closedWindows = 0;
+    let appliedDuring = 0;
+    let receivedDuring = 0;
+    for (const e of norm) {
+      const t = tOf(e);
+      if (e.type === "buffer_recovery_start") {
+        stack.push(t);
+      } else if (e.type === "buffer_recovery_end") {
+        if (stack.length) {
+          stack.pop();
+          closedWindows++;
+        }
+      } else if (e.type === "remote_correction_applied") {
+        if (stack.length) appliedDuring++;
+      } else if (e.type === "remote_correction_received") {
+        if (stack.length) receivedDuring++;
+      }
+    }
+    const overlapSuspicious = appliedDuring >= 3 || appliedDuring >= 1 && closedWindows >= 2 && appliedDuring + receivedDuring >= 4;
+    return {
+      profilerEventsConsidered: events.length,
+      closedBufferWindows: closedWindows,
+      openBufferDepthAtExportEnd: stack.length,
+      remoteCorrectionAppliedDuringBuffer: appliedDuring,
+      remoteCorrectionReceivedDuringBuffer: receivedDuring,
+      overlapSuspicious
+    };
+  }
   function computeSyncAnalytics(diag, reportSession, roomMeta = null) {
     const m = diag.sync?.metrics || {};
     const memberCount = roomMeta?.memberCount ?? null;
@@ -537,7 +591,8 @@
     platformKey,
     memberCount,
     findVideoInvalidations = 0,
-    hostOnlyControl = null
+    hostOnlyControl = null,
+    profilerRebufferOverlap = null
   }) {
     const hints = [];
     if (memberCount != null && memberCount <= 1) {
@@ -578,6 +633,12 @@
     if (flags.includes("many_video_waiting_events_buffering_or_cdn") || flags.includes("many_video_stalled_events_buffering_or_cdn")) {
       hints.push(
         "High `waiting` / `stalled` on <video> — often CDN/adaptive rebuffering; compare timing with sync applies and correlationTraceDelivery so you do not blame sync alone."
+      );
+    }
+    if (flags.includes("remote_sync_during_video_rebuffer_profiler") && profilerRebufferOverlap) {
+      const p = profilerRebufferOverlap;
+      hints.push(
+        `Profiler timeline: ${p.remoteCorrectionAppliedDuringBuffer ?? 0} remote_correction_applied and ${p.remoteCorrectionReceivedDuringBuffer ?? 0} remote_correction_received event(s) arrived while a buffer_recovery window was open — sync may be stacking on top of CDN rebuffer; re-run with recording to confirm or check extensionOps.syncStateDeferredRebuffer.`
       );
     }
     if (flags.includes("content_script_messaging_failures_to_service_worker")) {
@@ -692,7 +753,7 @@
       const c = eb.contentScript;
       lines.push("--- Extension bridge (this tab) ---");
       lines.push(
-        `SYNC_STATE: in ${c.syncStateInbound ?? 0} · applied ${c.syncStateApplied ?? 0} · skip(redundant) ${c.syncStateSkippedRedundant ?? 0} · deferred(no video) ${c.syncStateDeferredNoVideo ?? 0} · deferred(stale) ${c.syncStateDeferredStaleOrMissing ?? 0} · flushed ${c.syncStateFlushedOnVideoAttach ?? 0}`
+        `SYNC_STATE: in ${c.syncStateInbound ?? 0} · applied ${c.syncStateApplied ?? 0} · skip(redundant) ${c.syncStateSkippedRedundant ?? 0} · deferred(no video) ${c.syncStateDeferredNoVideo ?? 0} · deferred(stale) ${c.syncStateDeferredStaleOrMissing ?? 0} · deferred(rebuffer soft) ${c.syncStateDeferredRebuffer ?? 0} · flushed ${c.syncStateFlushedOnVideoAttach ?? 0}`
       );
       lines.push(
         `SYNC_STATE denied: syncLock ${c.syncStateDeniedSyncLock ?? 0} · Netflix debounce ${c.syncStateDeniedNetflixDebounce ?? 0}`
@@ -714,6 +775,14 @@
       const v = payload.videoBuffering;
       lines.push("--- Video buffering (cumulative) ---");
       lines.push(`waiting ×${v.waiting ?? 0} · stalled ×${v.stalled ?? 0}`);
+      lines.push("");
+    }
+    const pr = a.profilerRebufferVsRemoteSync;
+    if (pr && pr.profilerEventsConsidered > 0) {
+      lines.push("--- Profiler: rebuffer windows vs remote corrections ---");
+      lines.push(
+        `Events sampled: ${pr.profilerEventsConsidered} · closed buffer windows: ${pr.closedBufferWindows ?? 0} · remote_correction_applied during buffer: ${pr.remoteCorrectionAppliedDuringBuffer ?? 0} · remote_correction_received during buffer: ${pr.remoteCorrectionReceivedDuringBuffer ?? 0}${pr.overlapSuspicious ? " · flag: sync may overlap CDN rebuffer" : ""}`
+      );
       lines.push("");
     }
     const ctd = a.correlationTraceDelivery;
@@ -832,7 +901,8 @@
     reportSession,
     pageHost,
     videoAttached,
-    captureContext = null
+    captureContext = null,
+    profilerEventsForAnalytics = null
   }) {
     const tl = diag.timing?.timeline || [];
     const evs = diag.sync?.events || [];
@@ -849,13 +919,21 @@
       memberCount,
       isHost: !!roomState?.isHost
     });
+    const profilerOverlap = computeProfilerRebufferRemoteSyncOverlap(
+      Array.isArray(profilerEventsForAnalytics) ? profilerEventsForAnalytics : []
+    );
+    analytics.profilerRebufferVsRemoteSync = profilerOverlap;
+    if (profilerOverlap.overlapSuspicious && profilerOverlap.profilerEventsConsidered > 0) {
+      analytics.flags.push("remote_sync_during_video_rebuffer_profiler");
+    }
     analytics.analystHints = buildAnalystHints({
       m: diag.sync?.metrics || {},
       flags: analytics.flags,
       platformKey: platform?.key,
       memberCount,
       findVideoInvalidations: diag.findVideo?.invalidations ?? 0,
-      hostOnlyControl: roomState?.hostOnlyControl != null ? !!roomState.hostOnlyControl : null
+      hostOnlyControl: roomState?.hostOnlyControl != null ? !!roomState.hostOnlyControl : null,
+      profilerRebufferOverlap: profilerOverlap
     });
     analytics.atExport = {
       serverRoomTraceAgeMs: diag.serverRoomTraceAt ? nowMs - diag.serverRoomTraceAt : null,
@@ -1000,7 +1078,7 @@
         detail: e.detail && typeof e.detail === "object" ? { message: truncStr(String(e.detail.message || ""), 72) } : e.detail
       })),
       analytics,
-      howToUse: "Upload JSON or paste narrativeSummary. v2.5: top “Extension & server connectivity” + extensionOps / serviceWorkerTransport / connectionDetail in JSON. v2.3+: apply denials, messaging failures, WS send drops, buffering, correlationTraceDelivery. Export refreshes RTT + trace. No full URLs/chat.",
+      howToUse: "Upload JSON or paste narrativeSummary. v2.5: top “Extension & server connectivity” + extensionOps / serviceWorkerTransport / connectionDetail in JSON. v2.3+: apply denials, messaging failures, WS send drops, buffering, correlationTraceDelivery, analytics.profilerRebufferVsRemoteSync (when profiler recording). Export refreshes RTT + trace. No full URLs/chat.",
       note: 'Redacted for privacy. sessionChronology + dataCompleteness describe how the test was run and what was clipped. When embedded under playshareUnifiedExport, this object is the "extension" slice alongside videoPlayerProfiler and (on Prime) primeSiteDebug.'
     };
     payload.diagSynopsisCodes = buildDiagSynopsisCodes({
@@ -2740,6 +2818,29 @@
           }
         }
         return payload;
+      },
+      /**
+       * Lightweight ring snapshot for diagnostic analytics (rebuffer vs remote sync overlap).
+       * @param {number} [maxLen]
+       * @returns {Array<Record<string, unknown>>}
+       */
+      copyEventsForDiagAnalytics(maxLen = 500) {
+        const n = Math.max(0, Math.min(maxLen, events.length));
+        if (!n) return [];
+        const slice = events.slice(-n);
+        return slice.map((e) => {
+          if (!e || typeof e !== "object") return {};
+          const o = (
+            /** @type {Record<string, unknown>} */
+            {}
+          );
+          if (e.type != null) o.type = e.type;
+          if (typeof e.t === "number") o.t = e.t;
+          if (typeof e.monoMs === "number") o.monoMs = e.monoMs;
+          if (e.decision === true) o.decision = true;
+          if (e.derived === true) o.derived = true;
+          return o;
+        });
       },
       clearSession() {
         const wasRec = recording;
@@ -5040,6 +5141,7 @@
       syncStateApplied: 0,
       syncStateDeferredNoVideo: 0,
       syncStateDeferredStaleOrMissing: 0,
+      syncStateDeferredRebuffer: 0,
       syncStateDeniedSyncLock: 0,
       syncStateDeniedPlaybackDebounce: 0,
       remoteApplyDeniedSyncLock: 0,
@@ -5747,6 +5849,7 @@
           extensionOps: {
             syncStateDeferredNoVideo: diag.extensionOps.syncStateDeferredNoVideo,
             syncStateDeferredStaleOrMissing: diag.extensionOps.syncStateDeferredStaleOrMissing,
+            syncStateDeferredRebuffer: diag.extensionOps.syncStateDeferredRebuffer,
             syncStateDeniedSyncLock: diag.extensionOps.syncStateDeniedSyncLock,
             syncStateDeniedPlaybackDebounce: diag.extensionOps.syncStateDeniedPlaybackDebounce,
             remoteApplyDeniedSyncLock: diag.extensionOps.remoteApplyDeniedSyncLock,
@@ -5954,7 +6057,8 @@
         already_converging: "correction_rejected_converging",
         server_ad_mode: "correction_rejected_ad_mode",
         reconnect_settle: "correction_rejected_reconnect_settle",
-        netflix_safety_noop: "correction_rejected_netflix_safety"
+        netflix_safety_noop: "correction_rejected_netflix_safety",
+        video_rebuffering: "correction_rejected_rebuffer"
       };
       return m[reason] || "remote_correction_rejected";
     }
@@ -7791,6 +7895,15 @@
       if (!u || !text) return false;
       return text === `▶ ${u} pressed play` || text === `⏸ ${u} paused` || text.startsWith(`⏩ ${u} seeked to `) || text.startsWith(`📺 ${u}`) || text.startsWith(`✓ ${u}'s ad break ended`);
     }
+    const SOFT_SYNC_DEFER_MS_AFTER_BUFFER_MS = 2600;
+    function isRecentVideoRebufferingForSoftSyncDefer() {
+      const now = Date.now();
+      const vb = diag.videoBuffering;
+      const w = vb.lastWaitingAt;
+      const s = vb.lastStalledAt;
+      const win = SOFT_SYNC_DEFER_MS_AFTER_BUFFER_MS;
+      return typeof w === "number" && now - w < win || typeof s === "number" && now - s < win;
+    }
     function applySyncState(state) {
       if (!state) return;
       const syncKind = state.syncKind === "soft" ? "soft" : "hard";
@@ -7876,6 +7989,32 @@
             currentTime: targetTime,
             skipped: true,
             syncDecision: syncDec.reason
+          });
+          return;
+        }
+        const crStr = state.correctionReason != null ? String(state.correctionReason) : "";
+        if (syncKind === "soft" && crStr !== syncDecision.CORRECTION_REASONS.HOST_ANCHOR_SOFT && !syncDecision.isHardPriorityRemote({
+          syncKind,
+          correctionReason: state.correctionReason,
+          fromRoomJoin: state.correctionReason === syncDecision.CORRECTION_REASONS.JOIN
+        }) && isRecentVideoRebufferingForSoftSyncDefer()) {
+          diag.extensionOps.syncStateDeferredRebuffer++;
+          platformPlaybackLog("SYNC_DEFER_REBUFFER", {
+            remoteKind: "SYNC_STATE",
+            syncKind,
+            correctionReason: state.correctionReason,
+            driftSec: driftPre
+          });
+          profilerEmitSyncRejection("SYNC_STATE", { ok: false, reason: "video_rebuffering" }, {
+            driftSec: driftPre,
+            syncKind,
+            correctionReason: state.correctionReason
+          });
+          diagLog("SYNC_STATE", {
+            playing: state.playing,
+            currentTime: targetTime,
+            skipped: true,
+            syncDecision: "video_rebuffering"
           });
           return;
         }
@@ -9137,6 +9276,15 @@
         ver = chrome.runtime.getManifest()?.version || ver;
       } catch {
       }
+      let profilerEventsForAnalytics = null;
+      try {
+        const p = getVideoProfiler();
+        if (p.isRecording() && typeof p.copyEventsForDiagAnalytics === "function") {
+          profilerEventsForAnalytics = p.copyEventsForDiagAnalytics(600);
+        }
+      } catch {
+        profilerEventsForAnalytics = null;
+      }
       return buildDiagnosticExport({
         diag,
         roomState,
@@ -9146,7 +9294,8 @@
         reportSession: diag.reportSession,
         pageHost: typeof location !== "undefined" ? location.hostname : "",
         videoAttached: diag.videoAttached,
-        captureContext: diagExportCaptureContext
+        captureContext: diagExportCaptureContext,
+        profilerEventsForAnalytics
       });
     }
     async function buildPrimePlayerSyncExportBundle() {
