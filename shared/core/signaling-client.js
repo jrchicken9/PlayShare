@@ -5,6 +5,11 @@
  * Server → client frames (ROOM_JOINED, SYNC_STATE, …) are intentionally omitted here; add a
  * `signaling-server.js` module when the first non-extension consumer needs them.
  */
+/**
+ * Optional `surface` on CREATE_ROOM / JOIN_ROOM JSON (server → member list):
+ * - `app` — PlayShare desktop or web lobby
+ * - `extension` — Chrome extension (streaming tab); omitted / legacy clients default to `extension`
+ */
 export const PlayShareSignalingClientType = Object.freeze({
   CREATE_ROOM: 'CREATE_ROOM',
   JOIN_ROOM: 'JOIN_ROOM',
@@ -33,5 +38,7 @@ export const PlayShareSignalingClientType = Object.freeze({
   TITLE_SUGGEST_REMOVE: 'TITLE_SUGGEST_REMOVE',
   /** Cast vote on a suggestion: value 1 = up, -1 = down, 0 = clear your vote. */
   TITLE_SUGGEST_VOTE: 'TITLE_SUGGEST_VOTE',
+  /** Desktop host: agreed watch page URL + notes for the room (broadcast to all members). */
+  SESSION_WATCH_SET: 'SESSION_WATCH_SET',
   REACTION: 'REACTION'
 });

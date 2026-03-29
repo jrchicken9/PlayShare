@@ -297,6 +297,7 @@ function ensureRoomSyncPolicyFields(room) {
   if (room.reconnectSettleUntil == null) room.reconnectSettleUntil = 0;
   if (room.lastObservedSpreadSec === undefined) room.lastObservedSpreadSec = null;
   if (!room.titleSuggestions) room.titleSuggestions = new Map();
+  if (!('sessionWatch' in room)) room.sessionWatch = null;
 }
 
 /** @param {Map<string, number> | undefined} votes clientId → 1 | -1 */
@@ -674,15 +675,26 @@ function formatSeekTime(s) {
   return `${m}:${String(sec).padStart(2, '0')}`;
 }
 
+/** @param {string} [raw] client hint: `app` (PlayShare desktop / non-extension) vs `extension` (Chrome helper) */
+function normalizeMemberSurface(raw) {
+  const s = typeof raw === 'string' ? raw.toLowerCase().trim() : '';
+  if (s === 'app' || s === 'desktop') return 'app';
+  return 'extension';
+}
+
 function getMemberList(roomCode) {
   const room = rooms.get(roomCode);
   if (!room) return [];
-  return Array.from(room.members.entries()).map(([id, m]) => ({
-    clientId: id,
-    username: m.username,
-    color: m.color,
-    isHost: id === room.host
-  }));
+  return Array.from(room.members.entries()).map(([id, m]) => {
+    const row = {
+      clientId: id,
+      username: m.username,
+      color: m.color,
+      isHost: id === room.host
+    };
+    if (m.surface != null) row.surface = normalizeMemberSurface(m.surface);
+    return row;
+  });
 }
 
 function assignColor(roomCode) {
@@ -1296,11 +1308,12 @@ wss.on('connection', (ws) => {
         const color = COLORS[0];
         const hostOnlyControl = !!msg.hostOnlyControl;
         const countdownOnPlay = !!msg.countdownOnPlay;
+        const hostSurface = normalizeMemberSurface(msg.surface);
         rooms.set(roomCode, {
           host: clientId,
           hostOnlyControl,
           countdownOnPlay,
-          members: new Map([[clientId, { ws, username, color }]]),
+          members: new Map([[clientId, { ws, username, color, surface: hostSurface }]]),
           state: { playing: false, currentTime: 0, updatedAt: Date.now() },
           adBreakClients: new Set(),
           adMode: false,
@@ -1309,7 +1322,9 @@ wss.on('connection', (ws) => {
           lastHostSeekAt: 0,
           lastHardCorrectionAt: 0,
           reconnectSettleUntil: 0,
-          titleSuggestions: new Map()
+          titleSuggestions: new Map(),
+          /** @type {{ providerKey: string, titleNote: string, watchUrl: string } | null} */
+          sessionWatch: null
         });
         startRoomSyncBroadcast(roomCode);
         client.roomCode = roomCode;
@@ -1326,7 +1341,8 @@ wss.on('connection', (ws) => {
           countdownOnPlay,
           members: getMemberList(roomCode),
           activeAdBreaks: [],
-          titleSuggestions: serializeTitleSuggestionsForClient(rooms.get(roomCode))
+          titleSuggestions: serializeTitleSuggestionsForClient(rooms.get(roomCode)),
+          sessionWatch: null
         });
         console.log(`[ROOM] Created: ${roomCode} by ${username} (hostOnly: ${hostOnlyControl}, countdown: ${countdownOnPlay})`);
         break;
@@ -1344,12 +1360,13 @@ wss.on('connection', (ws) => {
         room.reconnectSettleUntil = Date.now() + RECONNECT_SETTLE_MS;
         syncPolicyLog(roomCode, 'RECONNECT_SETTLE', { until: room.reconnectSettleUntil });
         const color = assignColor(roomCode);
+        const joinSurface = normalizeMemberSurface(msg.surface);
         /** Members already in the room before this socket joins (1 = host only, 2+ = group). */
         const priorMemberCount = room.members.size;
         const rejoinAfterDrop = msg.rejoinAfterDrop === true;
         const pauseRoomForJoinSync = priorMemberCount >= 1 && !rejoinAfterDrop;
 
-        room.members.set(clientId, { ws, username, color });
+        room.members.set(clientId, { ws, username, color, surface: joinSurface });
         client.roomCode = roomCode;
         client.username = username;
         client.color = color;
@@ -1395,7 +1412,8 @@ wss.on('connection', (ws) => {
           state: joinState,
           members: getMemberList(roomCode),
           activeAdBreaks: activeAdBreaksList(room),
-          titleSuggestions: serializeTitleSuggestionsForClient(room)
+          titleSuggestions: serializeTitleSuggestionsForClient(room),
+          sessionWatch: room.sessionWatch || null
         });
 
         // Notify existing members (include activeAdBreaks so clients can resync if they missed AD_BREAK_*)
@@ -1677,7 +1695,38 @@ wss.on('connection', (ws) => {
         break;
       }
 
-      // ── Chat ─────────────────────────────────────────────────────────────
+      // ── Chat / desktop session watch ─────────────────────────────────────
+      case 'SESSION_WATCH_SET': {
+        if (!client.roomCode) return;
+        const room = rooms.get(client.roomCode);
+        if (!room) return;
+        ensureRoomSyncPolicyFields(room);
+        if (room.host !== clientId) {
+          sendTo(ws, {
+            type: 'ERROR',
+            code: 'FORBIDDEN',
+            message: 'Only the host can set the watch link for this room.'
+          });
+          return;
+        }
+        const w = msg.watch;
+        if (!w || typeof w !== 'object') return;
+        const sanitized = {
+          providerKey: String(w.providerKey || '').slice(0, 64),
+          titleNote: String(w.titleNote || '').slice(0, 200),
+          watchUrl: String(w.watchUrl || '').slice(0, 4000)
+        };
+        if (!sanitized.watchUrl.trim()) {
+          room.sessionWatch = null;
+          broadcastAll(client.roomCode, { type: 'SESSION_WATCH', watch: null });
+        } else {
+          room.sessionWatch = sanitized;
+          broadcastAll(client.roomCode, { type: 'SESSION_WATCH', watch: sanitized });
+        }
+        console.log(`[ROOM] sessionWatch updated in ${client.roomCode}`);
+        break;
+      }
+
       case 'CHAT': {
         if (!client.roomCode) return;
         const text = (msg.text || '').slice(0, 500);
