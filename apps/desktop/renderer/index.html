@@ -11,12 +11,84 @@
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
+  <div class="app-bg-brand" aria-hidden="true">
+    <div class="app-bg-brand__fire-stack">
+      <div class="app-bg-brand__flame-bed" aria-hidden="true"></div>
+      <div class="app-bg-brand__heat-wisps" aria-hidden="true">
+        <div class="app-bg-brand__wisp app-bg-brand__wisp--left"></div>
+        <div class="app-bg-brand__wisp app-bg-brand__wisp--center"></div>
+        <div class="app-bg-brand__wisp app-bg-brand__wisp--right"></div>
+      </div>
+    </div>
+    <div class="app-bg-brand__pulse">
+      <!-- App mark: rounded tile + red play triangle + teal “live” ring (from design/logo-combo…) -->
+      <svg
+        class="app-bg-brand__svg"
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 40 40"
+        fill="none"
+        focusable="false"
+      >
+        <defs>
+          <linearGradient id="psBgFace" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#282828" />
+            <stop offset="55%" stop-color="#121212" />
+            <stop offset="100%" stop-color="#0a0a0a" />
+          </linearGradient>
+          <linearGradient id="psBgAccent" x1="0%" y1="100%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#ff5c5c" />
+            <stop offset="45%" stop-color="#E50914" />
+            <stop offset="100%" stop-color="#9e0610" />
+          </linearGradient>
+          <linearGradient id="psBgSheen" x1="50%" y1="0%" x2="50%" y2="65%">
+            <stop offset="0%" stop-color="rgba(255,255,255,0.2)" />
+            <stop offset="55%" stop-color="rgba(255,255,255,0.02)" />
+            <stop offset="100%" stop-color="rgba(255,255,255,0)" />
+          </linearGradient>
+        </defs>
+        <rect x="2" y="2" width="36" height="36" rx="10" fill="url(#psBgFace)" />
+        <rect x="2" y="2" width="36" height="36" rx="10" fill="url(#psBgSheen)" opacity="0.55" />
+        <rect x="2" y="2" width="36" height="36" rx="10" stroke="rgba(255,255,255,0.09)" stroke-width="1" />
+        <rect
+          x="2.5"
+          y="2.5"
+          width="35"
+          height="35"
+          rx="9.5"
+          stroke="url(#psBgAccent)"
+          stroke-width="0.85"
+          opacity="0.5"
+        />
+        <path
+          transform="translate(0.35 2.62)"
+          fill="url(#psBgAccent)"
+          d="M15.5 12.25C15.5 11.56 16.22 11.1 16.85 11.42L26.2 16.67C26.78 16.97 26.78 17.8 26.2 18.1L16.85 23.35C16.22 23.67 15.5 23.21 15.5 22.52V12.25Z"
+        />
+        <circle class="app-bg-brand__live-ring" cx="30" cy="10" r="4" fill="#0a0a0a" stroke="#4ECDC4" stroke-width="1.2" />
+        <circle class="app-bg-brand__live-core" cx="30" cy="10" r="1.6" fill="#4ECDC4" opacity="0.95" />
+      </svg>
+    </div>
+  </div>
   <div class="shell shell-wide">
     <header class="top">
       <div class="top-brand">
-        <div class="top-titles">
-          <div class="brand-mark" aria-label="PlayShare"><span class="brand-play">Play</span><span class="brand-share">Share</span></div>
-          <div class="sub">Same scene. Same second. Together on the apps you love.</div>
+        <div class="top-titles top-brand-lockup">
+          <div class="brand-lockup-row">
+            <img
+              class="brand-mark-icon brand-mark-icon--header"
+              src="./brand-mark.svg"
+              width="40"
+              height="40"
+              alt=""
+              decoding="async"
+            />
+            <div class="brand-lockup-text">
+              <div class="brand-mark" aria-label="PlayShare">
+                <span class="brand-play" aria-hidden="true">Play</span><span class="brand-share" aria-hidden="true">Share</span>
+              </div>
+              <div class="sub">Same scene. Same second. Together on the apps you love.</div>
+            </div>
+          </div>
         </div>
       </div>
       <nav class="app-surface-nav" id="appSurfaceNav" hidden aria-label="Primary sections">
@@ -59,6 +131,19 @@
     <div class="view-stage">
     <section id="viewAuth" class="auth-layout">
       <div class="auth-card panel-elevated">
+        <div class="auth-brand-lockup">
+          <img
+            class="brand-mark-icon brand-mark-icon--auth"
+            src="./brand-mark.svg"
+            width="40"
+            height="40"
+            alt=""
+            decoding="async"
+          />
+          <div class="brand-mark brand-mark--auth" aria-label="PlayShare">
+            <span class="brand-play" aria-hidden="true">Play</span><span class="brand-share" aria-hidden="true">Share</span>
+          </div>
+        </div>
         <h1 class="auth-title">Welcome</h1>
         <p class="auth-lead muted">Sign in to open your dashboard and start or join watch rooms.</p>
         <div class="auth-tabs" role="tablist" aria-label="Account access">
@@ -82,8 +167,20 @@
     <section id="viewDashboard" class="dash view-dashboard surface-view" hidden>
       <div class="dash-hero panel-elevated">
         <div class="dash-hello">
-          <p class="dash-kicker">Discover</p>
-          <h2 class="dash-h2" id="dashGreeting">Dashboard</h2>
+          <div class="dash-hero-brand">
+            <img
+              class="brand-mark-icon brand-mark-icon--dash"
+              src="./brand-mark.svg"
+              width="40"
+              height="40"
+              alt=""
+              decoding="async"
+            />
+            <div class="dash-hero-brand-text">
+              <p class="dash-kicker">Discover</p>
+              <h2 class="dash-h2" id="dashGreeting">Dashboard</h2>
+            </div>
+          </div>
           <p class="muted dash-tagline" id="dashTagline">
             Browse what’s trending from your server catalog—posters, descriptions, and picks updated from TMDB.
           </p>
@@ -98,12 +195,22 @@
         aria-labelledby="spotlight-heading"
       >
         <div class="spotlight-head">
-          <div class="spotlight-head-main">
+          <div class="spotlight-head-brand">
+            <img
+              class="brand-mark-icon brand-mark-icon--spot"
+              src="./brand-mark.svg"
+              width="40"
+              height="40"
+              alt=""
+              decoding="async"
+            />
+            <div class="spotlight-head-main">
             <p class="spotlight-eyebrow">Discover</p>
             <h3 id="spotlight-heading" class="spotlight-title">Trending this week</h3>
             <p class="muted spotlight-lead">
-              What’s on everyone’s lists this week—trailers, posters, and picks straight from your catalog. People still press play in <strong>their own apps</strong>; PlayShare keeps the room in sync.
+              What’s on everyone’s lists this week—trailers, posters, and picks straight from your catalog. <strong>Click a title</strong> to see where it streams and open that service in your browser. People still press play in <strong>their own apps</strong>; PlayShare keeps the room in sync.
             </p>
+            </div>
           </div>
           <div class="spotlight-head-aside">
             <span class="spotlight-pill" id="spotlightCatalogPill" hidden>Live catalog</span>
@@ -172,6 +279,25 @@
         <p class="spotlight-foot muted" id="spotlightFoot">Loading picks…</p>
       </section>
 
+      <dialog id="catalogWatchModal" class="catalog-watch-dialog" aria-labelledby="catalogWatchModalTitle">
+        <div class="catalog-watch-dialog-panel panel-elevated">
+          <header class="catalog-watch-dialog-head">
+            <h3 id="catalogWatchModalTitle" class="catalog-watch-dialog-title">Where to watch</h3>
+            <button
+              type="button"
+              class="catalog-watch-dialog-close"
+              id="btnCatalogWatchModalClose"
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </header>
+          <p class="catalog-watch-dialog-region muted" id="catalogWatchModalRegion" hidden></p>
+          <div class="catalog-watch-dialog-body" id="catalogWatchModalBody"></div>
+          <footer class="catalog-watch-dialog-foot muted" id="catalogWatchModalFoot"></footer>
+        </div>
+      </dialog>
+
       <div class="dash-grid">
         <article class="dash-card panel-elevated">
           <h3 class="dash-card-title">Host a room</h3>
@@ -191,12 +317,25 @@
     <section id="viewRoom" class="room-view surface-view" hidden>
       <header class="room-header">
         <div class="room-header-text">
-          <p class="room-eyebrow">Watch party</p>
+          <div class="room-header-brand">
+            <img
+              class="brand-mark-icon brand-mark-icon--room"
+              src="./brand-mark.svg"
+              width="40"
+              height="40"
+              alt=""
+              decoding="async"
+            />
+            <p class="room-eyebrow">Watch party</p>
+          </div>
           <div class="room-title-row">
             <h2 class="room-heading"><span class="room-code" id="roomCodeDisplay">------</span></h2>
             <span id="hostBadge" class="room-host-pill" hidden>Host</span>
           </div>
-          <p class="room-sub muted">Friends enter this code in PlayShare to join you. Switch to <strong>Discover</strong> anytime to browse titles—your session stays open.</p>
+          <p class="room-sub muted">
+            Friends join with this code. Vote on picks in the lobby, then paste a watch link below when you’ve
+            chosen something—your session stays open if you switch to Discover.
+          </p>
         </div>
         <div class="room-header-actions">
           <button type="button" id="btnLeaveRoom" class="btn room-leave room-leave--solid">Leave room</button>
@@ -205,7 +344,74 @@
 
       <div class="room-layout">
         <div class="room-column room-column--main">
-          <section class="room-holo room-holo--future panel-elevated" aria-labelledby="room-holo-title">
+          <div class="room-lobby-duo">
+            <section
+              id="roomPicksCard"
+              class="room-picks-card panel-elevated"
+              aria-label="What to watch"
+              hidden
+            >
+              <div
+                id="lobbyPickSearchPanel"
+                class="lobby-pick-search-panel lobby-pick-search-panel--card-top"
+                role="search"
+                aria-label="Suggest a movie or show"
+              >
+                <h4 id="lobbyPicksHeading" class="lobby-picks-heading lobby-picks-heading--hero">
+                  What should we watch?
+                </h4>
+                <div class="lobby-picks-search-row lobby-picks-search-row--hero">
+                  <input
+                    type="search"
+                    id="inLobbyPickSearch"
+                    class="lobby-picks-search-input lobby-picks-search-input--hero"
+                    placeholder="Search titles…"
+                    maxlength="200"
+                    autocomplete="off"
+                    aria-label="Search for a movie or TV show"
+                  />
+                  <button type="button" id="btnLobbyPickSearch" class="btn primary lobby-picks-search-btn lobby-picks-search-btn--hero">
+                    Search
+                  </button>
+                </div>
+                <p class="lobby-pick-dashboard-hint">
+                  <button type="button" id="btnLobbyPickDiscover" class="lobby-pick-discover-btn">
+                    Discover
+                  </button>
+                  <span class="lobby-pick-dashboard-hint-tail muted">Trending &amp; genres — suggest from cards · room stays open</span>
+                </p>
+                <div
+                  id="lobbyPickSearchResults"
+                  class="lobby-pick-search-results lobby-pick-search-results--hero"
+                  hidden
+                  role="listbox"
+                  aria-label="Search results"
+                ></div>
+              </div>
+              <div
+                id="lobbySuggestedWrap"
+                class="lobby-suggestions-wrap lobby-suggestions-wrap--picks-card"
+                hidden
+                aria-label="Room picks and votes"
+              >
+                <p class="lobby-suggestions-heading">Picks &amp; votes</p>
+                <div class="lobby-suggestions-layout">
+                  <div
+                    id="lobbySuggestedFeatured"
+                    class="lobby-suggest-featured-host"
+                    hidden
+                    aria-live="polite"
+                  ></div>
+                  <div class="lobby-suggestions-secondary">
+                    <p id="lobbySuggestionsOtherLabel" class="lobby-suggestions-subheading muted" hidden>
+                      Other suggestions
+                    </p>
+                    <div id="lobbySuggestedList" class="lobby-suggestions-list" role="list"></div>
+                  </div>
+                </div>
+              </div>
+            </section>
+            <section class="room-holo room-holo--future panel-elevated" aria-labelledby="room-holo-title">
             <div class="room-holo-scan" aria-hidden="true"></div>
             <header class="room-holo-head">
               <div class="room-holo-head-text">
@@ -213,7 +419,7 @@
                   <h3 id="room-holo-title" class="room-holo-title">
                     <span class="room-holo-title-accent">Lobby</span> chat
                   </h3>
-                  <span class="room-holo-net-badge">Connected</span>
+                  <span class="room-holo-net-badge" id="lobbyNetBadge">Connected</span>
                 </div>
                 <p class="room-holo-meta muted" id="lobbySquadMeta">—</p>
               </div>
@@ -233,36 +439,29 @@
                 role="list"
                 aria-label="People in this room"
               ></div>
-              <div
-                id="lobbySuggestedWrap"
-                class="lobby-suggestions-wrap"
-                hidden
-                aria-label="Titles suggested from Discover"
-              >
-                <p class="lobby-suggestions-heading">Suggested from Discover</p>
-                <div id="lobbySuggestedList" class="lobby-suggestions-list" role="list"></div>
-              </div>
-              <div class="room-holo-datastream" aria-hidden="true">
-                <span class="room-holo-datastream-tag">Messages</span>
-                <span class="room-holo-datastream-track">
-                  <span class="room-holo-datastream-trace"></span>
-                </span>
-                <span class="room-holo-datastream-rx">
-                  Live<span class="room-holo-cursor" aria-hidden="true"></span>
-                </span>
-              </div>
-              <div class="room-holo-transcript">
-                <div class="room-holo-transcript-inner">
-                  <div
-                    id="lobbyChatLog"
-                    class="lobby-chat-log lobby-chat-log--holo"
-                    role="log"
-                    aria-live="polite"
-                    aria-relevant="additions"
-                  >
-                    <p id="lobbyChatPlaceholder" class="lobby-chat-placeholder muted">
-                      No messages yet.
-                    </p>
+              <div class="room-holo-messages">
+                <div class="room-holo-datastream" aria-hidden="true">
+                  <span class="room-holo-datastream-tag">Messages</span>
+                  <span class="room-holo-datastream-track">
+                    <span class="room-holo-datastream-trace"></span>
+                  </span>
+                  <span class="room-holo-datastream-rx">
+                    Live<span class="room-holo-cursor" aria-hidden="true"></span>
+                  </span>
+                </div>
+                <div class="room-holo-transcript">
+                  <div class="room-holo-transcript-inner">
+                    <div
+                      id="lobbyChatLog"
+                      class="lobby-chat-log lobby-chat-log--holo"
+                      role="log"
+                      aria-live="polite"
+                      aria-relevant="additions"
+                    >
+                      <p id="lobbyChatPlaceholder" class="lobby-chat-placeholder muted">
+                        No messages yet.
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -281,14 +480,15 @@
                 Send
               </button>
             </div>
-          </section>
+            </section>
+          </div>
 
           <section class="room-card room-card--watch watch-share panel-elevated" aria-labelledby="room-watch-title">
             <header class="watch-share-header">
               <div class="watch-share-accent" aria-hidden="true"></div>
               <div class="watch-share-intro">
                 <h3 id="room-watch-title" class="watch-share-title">Same show for everyone</h3>
-                <p class="watch-share-lead muted">Paste the URL from the episode or movie page in your streaming app. Each person opens it with their own account—PlayShare syncs the room; it doesn’t play video.</p>
+                <p class="watch-share-lead muted">Host saves the episode or movie page URL here. Everyone in the room gets the same handoff—use <strong>Open in browser</strong> for a one-click link that joins this room in Chrome (PlayShare extension). Each person still uses their own streaming login; PlayShare only syncs the room.</p>
               </div>
             </header>
 
@@ -323,7 +523,7 @@
               <button type="button" id="btnSaveWatch" class="btn watch-foot-save">Save details</button>
               <div class="watch-share-cta-row">
                 <button type="button" id="btnCopyDeep" class="btn primary watch-cta-primary" disabled>Copy invite link</button>
-                <button type="button" id="btnOpenWatch" class="btn watch-cta-secondary" disabled>Open in browser</button>
+                <button type="button" id="btnOpenWatch" class="btn watch-cta-secondary" disabled>Open in browser (join room)</button>
                 <button type="button" id="btnAnnounce" class="btn btn-soft watch-cta-soft" disabled>Tell chat</button>
               </div>
             </footer>

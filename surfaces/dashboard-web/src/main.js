@@ -415,7 +415,8 @@ async function onCreate() {
         type: PlayShareSignalingClientType.CREATE_ROOM,
         username,
         hostOnlyControl: false,
-        countdownOnPlay: false
+        countdownOnPlay: false,
+        surface: 'app'
       })
     );
   } catch (e) {
@@ -445,7 +446,8 @@ async function onJoin() {
       JSON.stringify({
         type: PlayShareSignalingClientType.JOIN_ROOM,
         roomCode,
-        username
+        username,
+        surface: 'app'
       })
     );
   } catch (e) {

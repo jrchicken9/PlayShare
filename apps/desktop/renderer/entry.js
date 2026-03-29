@@ -33,6 +33,10 @@ let lobbyChatWasInRoom = false;
 /** TMDB picks suggested to the room (shown in lobby); cleared when leaving. */
 let lobbyRoomSuggestions = [];
 const LOBBY_SUGGEST_MAX = 15;
+/** Room snapshot may arrive before `playshare-signal-status` sets `ui.room.inRoom` — flush when room is ready. */
+let pendingRoomTitleSuggestions = /** @type {{ roomCode: string | null, list: unknown } | null} */ (null);
+/** Suggestion keys (`media:tmdbId`) with an in-flight TITLE_SUGGEST_VOTE (avoid double taps). */
+const titleVotePendingKeys = new Set();
 /** While signaling says we're in a room: 'lobby' = watch-party UI, 'dashboard' = browse catalog without leaving the room */
 let roomNavSurface = 'lobby';
 /** Set to `${httpOrigin}|${supabaseUserId}` only after TMDB spotlight cards render (not editorial fallback). */
@@ -129,6 +133,7 @@ function mergeStatus(patch) {
   if (patch.connecting !== undefined) ui.connecting = patch.connecting;
   if (patch.wsUrl !== undefined) {
     if (ui.wsUrl !== patch.wsUrl) {
+      pendingRoomTitleSuggestions = null;
       spotlightTmdbSuccessKey = null;
       spotlightLastCatalogFetchAt = 0;
       catalogGenresHydratedForBase = null;
@@ -149,8 +154,13 @@ function mergeStatus(patch) {
   if (patch.room) {
     const wasIn = ui.room.inRoom;
     ui.room = { ...patch.room };
-    if (!ui.room.inRoom) roomNavSurface = 'lobby';
-    else if (!wasIn && ui.room.inRoom) roomNavSurface = 'lobby';
+    if (!ui.room.inRoom) {
+      roomNavSurface = 'lobby';
+      pendingRoomTitleSuggestions = null;
+    } else if (!wasIn && ui.room.inRoom) {
+      roomNavSurface = 'lobby';
+      flushPendingRoomTitleSuggestions();
+    }
   }
   if (patch.watch) ui.watch = { ...ui.watch, ...patch.watch };
 }
@@ -164,6 +174,18 @@ function clearAuthDashTransition() {
 
 function prefersReducedMotion() {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/** Discover can leave the document scrolled down; reset when returning to Room. */
+function scrollMainToTop() {
+  try {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  } catch {
+    window.scrollTo(0, 0);
+  }
+  const root = document.scrollingElement || document.documentElement;
+  root.scrollTop = 0;
+  document.body.scrollTop = 0;
 }
 
 function formatChatTime(ts) {
@@ -265,8 +287,107 @@ function suggestionMergeKey(media, tmdbId) {
   return `${media}:${tmdbId}`;
 }
 
+function votePayloadFromMsg(msg) {
+  const v = msg && msg.votes && typeof msg.votes === 'object' ? msg.votes : null;
+  if (v) {
+    const rawBy = v.by && typeof v.by === 'object' ? v.by : {};
+    const voteByClient = {};
+    for (const [k, val] of Object.entries(rawBy)) {
+      if (val === 1 || val === -1) voteByClient[String(k)] = val;
+    }
+    return {
+      voteScore: typeof v.score === 'number' ? v.score : 0,
+      voteUp: typeof v.up === 'number' ? v.up : 0,
+      voteDown: typeof v.down === 'number' ? v.down : 0,
+      voteByClient
+    };
+  }
+  return { voteScore: 0, voteUp: 0, voteDown: 0, voteByClient: {} };
+}
+
+function lobbyRowFromTitleSyncItem(item) {
+  if (!item || typeof item !== 'object') return null;
+  const media = item.media === 'movie' || item.media === 'tv' ? item.media : null;
+  const tmdbId =
+    typeof item.tmdbId === 'number' && Number.isFinite(item.tmdbId)
+      ? item.tmdbId
+      : parseInt(String(item.tmdbId || ''), 10);
+  if (!media || !Number.isFinite(tmdbId) || tmdbId <= 0) return null;
+  const title = String(item.title || '').trim();
+  if (!title) return null;
+  const key = suggestionMergeKey(media, tmdbId);
+  const vv = votePayloadFromMsg({ votes: item.votes });
+  return {
+    key,
+    title: title.slice(0, 200),
+    media,
+    tmdbId,
+    overview: String(item.overview || '').slice(0, 280),
+    posterUrl: typeof item.posterUrl === 'string' && item.posterUrl.trim() ? item.posterUrl.trim() : null,
+    year: item.year ? String(item.year).replace(/[^\d]/g, '').slice(0, 4) : null,
+    username: String(item.username || 'Someone').trim().slice(0, 48) || 'Someone',
+    clientId: String(item.clientId || ''),
+    timestamp: typeof item.timestamp === 'number' ? item.timestamp : Date.now(),
+    ...vv
+  };
+}
+
+function applyTitleSuggestionsArray(raw) {
+  if (!Array.isArray(raw)) {
+    lobbyRoomSuggestions = [];
+  } else {
+    const rows = raw.map(lobbyRowFromTitleSyncItem).filter(Boolean);
+    rows.sort(
+      (a, b) =>
+        (Number(b.voteScore) || 0) - (Number(a.voteScore) || 0) ||
+        (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)
+    );
+    lobbyRoomSuggestions = rows.slice(0, LOBBY_SUGGEST_MAX);
+  }
+  renderLobbySuggestions();
+  syncCatalogSuggestButtons();
+}
+
+function flushPendingRoomTitleSuggestions() {
+  if (!pendingRoomTitleSuggestions) return;
+  const { roomCode, list } = pendingRoomTitleSuggestions;
+  pendingRoomTitleSuggestions = null;
+  if (!ui.room.inRoom) {
+    pendingRoomTitleSuggestions = { roomCode, list };
+    return;
+  }
+  if (roomCode && ui.room.roomCode && roomCode !== ui.room.roomCode) return;
+  applyTitleSuggestionsArray(list);
+}
+
+/** Apply `titleSuggestions` from ROOM_JOINED / ROOM_CREATED (ordering vs status-safe). */
+function applyRoomTitleSuggestionsFromFrame(msg) {
+  if (!msg || (msg.type !== 'ROOM_JOINED' && msg.type !== 'ROOM_CREATED')) return;
+  if (!('titleSuggestions' in msg)) return;
+  const raw = msg.titleSuggestions;
+  const roomCode = typeof msg.roomCode === 'string' ? msg.roomCode : null;
+  if (!ui.room.inRoom || (roomCode && ui.room.roomCode !== roomCode)) {
+    pendingRoomTitleSuggestions = { roomCode, list: raw };
+    return;
+  }
+  applyTitleSuggestionsArray(raw);
+}
+
+function clearLobbyPickSearchUI() {
+  const r = $('lobbyPickSearchResults');
+  if (r) {
+    r.hidden = true;
+    r.innerHTML = '';
+  }
+  const inp = $('inLobbyPickSearch');
+  if (inp) inp.value = '';
+}
+
 function clearLobbySuggestions() {
   lobbyRoomSuggestions = [];
+  pendingRoomTitleSuggestions = null;
+  titleVotePendingKeys.clear();
+  clearLobbyPickSearchUI();
   renderLobbySuggestions();
   syncCatalogSuggestButtons();
 }
@@ -283,6 +404,7 @@ function applyLobbyTitleSuggestion(msg) {
   const title = (msg.title || '').trim();
   if (!title) return;
   const key = suggestionMergeKey(media, tmdbId);
+  const vv = votePayloadFromMsg(msg);
   const row = {
     key,
     title: title.slice(0, 200),
@@ -293,12 +415,20 @@ function applyLobbyTitleSuggestion(msg) {
     year: msg.year ? String(msg.year).replace(/[^\d]/g, '').slice(0, 4) : null,
     username: (msg.username || 'Someone').trim().slice(0, 48) || 'Someone',
     clientId: String(msg.clientId || ''),
-    timestamp: typeof msg.timestamp === 'number' ? msg.timestamp : Date.now()
+    timestamp: typeof msg.timestamp === 'number' ? msg.timestamp : Date.now(),
+    ...vv
   };
   const idx = lobbyRoomSuggestions.findIndex((r) => r.key === key);
   if (idx >= 0) {
     const [prev] = lobbyRoomSuggestions.splice(idx, 1);
-    lobbyRoomSuggestions.unshift({ ...row, overview: row.overview || prev.overview });
+    lobbyRoomSuggestions.unshift({
+      ...row,
+      overview: row.overview || prev.overview,
+      voteScore: row.voteScore,
+      voteUp: row.voteUp,
+      voteDown: row.voteDown,
+      voteByClient: row.voteByClient
+    });
   } else {
     lobbyRoomSuggestions.unshift(row);
   }
@@ -307,6 +437,74 @@ function applyLobbyTitleSuggestion(msg) {
   }
   renderLobbySuggestions();
   syncCatalogSuggestButtons();
+}
+
+function applyLobbyVoteUpdate(msg) {
+  if (!msg || msg.type !== 'TITLE_SUGGEST_VOTE_UPDATE' || !ui.room.inRoom) return;
+  const media = msg.media === 'movie' || msg.media === 'tv' ? msg.media : null;
+  if (!media) return;
+  const t =
+    typeof msg.tmdbId === 'number' && Number.isFinite(msg.tmdbId)
+      ? msg.tmdbId
+      : parseInt(String(msg.tmdbId || ''), 10);
+  if (!Number.isFinite(t) || t <= 0) return;
+  const key = suggestionMergeKey(media, t);
+  const i = lobbyRoomSuggestions.findIndex((r) => r.key === key);
+  if (i < 0) return;
+  const vv = votePayloadFromMsg(msg);
+  lobbyRoomSuggestions[i] = { ...lobbyRoomSuggestions[i], ...vv };
+  renderLobbySuggestions();
+  syncCatalogSuggestButtons();
+}
+
+/**
+ * Match server TITLE_SUGGEST_VOTE semantics locally so the UI does not flash stale
+ * counts between IPC return and WebSocket TITLE_SUGGEST_VOTE_UPDATE.
+ * @param {string} key suggestionMergeKey
+ * @param {0 | 1 | -1} valueSent
+ */
+function applyOptimisticTitleVote(key, valueSent) {
+  const cid = String(ui.room.clientId || '');
+  if (!cid) return;
+  if (valueSent !== 0 && valueSent !== 1 && valueSent !== -1) return;
+  const i = lobbyRoomSuggestions.findIndex((r) => r.key === key);
+  if (i < 0) return;
+  const row = lobbyRoomSuggestions[i];
+  const prevRaw = row.voteByClient[cid];
+  const prev = prevRaw === 1 || prevRaw === -1 ? prevRaw : null;
+
+  const nextBy = { ...row.voteByClient };
+  let up = Number(row.voteUp) || 0;
+  let down = Number(row.voteDown) || 0;
+  let score = Number(row.voteScore) || 0;
+
+  if (prev === 1) {
+    up = Math.max(0, up - 1);
+    score--;
+    delete nextBy[cid];
+  } else if (prev === -1) {
+    down = Math.max(0, down - 1);
+    score++;
+    delete nextBy[cid];
+  }
+
+  if (valueSent === 1) {
+    nextBy[cid] = 1;
+    up++;
+    score++;
+  } else if (valueSent === -1) {
+    nextBy[cid] = -1;
+    down++;
+    score--;
+  }
+
+  lobbyRoomSuggestions[i] = {
+    ...row,
+    voteByClient: nextBy,
+    voteUp: up,
+    voteDown: down,
+    voteScore: score
+  };
 }
 
 function applyLobbyTitleRemoved(msg) {
@@ -339,37 +537,298 @@ async function sendTitleSuggestionRemove(s) {
   }
 }
 
-function renderLobbySuggestions() {
+async function sendTitleVote(s, nextVal) {
+  if (!s || !ui.room.inRoom) return;
+  const api = desktop();
+  if (!api?.signalSend || !ui.connected || ui.connecting) return;
+  const key = s.key;
+  if (titleVotePendingKeys.has(key)) return;
+  const row = lobbyRoomSuggestions.find((r) => r.key === key);
+  if (!row) return;
+
+  const cid = String(ui.room.clientId || '');
+  const myRaw = cid && row.voteByClient ? row.voteByClient[cid] : undefined;
+  const myN = Number(myRaw);
+  const my = myN === 1 ? 1 : myN === -1 ? -1 : undefined;
+  let value = nextVal;
+  if (nextVal === 1 && my === 1) value = 0;
+  if (nextVal === -1 && my === -1) value = 0;
+  if (nextVal === 1 && my === -1) return;
+  if (nextVal === -1 && my === 1) return;
+
+  titleVotePendingKeys.add(key);
+  renderLobbySuggestions();
+  let res = { ok: false };
+  try {
+    res = await api.signalSend({
+      type: PlayShareSignalingClientType.TITLE_SUGGEST_VOTE,
+      media: row.media,
+      tmdbId: row.tmdbId,
+      value
+    });
+    if (res && res.ok) {
+      applyOptimisticTitleVote(key, value);
+    }
+  } catch (err) {
+    res = { ok: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    titleVotePendingKeys.delete(key);
+  }
+  if (!res.ok) {
+    ui.lastError = res.error || 'Could not record vote';
+    render();
+  } else {
+    renderLobbySuggestions();
+  }
+}
+
+function lobbyPicksChromeVisible() {
+  return (
+    !!authSession &&
+    ui.room.inRoom &&
+    roomNavSurface === 'lobby' &&
+    ui.connected &&
+    !ui.connecting
+  );
+}
+
+function updateLobbySuggestedWrapVisibility() {
   const wrap = $('lobbySuggestedWrap');
+  if (!wrap) return;
+  wrap.hidden = !lobbyPicksChromeVisible() || lobbyRoomSuggestions.length === 0;
+}
+
+function tmdbPosterSrcForLobby(posterUrl, variant) {
+  if (!posterUrl || typeof posterUrl !== 'string') return null;
+  const u = posterUrl.trim();
+  if (!u) return null;
+  if (variant === 'featured') {
+    return u
+      .replace('/w92/', '/w342/')
+      .replace('/w154/', '/w342/')
+      .replace('/w185/', '/w342/')
+      .replace('/w500/', '/w342/');
+  }
+  let src = u;
+  if (src.includes('/w342/')) src = src.replace('/w342/', '/w154/');
+  else if (src.includes('/w500/')) src = src.replace('/w500/', '/w154/');
+  else if (src.includes('/w92/')) src = src.replace('/w92/', '/w154/');
+  return src;
+}
+
+function pickLobbyFeaturedSuggestion(sorted, maxScore) {
+  if (!sorted.length) return null;
+  if (sorted.length === 1) return sorted[0];
+  if (maxScore > 0) return sorted[0];
+  return null;
+}
+
+function buildLobbySuggestVoteActions(s, score, scoreHighlight) {
+  const cid = String(ui.room.clientId || '');
+  const myVoteRaw = cid && s.voteByClient ? s.voteByClient[cid] : undefined;
+  const myVoteN = Number(myVoteRaw);
+  const iVotedUp = myVoteN === 1;
+  const iVotedDown = myVoteN === -1;
+  const votePending = titleVotePendingKeys.has(s.key);
+
+  const votesRow = document.createElement('div');
+  votesRow.className = 'lobby-suggest-votes lobby-suggest-votes--simple';
+  votesRow.setAttribute('role', 'group');
+  votesRow.setAttribute('aria-label', `Thumbs up or down: ${s.title}`);
+  const downBtn = document.createElement('button');
+  downBtn.type = 'button';
+  downBtn.className = 'lobby-suggest-vote-btn lobby-suggest-vote-btn--thumb lobby-suggest-vote-btn--down';
+  downBtn.textContent = '👎';
+  downBtn.title = iVotedDown
+    ? 'Tap again to undo'
+    : iVotedUp
+      ? 'Remove thumbs up first'
+      : 'Thumbs down';
+  downBtn.setAttribute(
+    'aria-label',
+    iVotedDown ? 'Remove thumbs down' : iVotedUp ? 'Thumbs down — remove thumbs up first' : 'Thumbs down'
+  );
+  downBtn.setAttribute('aria-pressed', iVotedDown ? 'true' : 'false');
+  downBtn.classList.toggle('is-on', iVotedDown);
+  downBtn.disabled = !ui.connected || ui.connecting || votePending || iVotedUp;
+  downBtn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    sendTitleVote(s, -1);
+  });
+  const scoreEl = document.createElement('span');
+  scoreEl.className = 'lobby-suggest-score';
+  if (scoreHighlight) scoreEl.classList.add('lobby-suggest-score--leading');
+  scoreEl.textContent = score > 0 ? `+${score}` : String(score);
+  scoreEl.title = 'Total score — tap your thumb again to undo your vote';
+  const upBtn = document.createElement('button');
+  upBtn.type = 'button';
+  upBtn.className = 'lobby-suggest-vote-btn lobby-suggest-vote-btn--thumb lobby-suggest-vote-btn--up';
+  upBtn.textContent = '👍';
+  upBtn.title = iVotedUp
+    ? 'Tap again to undo'
+    : iVotedDown
+      ? 'Remove thumbs down first'
+      : 'Thumbs up';
+  upBtn.setAttribute(
+    'aria-label',
+    iVotedUp ? 'Remove thumbs up' : iVotedDown ? 'Thumbs up — remove thumbs down first' : 'Thumbs up'
+  );
+  upBtn.setAttribute('aria-pressed', iVotedUp ? 'true' : 'false');
+  upBtn.classList.toggle('is-on', iVotedUp);
+  upBtn.disabled = !ui.connected || ui.connecting || votePending || iVotedDown;
+  upBtn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    sendTitleVote(s, 1);
+  });
+  votesRow.append(downBtn, scoreEl, upBtn);
+  if (votePending) votesRow.classList.add('is-pending');
+
+  const actions = document.createElement('div');
+  actions.className = 'lobby-suggest-card-actions';
+  actions.appendChild(votesRow);
+
+  const canRemove = !!ui.room.isHost || !!(s.clientId && cid && s.clientId === cid);
+  if (canRemove) {
+    const foot = document.createElement('div');
+    foot.className = 'lobby-suggest-foot';
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'lobby-suggest-remove';
+    rm.textContent = 'Remove';
+    rm.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      sendTitleSuggestionRemove(s);
+    });
+    foot.appendChild(rm);
+    actions.appendChild(foot);
+  }
+  return actions;
+}
+
+function renderLobbySuggestions() {
   const list = $('lobbySuggestedList');
-  if (!wrap || !list) return;
-  if (!ui.room.inRoom || lobbyRoomSuggestions.length === 0) {
-    wrap.hidden = true;
-    list.innerHTML = '';
+  const featuredHost = $('lobbySuggestedFeatured');
+  const otherLabel = $('lobbySuggestionsOtherLabel');
+  if (!list) return;
+  list.innerHTML = '';
+  if (featuredHost) {
+    featuredHost.innerHTML = '';
+    featuredHost.hidden = true;
+  }
+  if (otherLabel) otherLabel.hidden = true;
+
+  if (!ui.room.inRoom) {
+    updateLobbySuggestedWrapVisibility();
     return;
   }
-  wrap.hidden = false;
-  list.innerHTML = '';
-  for (const s of lobbyRoomSuggestions) {
+
+  if (lobbyRoomSuggestions.length === 0) {
+    updateLobbySuggestedWrapVisibility();
+    return;
+  }
+
+  const sorted = [...lobbyRoomSuggestions].sort(
+    (a, b) =>
+      (Number(b.voteScore) || 0) - (Number(a.voteScore) || 0) ||
+      (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)
+  );
+
+  const maxScore = sorted.reduce((m, x) => Math.max(m, Number(x.voteScore) || 0), 0);
+  const featured = pickLobbyFeaturedSuggestion(sorted, maxScore);
+  const rest = featured ? sorted.filter((r) => r.key !== featured.key) : sorted;
+  const compactLeadingOk = !featured;
+
+  if (featured && featuredHost) {
+    const score = Number(featured.voteScore) || 0;
+    const scoreHighlight = sorted.length === 1 || (maxScore > 0 && score === maxScore);
+    const badgeText = sorted.length === 1 ? 'Suggested now' : 'Top voted';
+    const cid = String(ui.room.clientId || '');
+
+    const card = document.createElement('article');
+    card.className = 'lobby-suggest-card lobby-suggest-card--featured';
+    card.setAttribute('role', 'group');
+    card.setAttribute('aria-label', `${badgeText}: ${featured.title}`);
+
+    const badge = document.createElement('span');
+    badge.className = 'lobby-suggest-featured-badge';
+    badge.textContent = badgeText;
+
+    const visual = document.createElement('div');
+    visual.className = 'lobby-suggest-featured-visual';
+    const posterWrap = document.createElement('div');
+    posterWrap.className = 'lobby-suggest-featured-poster';
+    const posterSrc = tmdbPosterSrcForLobby(featured.posterUrl, 'featured');
+    if (posterSrc) {
+      const img = document.createElement('img');
+      img.src = posterSrc;
+      img.alt = '';
+      img.referrerPolicy = 'no-referrer';
+      img.loading = 'lazy';
+      img.addEventListener('error', () => img.remove());
+      posterWrap.appendChild(img);
+    }
+    visual.append(badge, posterWrap);
+
+    const body = document.createElement('div');
+    body.className = 'lobby-suggest-featured-body';
+    const h = document.createElement('h3');
+    h.className = 'lobby-suggest-featured-title';
+    h.textContent = featured.title;
+    const meta = document.createElement('p');
+    meta.className = 'lobby-suggest-featured-meta muted';
+    const typeLabel = featured.media === 'movie' ? 'Movie' : 'TV series';
+    const y = featured.year ? ` · ${featured.year}` : '';
+    meta.textContent = `${typeLabel}${y}`;
+    const overviewText = String(featured.overview || '').trim();
+    if (overviewText) {
+      const overviewEl = document.createElement('p');
+      overviewEl.className = 'lobby-suggest-featured-overview';
+      overviewEl.textContent = overviewText;
+      body.append(h, meta, overviewEl);
+    } else {
+      body.append(h, meta);
+    }
+    const by = document.createElement('p');
+    by.className = 'lobby-suggest-featured-by muted';
+    const self = featured.clientId && cid && featured.clientId === cid;
+    by.textContent = self ? 'You suggested this' : `Suggested by ${featured.username}`;
+    body.appendChild(by);
+
+    const actionsWrap = document.createElement('div');
+    actionsWrap.className = 'lobby-suggest-featured-actions';
+    const voteActions = buildLobbySuggestVoteActions(featured, score, scoreHighlight);
+    voteActions.classList.add('lobby-suggest-card-actions--featured');
+    actionsWrap.appendChild(voteActions);
+    body.appendChild(actionsWrap);
+
+    card.append(visual, body);
+    featuredHost.appendChild(card);
+    featuredHost.hidden = false;
+  }
+
+  if (otherLabel) otherLabel.hidden = rest.length === 0;
+
+  for (const s of rest) {
+    const score = Number(s.voteScore) || 0;
+    const cid = String(ui.room.clientId || '');
+    const isLeading = compactLeadingOk && maxScore > 0 && score === maxScore;
+
     const card = document.createElement('article');
     card.className = 'lobby-suggest-card';
+    if (isLeading) card.classList.add('lobby-suggest-card--leading');
     card.setAttribute('role', 'listitem');
     const thumb = document.createElement('div');
     thumb.className = 'lobby-suggest-thumb';
-    if (s.posterUrl) {
+    const smallSrc = tmdbPosterSrcForLobby(s.posterUrl, 'compact');
+    if (smallSrc) {
       const img = document.createElement('img');
-      let src = s.posterUrl;
-      if (src.includes('/w342/')) src = src.replace('/w342/', '/w92/');
-      else if (src.includes('/w500/')) src = src.replace('/w500/', '/w92/');
-      img.src = src;
+      img.src = smallSrc;
       img.alt = '';
       img.referrerPolicy = 'no-referrer';
       img.loading = 'lazy';
       img.addEventListener('error', () => img.remove());
       thumb.appendChild(img);
     }
-    const info = document.createElement('div');
-    info.className = 'lobby-suggest-info';
     const h = document.createElement('h4');
     h.className = 'lobby-suggest-title';
     h.textContent = s.title;
@@ -380,29 +839,67 @@ function renderLobbySuggestions() {
     meta.textContent = `${typeLabel}${y}`;
     const by = document.createElement('p');
     by.className = 'lobby-suggest-by muted';
-    const self =
-      s.clientId && ui.room.clientId && s.clientId === ui.room.clientId;
+    const self = s.clientId && cid && s.clientId === cid;
     by.textContent = self ? 'You suggested this' : `Suggested by ${s.username}`;
-    info.append(h, meta, by);
-    const canRemove =
-      !!ui.room.isHost ||
-      !!(s.clientId && ui.room.clientId && s.clientId === ui.room.clientId);
-    if (canRemove) {
-      const foot = document.createElement('div');
-      foot.className = 'lobby-suggest-foot';
-      const rm = document.createElement('button');
-      rm.type = 'button';
-      rm.className = 'lobby-suggest-remove';
-      rm.textContent = 'Remove';
-      rm.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        sendTitleSuggestionRemove(s);
-      });
-      foot.appendChild(rm);
-      info.appendChild(foot);
+    const body = document.createElement('div');
+    body.className = 'lobby-suggest-body';
+    body.append(h, meta, by);
+
+    const main = document.createElement('div');
+    main.className = 'lobby-suggest-card-main';
+    main.append(thumb, body);
+
+    const actions = buildLobbySuggestVoteActions(s, score, isLeading);
+    card.append(main, actions);
+    if (isLeading) {
+      const lb = document.createElement('span');
+      lb.className = 'lobby-suggest-leading-badge';
+      lb.textContent = 'Top votes';
+      card.appendChild(lb);
     }
-    card.append(thumb, info);
     list.appendChild(card);
+  }
+  updateLobbySuggestedWrapVisibility();
+}
+
+async function runLobbyPickSearch() {
+  const base = catalogHttpBase();
+  const q = ($('inLobbyPickSearch')?.value || '').trim();
+  const host = $('lobbyPickSearchResults');
+  if (!host) return;
+  if (!base || q.length < 2) {
+    host.hidden = true;
+    host.innerHTML = '';
+    if (q.length < 2 && q.length > 0) {
+      host.hidden = false;
+      host.innerHTML = '<p class="muted lobby-pick-search-note">Type at least 2 characters.</p>';
+    }
+    return;
+  }
+  host.hidden = false;
+  host.innerHTML = '<p class="muted lobby-pick-search-note">Searching…</p>';
+  try {
+    const r = await fetch(`${base}/api/catalog/search?q=${encodeURIComponent(q)}`);
+    const j = await r.json();
+    host.innerHTML = '';
+    if (!j.ok || !Array.isArray(j.results) || j.results.length === 0) {
+      host.innerHTML = '<p class="muted lobby-pick-search-note">No results.</p>';
+      return;
+    }
+    for (const row of j.results.slice(0, 8)) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'lobby-pick-result-row';
+      const kind = row.mediaType === 'movie' ? 'Movie' : 'TV';
+      btn.textContent = `${row.title || '—'} · ${kind}`;
+      btn.addEventListener('click', () => {
+        sendTitleSuggestionFromRow(row);
+        clearLobbyPickSearchUI();
+      });
+      host.appendChild(btn);
+    }
+  } catch {
+    host.innerHTML = '<p class="muted lobby-pick-search-note">Search failed.</p>';
   }
 }
 
@@ -441,7 +938,8 @@ async function sendTitleSuggestionFromRow(row) {
     overview: (row.overview || '').slice(0, 280),
     posterUrl: typeof row.posterUrl === 'string' ? row.posterUrl : null,
     year: y ? String(y).replace(/[^\d]/g, '').slice(0, 4) : null,
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    votes: { score: 0, up: 0, down: 0, by: {} }
   });
 }
 
@@ -586,7 +1084,14 @@ function syncInRoomChrome(inRoom, canRoom) {
   const sub = $('surfaceRoomSubline');
   if (sub) {
     if (inRoom) {
-      sub.textContent = (ui.room.roomCode || '····').toUpperCase();
+      const code = (ui.room.roomCode || '····').toUpperCase();
+      const { allSurfaced, inBrowser, inApp } = lobbySurfaceCounts(ui.room.members);
+      if (allSurfaced && inBrowser > 0) {
+        sub.textContent =
+          inApp > 0 ? `${code} · ${inBrowser} in browser, ${inApp} in app` : `${code} · ${inBrowser} in browser`;
+      } else {
+        sub.textContent = code;
+      }
       sub.classList.add('surface-room-code');
     } else {
       sub.textContent = 'Create or join a room';
@@ -680,19 +1185,43 @@ function renderViews() {
   previousAuthPresent = true;
 }
 
+/** Room roster `surface` from signaling: who is in the desktop app vs Chrome extension. */
+function lobbySurfaceCounts(members) {
+  const m = Array.isArray(members) ? members : [];
+  const n = m.length;
+  const allSurfaced = n > 0 && m.every((x) => x.surface === 'app' || x.surface === 'extension');
+  const inBrowser = m.filter((x) => x.surface === 'extension').length;
+  const inApp = m.filter((x) => x.surface === 'app').length;
+  return { n, allSurfaced, inBrowser, inApp };
+}
+
 function renderMembers() {
   const squad = $('lobbySquad');
   const meta = $('lobbySquadMeta');
   const members = Array.isArray(ui.room.members) ? ui.room.members : [];
-  const n = members.length;
+  const { n, allSurfaced, inBrowser, inApp } = lobbySurfaceCounts(members);
 
   if (meta) {
     if (n === 0) {
       meta.textContent = 'Waiting for people to join…';
     } else if (n === 1) {
-      meta.textContent = 'Only you so far — invite friends with the code above.';
+      const solo = members[0];
+      if (solo && solo.surface === 'extension') {
+        meta.textContent =
+          'You’re in the lobby from Chrome — others in the desktop app will see you as Browser.';
+      } else if (solo && solo.surface === 'app') {
+        meta.textContent =
+          'Only you in the app — when friends join from Chrome they appear with a Browser tag.';
+      } else {
+        meta.textContent =
+          'Only you so far — invite friends with the code above. Update the Chrome extension to show Browser tags.';
+      }
     } else {
-      meta.textContent = `${n} people in this room`;
+      if (allSurfaced) {
+        meta.textContent = `${n} people in this room · ${inApp} in app, ${inBrowser} in browser`;
+      } else {
+        meta.textContent = `${n} people in this room (update clients to show who’s in Chrome)`;
+      }
     }
   }
 
@@ -700,6 +1229,14 @@ function renderMembers() {
 
   squad.innerHTML = '';
   squad.setAttribute('role', 'list');
+  if (allSurfaced && inBrowser > 0) {
+    squad.setAttribute(
+      'aria-label',
+      `People in this room: ${inApp} in PlayShare app, ${inBrowser} in browser with the extension`
+    );
+  } else {
+    squad.setAttribute('aria-label', 'People in this room');
+  }
 
   if (n === 0) {
     squad.className = 'lobby-squad lobby-squad--holo lobby-squad--empty';
@@ -707,6 +1244,11 @@ function renderMembers() {
     empty.className = 'lobby-squad-empty muted';
     empty.textContent = 'When someone joins, they’ll appear here.';
     squad.appendChild(empty);
+    const badge0 = $('lobbyNetBadge');
+    if (badge0) {
+      badge0.textContent = 'Connected';
+      badge0.removeAttribute('title');
+    }
     return;
   }
 
@@ -742,11 +1284,41 @@ function renderMembers() {
       host.textContent = 'Host';
       cap.appendChild(host);
     }
+    if (m.surface === 'app' || m.surface === 'extension') {
+      const surfEl = document.createElement('span');
+      surfEl.className =
+        m.surface === 'extension'
+          ? 'lobby-float-surface lobby-float-surface--browser'
+          : 'lobby-float-surface lobby-float-surface--app';
+      surfEl.textContent = m.surface === 'extension' ? 'Browser' : 'App';
+      surfEl.title =
+        m.surface === 'extension'
+          ? 'Connected via Chrome with the PlayShare extension (streaming page)'
+          : 'Connected via PlayShare desktop or web lobby';
+      cap.appendChild(surfEl);
+    }
 
     inner.append(tile, cap);
     item.appendChild(inner);
     squad.appendChild(item);
   });
+
+  const badge = $('lobbyNetBadge');
+  if (badge && n > 0 && allSurfaced) {
+    if (inBrowser > 0) {
+      badge.textContent = `Live · ${inBrowser} browser`;
+      badge.title =
+        inApp > 0
+          ? `${inBrowser} on a streaming tab (Chrome extension), ${inApp} in the PlayShare app`
+          : `${inBrowser} on a streaming tab with the Chrome extension`;
+    } else {
+      badge.textContent = 'Connected';
+      badge.title = 'Everyone here is in the app — share the watch link so they can join in Chrome.';
+    }
+  } else if (badge) {
+    badge.textContent = 'Connected';
+    badge.removeAttribute('title');
+  }
 }
 
 function syncWatchFields() {
@@ -759,7 +1331,7 @@ function updateHandoffButtons() {
   const hasRoom = ui.room.inRoom && ui.room.roomCode;
   const hasWatch = ($('inWatchUrl').value || '').trim().length > 0;
   $('btnCopyDeep').disabled = !hasRoom || !hasWatch;
-  $('btnOpenWatch').disabled = !hasWatch;
+  $('btnOpenWatch').disabled = !hasRoom || !hasWatch;
   $('btnAnnounce').disabled = !hasRoom || !desktop()?.signalSend;
 }
 
@@ -776,6 +1348,218 @@ function catalogHttpBase() {
   } catch {
     return '';
   }
+}
+
+function openExternalCatalogUrl(url) {
+  const u = String(url || '').trim();
+  if (!u) return;
+  const api = desktop();
+  if (api?.openExternal) {
+    void api.openExternal({ url: u }).then((r) => {
+      if (!r || !r.ok) console.warn('[PlayShare]', r && r.error ? r.error : 'openExternal failed');
+    });
+  } else {
+    window.open(u, '_blank', 'noopener,noreferrer');
+  }
+}
+
+function watchMonetizationNote(m) {
+  if (m === 'flatrate') return 'Stream';
+  if (m === 'free') return 'Free';
+  if (m === 'rent') return 'Rent';
+  if (m === 'buy') return 'Buy';
+  return '';
+}
+
+const EDITORIAL_OPENERS = {
+  netflix: (t) => `https://www.netflix.com/search?q=${encodeURIComponent(t)}`,
+  primevideo: (t) => `https://www.primevideo.com/search?phrase=${encodeURIComponent(t)}`,
+  disneyplus: (t) => `https://www.disneyplus.com/search?q=${encodeURIComponent(t)}`,
+  hulu: (t) => `https://www.hulu.com/search?q=${encodeURIComponent(t)}`,
+  max: (t) => `https://www.max.com/search?q=${encodeURIComponent(t)}`,
+  paramount: (t) => `https://www.paramountplus.com/search/?q=${encodeURIComponent(t)}`,
+  apple: (t) => `https://tv.apple.com/search?term=${encodeURIComponent(t)}`,
+  youtube: (t) => `https://www.youtube.com/results?search_query=${encodeURIComponent(t)}`,
+  other: (t) => `https://www.google.com/search?q=${encodeURIComponent(`${t} where to stream`)}`
+};
+
+function wireCatalogWatchModal() {
+  const dialog = $('catalogWatchModal');
+  const btn = $('btnCatalogWatchModalClose');
+  btn?.addEventListener('click', () => dialog?.close());
+  dialog?.addEventListener('click', (e) => {
+    if (e.target === dialog) dialog.close();
+  });
+}
+
+function openEditorialWatchModal(item) {
+  const dialog = $('catalogWatchModal');
+  const titleEl = $('catalogWatchModalTitle');
+  const regionEl = $('catalogWatchModalRegion');
+  const body = $('catalogWatchModalBody');
+  const foot = $('catalogWatchModalFoot');
+  if (!dialog || !titleEl || !body || !item) return;
+  const title = (item.title || '').trim() || '—';
+  titleEl.textContent = title;
+  if (regionEl) regionEl.hidden = true;
+  const key =
+    item.providerKey && EDITORIAL_OPENERS[item.providerKey] ? item.providerKey : 'other';
+  const fn = EDITORIAL_OPENERS[key];
+  const url = fn(title);
+  body.innerHTML = '';
+  const p = document.createElement('p');
+  p.className = 'catalog-watch-intro';
+  p.textContent = `This pick is paired with ${item.service || 'a streaming service'}. We’ll open a search for this title in your browser (availability varies by region).`;
+  const row = document.createElement('div');
+  row.className = 'catalog-watch-row';
+  const main = document.createElement('div');
+  main.className = 'catalog-watch-row-main';
+  const sp = document.createElement('span');
+  sp.className = 'catalog-watch-row-name';
+  sp.textContent = item.service || 'Streaming';
+  const ty = document.createElement('span');
+  ty.className = 'catalog-watch-row-type';
+  ty.textContent = 'Suggested service';
+  main.append(sp, ty);
+  const cta = document.createElement('button');
+  cta.type = 'button';
+  cta.className = 'catalog-watch-row-cta';
+  cta.textContent = `Open ${item.service || 'site'}`;
+  cta.addEventListener('click', () => openExternalCatalogUrl(url));
+  row.append(main, cta);
+  body.append(p, row);
+  if (foot) {
+    foot.textContent =
+      'Illustration-style card when the live TMDB catalog is unavailable — not affiliated with listed services.';
+  }
+  dialog.showModal();
+}
+
+async function openTmdbWatchProvidersModal(row) {
+  const dialog = $('catalogWatchModal');
+  const titleEl = $('catalogWatchModalTitle');
+  const regionEl = $('catalogWatchModalRegion');
+  const body = $('catalogWatchModalBody');
+  const foot = $('catalogWatchModalFoot');
+  if (!dialog || !titleEl || !body) return;
+  const title = (row.title || '').trim() || '—';
+  const media = row.mediaType === 'movie' ? 'movie' : row.mediaType === 'tv' ? 'tv' : '';
+  const tid = row.tmdbId != null && Number.isFinite(Number(row.tmdbId)) ? Number(row.tmdbId) : null;
+  titleEl.textContent = title;
+  if (regionEl) {
+    regionEl.hidden = true;
+    regionEl.textContent = '';
+  }
+  body.innerHTML = '<p class="catalog-watch-intro muted">Loading streaming options…</p>';
+  if (foot) foot.textContent = '';
+  dialog.showModal();
+  const base = catalogHttpBase();
+  if (!base || !media || !tid) {
+    body.innerHTML =
+      '<p class="catalog-watch-empty">Could not load watch providers. Connect signaling or use a title from the live catalog.</p>';
+    return;
+  }
+  try {
+    const r = await fetch(
+      `${base}/api/catalog/watch-providers?media=${encodeURIComponent(media)}&id=${encodeURIComponent(String(tid))}&title=${encodeURIComponent(title)}`
+    );
+    const j = await r.json();
+    if (!j.ok) {
+      body.innerHTML =
+        '<p class="catalog-watch-empty">Could not load providers. Try again later or open your streaming app directly.</p>';
+      if (foot) foot.textContent = j.attribution ? String(j.attribution) : '';
+      return;
+    }
+    if (regionEl) {
+      regionEl.hidden = false;
+      regionEl.textContent = j.region
+        ? `Region: ${j.region} · “Open” launches a search or provider page for this title (availability may differ).`
+        : '';
+    }
+    const provs = Array.isArray(j.providers) ? j.providers : [];
+    body.innerHTML = '';
+    if (provs.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'catalog-watch-empty';
+      empty.textContent = j.tmdbWatchPageUrl
+        ? 'No streaming list for this region in TMDB. Use the button below for more links.'
+        : 'No streaming providers listed for this title in TMDB for this region.';
+      body.appendChild(empty);
+    } else {
+      const intro = document.createElement('p');
+      intro.className = 'catalog-watch-intro';
+      intro.textContent =
+        'Services reported by TMDB / JustWatch. “Open” sends your browser to that provider (often a search for this title).';
+      body.appendChild(intro);
+      const ul = document.createElement('ul');
+      ul.className = 'catalog-watch-providers';
+      for (const p of provs) {
+        const li = document.createElement('li');
+        li.className = 'catalog-watch-row';
+        if (p.logoUrl) {
+          const img = document.createElement('img');
+          img.className = 'catalog-watch-row-logo';
+          img.src = p.logoUrl;
+          img.alt = '';
+          img.loading = 'lazy';
+          img.referrerPolicy = 'no-referrer';
+          li.appendChild(img);
+        }
+        const main = document.createElement('div');
+        main.className = 'catalog-watch-row-main';
+        const name = document.createElement('span');
+        name.className = 'catalog-watch-row-name';
+        name.textContent = p.providerName || 'Service';
+        const ty = document.createElement('span');
+        ty.className = 'catalog-watch-row-type';
+        ty.textContent = watchMonetizationNote(p.monetization);
+        main.append(name, ty);
+        const cta = document.createElement('button');
+        cta.type = 'button';
+        cta.className = 'catalog-watch-row-cta';
+        cta.textContent = p.openUrl ? 'Open in browser' : 'No direct link';
+        cta.disabled = !p.openUrl;
+        if (p.openUrl) cta.addEventListener('click', () => openExternalCatalogUrl(p.openUrl));
+        li.append(main, cta);
+        ul.appendChild(li);
+      }
+      body.appendChild(ul);
+    }
+    if (j.tmdbWatchPageUrl) {
+      const tbtn = document.createElement('button');
+      tbtn.type = 'button';
+      tbtn.className = 'catalog-watch-tmdb-cta';
+      tbtn.textContent = 'All options on The Movie Database';
+      tbtn.addEventListener('click', () => openExternalCatalogUrl(j.tmdbWatchPageUrl));
+      body.appendChild(tbtn);
+    }
+    if (foot) foot.textContent = j.attribution ? String(j.attribution) : '';
+  } catch {
+    body.innerHTML =
+      '<p class="catalog-watch-empty">Request failed. Check your connection and that the catalog server is running.</p>';
+  }
+}
+
+function wireTitleOpenWatch(h, rowOrItem, mode) {
+  h.classList.add('spotlight-show--action');
+  h.tabIndex = 0;
+  h.setAttribute('role', 'button');
+  const t = (rowOrItem.title || '').trim() || 'this title';
+  h.setAttribute('aria-label', `Where to watch: ${t}`);
+  const open =
+    mode === 'editorial'
+      ? () => openEditorialWatchModal(rowOrItem)
+      : () => void openTmdbWatchProvidersModal(rowOrItem);
+  h.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    open();
+  });
+  h.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' || ev.key === ' ') {
+      ev.preventDefault();
+      open();
+    }
+  });
 }
 
 function buildEditorialSpotlightCard(item) {
@@ -797,6 +1581,7 @@ function buildEditorialSpotlightCard(item) {
   const h = document.createElement('h4');
   h.className = 'spotlight-show';
   h.textContent = item.title;
+  wireTitleOpenWatch(h, item, 'editorial');
 
   const kind = document.createElement('p');
   kind.className = 'spotlight-kind';
@@ -852,6 +1637,7 @@ function buildTmdbSpotlightCard(row, opts) {
   const h = document.createElement('h4');
   h.className = 'spotlight-show';
   h.textContent = row.title || '—';
+  wireTitleOpenWatch(h, row, 'tmdb');
 
   const kind = document.createElement('p');
   kind.className = 'spotlight-kind';
@@ -1277,6 +2063,14 @@ async function ensureSpotlight() {
   renderEditorialSpotlight(grid, foot);
 }
 
+function syncLobbyPicksPanel() {
+  const picksCard = $('roomPicksCard');
+  const show = lobbyPicksChromeVisible();
+  if (picksCard) picksCard.hidden = !show;
+  if (!show) clearLobbyPickSearchUI();
+  updateLobbySuggestedWrapVisibility();
+}
+
 function syncCatalogSuggestButtons() {
   const baseOn = !!ui.room.inRoom && ui.connected && !ui.connecting && !!desktop()?.signalSend;
   const suggestedKeys = new Set(lobbyRoomSuggestions.map((s) => s.key));
@@ -1303,6 +2097,7 @@ function render() {
   syncLobbyChatRoomBoundary();
   setLobbyChatComposerEnabled();
   renderLobbySuggestions();
+  syncLobbyPicksPanel();
   syncCatalogSuggestButtons();
   const dash = $('viewDashboard');
   if (authSession && dash && !dash.hidden) {
@@ -1486,6 +2281,10 @@ function wireRoomActions() {
       applyLobbyTitleSuggestion(msg);
     } else if (msg && msg.type === 'TITLE_SUGGEST_REMOVED') {
       applyLobbyTitleRemoved(msg);
+    } else if (msg && msg.type === 'TITLE_SUGGEST_VOTE_UPDATE') {
+      applyLobbyVoteUpdate(msg);
+    } else if (msg && (msg.type === 'ROOM_JOINED' || msg.type === 'ROOM_CREATED')) {
+      applyRoomTitleSuggestionsFromFrame(msg);
     }
   });
 
@@ -1493,7 +2292,8 @@ function wireRoomActions() {
     const name = displayNameForRoom();
     const res = await api.signalSend({
       type: PlayShareSignalingClientType.CREATE_ROOM,
-      username: name || 'Host'
+      username: name || 'Host',
+      surface: 'app'
     });
     if (!res.ok) ui.lastError = res.error || 'Create failed';
     render();
@@ -1511,20 +2311,32 @@ function wireRoomActions() {
       type: PlayShareSignalingClientType.JOIN_ROOM,
       roomCode: code,
       username: name,
-      rejoinAfterDrop: true
+      rejoinAfterDrop: true,
+      surface: 'app'
     });
     if (!res.ok) ui.lastError = res.error || 'Join failed';
     render();
   });
 
-  $('tabSurfaceDiscover')?.addEventListener('click', () => {
+  const goDiscover = () => {
     if (!ui.room.inRoom) return;
     roomNavSurface = 'dashboard';
     render();
+  };
+  $('tabSurfaceDiscover')?.addEventListener('click', goDiscover);
+  $('btnLobbyPickDiscover')?.addEventListener('click', goDiscover);
+
+  $('btnLobbyPickSearch')?.addEventListener('click', () => runLobbyPickSearch());
+  $('inLobbyPickSearch')?.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      runLobbyPickSearch();
+    }
   });
   $('tabSurfaceRoom')?.addEventListener('click', () => {
     if (!ui.room.inRoom) return;
     roomNavSurface = 'lobby';
+    scrollMainToTop();
     render();
   });
 
@@ -1541,7 +2353,15 @@ function wireRoomActions() {
     };
     await api.sessionSetWatch(meta);
     mergeStatus({ watch: meta });
+    if (ui.room.isHost && api.signalSend) {
+      const res = await api.signalSend({
+        type: PlayShareSignalingClientType.SESSION_WATCH_SET,
+        watch: meta
+      });
+      if (!res.ok) ui.lastError = res.error || 'Could not sync watch link to room';
+    }
     updateHandoffButtons();
+    render();
   });
 
   ['inWatchUrl', 'inJoinCode', 'inTitleNote', 'selProvider'].forEach((id) => {
@@ -1568,8 +2388,15 @@ function wireRoomActions() {
   });
 
   $('btnOpenWatch')?.addEventListener('click', async () => {
-    const u = ($('inWatchUrl').value || '').trim();
-    const r = await api.openExternal({ url: u });
+    const ws = ui.wsUrl || getWsUrl();
+    const watchUrl = ($('inWatchUrl').value || '').trim();
+    const deep = buildWatchDeepLink(watchUrl, ui.room.roomCode, ws);
+    if (!deep) {
+      ui.lastError = 'Need a valid https watch URL and room';
+      render();
+      return;
+    }
+    const r = await api.openExternal({ url: deep });
     if (!r.ok) ui.lastError = r.error || 'Open failed';
     render();
   });
@@ -1614,6 +2441,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   wireAuthTabs();
   setAuthMode('signin');
   wireAuthForms();
+  wireCatalogWatchModal();
   wireCatalogBrowse();
   wireRoomActions();
   await initAuth();

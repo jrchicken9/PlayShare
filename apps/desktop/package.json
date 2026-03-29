@@ -27,6 +27,7 @@
       "renderer/index.html",
       "renderer/styles.css",
       "renderer/bundle.js",
+      "renderer/brand-mark.svg",
       "package.json"
     ],
     "asar": true,

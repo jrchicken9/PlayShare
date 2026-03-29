@@ -243,7 +243,8 @@ function connect(onOpen) {
               type: 'JOIN_ROOM',
               roomCode: roomState.roomCode,
               username: roomState.username,
-              rejoinAfterDrop: true
+              rejoinAfterDrop: true,
+              surface: 'extension'
             })
           );
         } else {
@@ -445,6 +446,9 @@ function handleServerMessage(msg) {
       broadcastToTabs(msg);
       break;
 
+    case 'SESSION_WATCH':
+      break;
+
     case 'ERROR':
       if (pendingReconnectResync) pendingReconnectResync = false;
       broadcastToTabs(msg);
@@ -529,14 +533,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'CREATE_ROOM':
       needsAutoRejoin = false;
       pendingReconnectResync = false;
-      connect(() => send({ type: 'CREATE_ROOM', username: msg.username, hostOnlyControl: msg.hostOnlyControl, countdownOnPlay: msg.countdownOnPlay }));
+      connect(() =>
+        send({
+          type: 'CREATE_ROOM',
+          username: msg.username,
+          hostOnlyControl: msg.hostOnlyControl,
+          countdownOnPlay: msg.countdownOnPlay,
+          surface: 'extension'
+        })
+      );
       sendResponse({ ok: true });
       break;
 
     case 'JOIN_ROOM':
       needsAutoRejoin = false;
       pendingReconnectResync = false;
-      connect(() => send({ type: 'JOIN_ROOM', roomCode: msg.roomCode, username: msg.username }));
+      connect(() =>
+        send({
+          type: 'JOIN_ROOM',
+          roomCode: msg.roomCode,
+          username: msg.username,
+          surface: 'extension'
+        })
+      );
       sendResponse({ ok: true });
       break;
 

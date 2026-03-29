@@ -24,7 +24,8 @@ const {
   getSpotlightTrendingWeek,
   searchMulti,
   getGenreList,
-  discoverByGenre
+  discoverByGenre,
+  getWatchProviders
 } = require('./platform/server/tmdb-catalog');
 
 const rawPort = String(process.env.PORT ?? '').trim();
@@ -1235,6 +1236,61 @@ function openSite(u){window.open(u,'_blank');}
       })
       .catch((e) => {
         console.error('[PlayShare/api/catalog/discover]', e && e.message ? e.message : e);
+        res.writeHead(502, headers);
+        res.end(JSON.stringify({ ok: false, error: 'tmdb_upstream' }));
+      });
+    return;
+  }
+  if (
+    url.pathname === '/api/catalog/watch-providers' ||
+    url.pathname === '/api/catalog/watch-providers/'
+  ) {
+    const headers = { 'Content-Type': 'application/json; charset=utf-8', ...catalogCorsHeaders() };
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, headers);
+      res.end();
+      return;
+    }
+    if (req.method !== 'GET') {
+      res.writeHead(405, headers);
+      res.end(JSON.stringify({ ok: false, error: 'method_not_allowed' }));
+      return;
+    }
+    const apiKey = tmdbApiKeyFromEnv();
+    if (!apiKey) {
+      res.writeHead(503, headers);
+      res.end(
+        JSON.stringify({
+          ok: false,
+          error: 'tmdb_not_configured',
+          message: 'Set TMDB_API_KEY (or PLAYSHARE_TMDB_API_KEY) on the server.'
+        })
+      );
+      return;
+    }
+    const mediaRaw = (url.searchParams.get('media') || 'movie').toLowerCase();
+    const media = mediaRaw === 'tv' ? 'tv' : 'movie';
+    const idRaw = url.searchParams.get('id') || '';
+    const tmdbId = parseInt(idRaw, 10);
+    if (!Number.isFinite(tmdbId) || tmdbId < 1) {
+      res.writeHead(400, headers);
+      res.end(JSON.stringify({ ok: false, error: 'invalid_id' }));
+      return;
+    }
+    const title = (url.searchParams.get('title') || '').trim().slice(0, 300);
+    const region = (url.searchParams.get('region') || '').trim().slice(0, 8);
+    getWatchProviders(apiKey, media, tmdbId, title, region)
+      .then((payload) => {
+        if (payload.ok === false) {
+          res.writeHead(400, headers);
+          res.end(JSON.stringify({ ok: false, ...payload }));
+          return;
+        }
+        res.writeHead(200, { ...headers, 'Cache-Control': 'public, max-age=120' });
+        res.end(JSON.stringify({ ok: true, ...payload }));
+      })
+      .catch((e) => {
+        console.error('[PlayShare/api/catalog/watch-providers]', e && e.message ? e.message : e);
         res.writeHead(502, headers);
         res.end(JSON.stringify({ ok: false, error: 'tmdb_upstream' }));
       });

@@ -12,10 +12,10 @@ let mainWindow = null;
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
-    width: 1000,
-    height: 820,
-    minWidth: 640,
-    minHeight: 520,
+    width: 1280,
+    height: 860,
+    minWidth: 800,
+    minHeight: 560,
     show: false,
     title: 'PlayShare',
     webPreferences: {

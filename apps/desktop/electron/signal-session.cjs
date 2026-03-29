@@ -114,7 +114,35 @@ function applyIncomingMessage(msg) {
       isHost: !!msg.isHost,
       members: Array.isArray(msg.members) ? msg.members : []
     };
-    broadcastStatus({ room: { ...room }, lastError: null });
+    if (t === 'ROOM_CREATED') {
+      watchMeta = { providerKey: '', titleNote: '', watchUrl: '' };
+    } else if (t === 'ROOM_JOINED') {
+      const sw = msg.sessionWatch;
+      if (sw && typeof sw === 'object' && String(sw.watchUrl || '').trim()) {
+        watchMeta = {
+          providerKey: String(sw.providerKey || '').slice(0, 64),
+          titleNote: String(sw.titleNote || '').slice(0, 200),
+          watchUrl: String(sw.watchUrl || '').slice(0, 4000)
+        };
+      } else {
+        watchMeta = { providerKey: '', titleNote: '', watchUrl: '' };
+      }
+    }
+    broadcastStatus({ room: { ...room }, watch: { ...watchMeta }, lastError: null });
+    return;
+  }
+  if (t === 'SESSION_WATCH') {
+    const w = msg.watch;
+    if (w == null) {
+      watchMeta = { providerKey: '', titleNote: '', watchUrl: '' };
+    } else if (typeof w === 'object') {
+      watchMeta = {
+        providerKey: String(w.providerKey || '').slice(0, 64),
+        titleNote: String(w.titleNote || '').slice(0, 200),
+        watchUrl: String(w.watchUrl || '').slice(0, 4000)
+      };
+    }
+    broadcastStatus({ watch: { ...watchMeta } });
     return;
   }
   if (t === 'MEMBER_JOINED' || t === 'MEMBER_LEFT') {
