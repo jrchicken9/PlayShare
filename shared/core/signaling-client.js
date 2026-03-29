@@ -31,5 +31,7 @@ export const PlayShareSignalingClientType = Object.freeze({
   TITLE_SUGGEST: 'TITLE_SUGGEST',
   /** Remove a title suggestion (suggester or host only; validated on server). */
   TITLE_SUGGEST_REMOVE: 'TITLE_SUGGEST_REMOVE',
+  /** Cast vote on a suggestion: value 1 = up, -1 = down, 0 = clear your vote. */
+  TITLE_SUGGEST_VOTE: 'TITLE_SUGGEST_VOTE',
   REACTION: 'REACTION'
 });

@@ -441,6 +441,7 @@ function handleServerMessage(msg) {
     case 'REACTION':
     case 'TITLE_SUGGEST':
     case 'TITLE_SUGGEST_REMOVED':
+    case 'TITLE_SUGGEST_VOTE_UPDATE':
       broadcastToTabs(msg);
       break;
 

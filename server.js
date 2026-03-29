@@ -298,6 +298,34 @@ function ensureRoomSyncPolicyFields(room) {
   if (!room.titleSuggestions) room.titleSuggestions = new Map();
 }
 
+/** @param {Map<string, number> | undefined} votes clientId → 1 | -1 */
+function tallyTitleVotes(votes) {
+  const by = {};
+  let score = 0;
+  let up = 0;
+  let down = 0;
+  if (votes instanceof Map) {
+    for (const [cid, v] of votes) {
+      if (v === 1) {
+        up++;
+        score++;
+        by[cid] = 1;
+      } else if (v === -1) {
+        down++;
+        score--;
+        by[cid] = -1;
+      }
+    }
+  }
+  return { score, up, down, by };
+}
+
+/** @param {{ votes?: Map<string, number> } | undefined} meta */
+function titleVotePayloadFromMeta(meta) {
+  const t = tallyTitleVotes(meta && meta.votes);
+  return { score: t.score, up: t.up, down: t.down, by: t.by };
+}
+
 /**
  * Position reports still within POSITION_REPORT_STALE_MS — sole source for spread / adMode decisions.
  * @returns {{ clientId: string, rep: object }[]}
@@ -1652,8 +1680,10 @@ wss.on('connection', (ws) => {
         if (roomRef) {
           ensureRoomSyncPolicyFields(roomRef);
           const sk = `${media}:${tmdbId}`;
-          roomRef.titleSuggestions.set(sk, { suggestedBy: clientId });
+          roomRef.titleSuggestions.set(sk, { suggestedBy: clientId, votes: new Map() });
         }
+        const metaOut = roomRef ? roomRef.titleSuggestions.get(`${media}:${tmdbId}`) : null;
+        const votesPayload = titleVotePayloadFromMeta(metaOut);
         broadcastAll(client.roomCode, {
           type: 'TITLE_SUGGEST',
           clientId,
@@ -1665,6 +1695,62 @@ wss.on('connection', (ws) => {
           overview,
           posterUrl: posterUrl || null,
           year: year || null,
+          votes: votesPayload,
+          timestamp: Date.now()
+        });
+        break;
+      }
+
+      case 'TITLE_SUGGEST_VOTE': {
+        if (!client.roomCode) return;
+        const roomV = rooms.get(client.roomCode);
+        if (!roomV) return;
+        ensureRoomSyncPolicyFields(roomV);
+        const mediaV = msg.media === 'movie' || msg.media === 'tv' ? msg.media : null;
+        if (!mediaV) {
+          try {
+            sendTo(ws, { type: 'ERROR', code: 'BAD_REQUEST', message: 'Invalid media type.' });
+          } catch {}
+          return;
+        }
+        const rawV = msg.tmdbId;
+        const tmdbIdV =
+          typeof rawV === 'number' && Number.isFinite(rawV)
+            ? rawV
+            : parseInt(String(rawV || ''), 10);
+        if (!Number.isFinite(tmdbIdV) || tmdbIdV <= 0) {
+          try {
+            sendTo(ws, { type: 'ERROR', code: 'BAD_REQUEST', message: 'Invalid title id.' });
+          } catch {}
+          return;
+        }
+        const val = msg.value;
+        if (val !== 1 && val !== -1 && val !== 0) {
+          try {
+            sendTo(ws, { type: 'ERROR', code: 'BAD_REQUEST', message: 'Vote must be 1, -1, or 0.' });
+          } catch {}
+          return;
+        }
+        const skV = `${mediaV}:${tmdbIdV}`;
+        const metaV = roomV.titleSuggestions.get(skV);
+        if (!metaV) {
+          try {
+            sendTo(ws, {
+              type: 'ERROR',
+              code: 'NOT_FOUND',
+              message: 'That title is not on the suggestion list.'
+            });
+          } catch {}
+          return;
+        }
+        if (!metaV.votes) metaV.votes = new Map();
+        if (val === 0) metaV.votes.delete(clientId);
+        else metaV.votes.set(clientId, val);
+        broadcastAll(client.roomCode, {
+          type: 'TITLE_SUGGEST_VOTE_UPDATE',
+          media: mediaV,
+          tmdbId: tmdbIdV,
+          votes: titleVotePayloadFromMeta(metaV),
           timestamp: Date.now()
         });
         break;
