@@ -6,6 +6,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
 RUN npm run package:extension
+# `prepackage:extension` runs `build:web`; image must ship `public/app/*` for GET /app
 
 FROM node:20-alpine
 WORKDIR /app
@@ -17,5 +18,6 @@ COPY shared ./shared/
 COPY public ./public/
 COPY --from=pack /app/public/install/playshare-extension.zip ./public/install/playshare-extension.zip
 COPY --from=pack /app/public/install/playshare-extension.version ./public/install/playshare-extension.version
+COPY --from=pack /app/public/app ./public/app
 ENV NODE_ENV=production
 CMD ["node", "server.js"]

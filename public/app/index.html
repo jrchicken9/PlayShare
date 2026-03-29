@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PlayShare — Web</title>
+  <link rel="stylesheet" href="/app/app.css" />
+</head>
+<body>
+  <div class="ws-app">
+    <div class="ws-app-card">
+      <header class="ws-header">
+        <div class="ws-header-top">
+          <div class="ws-brand">
+            <div class="ws-brand-mark">
+              <img src="/brand-mark.png" width="30" height="30" alt="" decoding="async" />
+            </div>
+            <div>
+              <div class="ws-brand-name">
+                <span class="ws-brand-play">Play</span><span class="ws-brand-share">Share</span>
+              </div>
+              <p class="ws-brand-tagline">Web lobby</p>
+            </div>
+          </div>
+          <div class="ws-status" title="Signaling socket to this server">
+            <span id="connDot" class="ws-dot off" aria-hidden="true"></span>
+            <span id="connLabel">Offline</span>
+          </div>
+        </div>
+      </header>
+
+      <div class="ws-body">
+        <p id="globalError" class="ws-error" hidden></p>
+
+        <!-- Lobby -->
+        <section id="viewLobby" class="ws-stack-gap">
+          <p class="ws-hint">
+            Same rooms as the Chrome extension. Use the extension on Netflix, Prime, etc. for playback sync; chat here or in the sidebar.
+          </p>
+          <div class="ws-field">
+            <label class="ws-label" for="inServer">Signaling URL</label>
+            <input id="inServer" class="ws-input" type="text" autocomplete="off" placeholder="wss://your-server.example" />
+          </div>
+          <div class="ws-field">
+            <label class="ws-label" for="inName">Display name</label>
+            <input id="inName" class="ws-input" type="text" maxlength="24" autocomplete="nickname" placeholder="Your name" />
+          </div>
+          <div class="ws-field">
+            <label class="ws-label" for="inCode">Room code (join only)</label>
+            <input id="inCode" class="ws-input" type="text" maxlength="6" autocomplete="off" placeholder="ABCD12" />
+          </div>
+          <button id="btnCreate" type="button" class="ws-btn ws-btn-primary">Create room</button>
+          <button id="btnJoin" type="button" class="ws-btn ws-btn-secondary">Join room</button>
+        </section>
+
+        <!-- In room -->
+        <section id="viewRoom" class="ws-stack-gap" hidden>
+          <div class="ws-room-banner">
+            <div>
+              <div class="ws-room-code-row">
+                <span class="ws-room-label">Room</span>
+                <span id="roomCodeEl" class="ws-room-code">------</span>
+                <button type="button" id="btnCopyCode" class="ws-copy-btn">Copy</button>
+              </div>
+            </div>
+            <span id="hostPill" class="ws-host-pill" hidden>Host</span>
+          </div>
+
+          <div class="ws-members">
+            <div class="ws-members-title">In this room</div>
+            <ul id="memberList" class="ws-member-list"></ul>
+          </div>
+
+          <div class="ws-chat-wrap">
+            <div id="msgList" class="ws-messages" aria-live="polite"></div>
+            <div class="ws-reactions-bar" role="toolbar" aria-label="Quick reactions">
+              <button type="button" class="ws-reaction-btn" data-emoji="😂" aria-label="😂">😂</button>
+              <button type="button" class="ws-reaction-btn" data-emoji="😮" aria-label="😮">😮</button>
+              <button type="button" class="ws-reaction-btn" data-emoji="❤️" aria-label="❤️">❤️</button>
+              <button type="button" class="ws-reaction-btn" data-emoji="👏" aria-label="👏">👏</button>
+              <button type="button" class="ws-reaction-btn" data-emoji="😭" aria-label="😭">😭</button>
+              <button type="button" class="ws-reaction-btn" data-emoji="🔥" aria-label="🔥">🔥</button>
+              <button type="button" class="ws-reaction-btn" data-emoji="💀" aria-label="💀">💀</button>
+              <button type="button" class="ws-reaction-btn" data-emoji="🤯" aria-label="🤯">🤯</button>
+            </div>
+            <div id="typingIndicator" class="ws-typing-indicator" aria-live="polite"></div>
+            <div class="ws-input-area">
+              <input id="chatInput" class="ws-chat-input" type="text" maxlength="500" placeholder="Message…" autocomplete="off" />
+              <button id="btnSend" type="button" class="ws-send-btn" aria-label="Send">➤</button>
+            </div>
+          </div>
+
+          <div class="ws-actions">
+            <button id="btnLeave" type="button" class="ws-btn ws-btn-ghost">Leave room</button>
+          </div>
+
+          <p class="ws-footnote">
+            Video play/pause/seek sync is handled by the PlayShare extension on the watch page — not in this web view.
+          </p>
+        </section>
+      </div>
+    </div>
+
+    <p style="margin-top:14px;font-size:11px;color:#5a5a5a;text-align:center;max-width:420px;margin-inline:auto;">
+      Developer notes: <code style="font-size:10px;">web/COEXISTENCE.md</code>
+    </p>
+  </div>
+
+  <script type="module" src="/app/bundle.js"></script>
+</body>
+</html>

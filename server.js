@@ -805,6 +805,77 @@ const httpServer = http.createServer((req, res) => {
     }
     return;
   }
+  // PlayShare web app shell (static; run `npm run build:web` to generate `public/app/*`)
+  if (
+    (url.pathname === '/app' || url.pathname === '/app/') &&
+    (req.method === 'GET' || req.method === 'HEAD')
+  ) {
+    const appIndex = path.join(__dirname, 'public', 'app', 'index.html');
+    try {
+      const html = fs.readFileSync(appIndex, 'utf8');
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-cache'
+      });
+      res.end(req.method === 'HEAD' ? undefined : html);
+    } catch {
+      res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(
+        req.method === 'HEAD'
+          ? undefined
+          : 'Web app not built. Run: npm run build:web\n'
+      );
+    }
+    return;
+  }
+  if (
+    (url.pathname === '/app/index.html' || url.pathname === '/app/index.html/') &&
+    (req.method === 'GET' || req.method === 'HEAD')
+  ) {
+    const appIndex = path.join(__dirname, 'public', 'app', 'index.html');
+    try {
+      const html = fs.readFileSync(appIndex, 'utf8');
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-cache'
+      });
+      res.end(req.method === 'HEAD' ? undefined : html);
+    } catch {
+      res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(req.method === 'HEAD' ? undefined : 'Web app not built. Run: npm run build:web\n');
+    }
+    return;
+  }
+  if (url.pathname === '/app/bundle.js' && req.method === 'GET') {
+    const bundlePath = path.join(__dirname, 'public', 'app', 'bundle.js');
+    try {
+      const buf = fs.readFileSync(bundlePath, 'utf8');
+      res.writeHead(200, {
+        'Content-Type': 'text/javascript; charset=utf-8',
+        'Cache-Control': 'no-cache'
+      });
+      res.end(buf);
+    } catch {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Web app bundle missing. Run: npm run build:web\n');
+    }
+    return;
+  }
+  if (url.pathname === '/app/app.css' && (req.method === 'GET' || req.method === 'HEAD')) {
+    const cssPath = path.join(__dirname, 'public', 'app', 'app.css');
+    try {
+      const buf = fs.readFileSync(cssPath, 'utf8');
+      res.writeHead(200, {
+        'Content-Type': 'text/css; charset=utf-8',
+        'Cache-Control': 'public, max-age=300'
+      });
+      res.end(req.method === 'HEAD' ? undefined : buf);
+    } catch {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(req.method === 'HEAD' ? undefined : 'Web app CSS missing. Run: npm run build:web\n');
+    }
+    return;
+  }
   if (url.pathname === '/join' && req.method === 'GET') {
     const code = (url.searchParams.get('code') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
     let videoUrl = null;
@@ -1072,7 +1143,7 @@ wss.on('connection', (ws) => {
           activeAdBreaks: activeAdBreaksList(room)
         });
 
-        // Notify existing members
+        // Notify existing members (include activeAdBreaks so clients can resync if they missed AD_BREAK_*)
         broadcast(roomCode, {
           type: 'MEMBER_JOINED',
           clientId,
@@ -1080,7 +1151,8 @@ wss.on('connection', (ws) => {
           color,
           hostOnlyControl: room.hostOnlyControl,
           countdownOnPlay: room.countdownOnPlay,
-          members: getMemberList(roomCode)
+          members: getMemberList(roomCode),
+          activeAdBreaks: activeAdBreaksList(room)
         }, ws);
 
         if (pauseRoomForJoinSync) {
@@ -1452,6 +1524,13 @@ function logStartupBanner() {
   console.log(`   Join page: ${getHttpJoinUrl()}/join?code=XXXXXX`);
   if (privacyPolicyHtml) {
     console.log(`   Privacy policy: ${getHttpJoinUrl()}/privacy`);
+  }
+  try {
+    const appShell = path.join(__dirname, 'public', 'app', 'index.html');
+    fs.statSync(appShell);
+    console.log(`   Web app shell: ${getHttpJoinUrl()}/app`);
+  } catch {
+    console.log('   Web app shell: (not built — run npm run build:web)');
   }
   if (homepageTemplate) {
     console.log(`   Homepage: ${getHttpJoinUrl()}/`);
