@@ -9,3 +9,6 @@ watchsync-*.zip
 # Root-only build artifacts; public/install/playshare-extension.zip is committed for the homepage download.
 /playshare-extension.zip
 /playshare-extension-dev.zip
+# Desktop app build artifacts
+apps/desktop/release/
+apps/desktop/renderer/bundle.js

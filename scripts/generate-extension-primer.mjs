@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Regenerates server/playshare-extension-primer.auto.md and .meta.json from the repo.
+ * Regenerates platform/server/playshare-extension-primer.auto.md and .meta.json from the repo.
  * Run: npm run generate:primer
  * Hooks: after extension version bump; prepackage:extension
  */
@@ -59,12 +59,12 @@ const contentFiles = walkJsFiles(contentSrcRoot)
   .filter((f) => f.startsWith('content/src/'))
   .sort();
 
-const serverDir = path.join(root, 'server');
+const serverDir = path.join(root, 'platform', 'server');
 const serverFiles = fs.existsSync(serverDir)
   ? fs
       .readdirSync(serverDir, { withFileTypes: true })
       .filter((e) => e.isFile() && e.name.endsWith('.js'))
-      .map((e) => `server/${e.name}`)
+      .map((e) => `platform/server/${e.name}`)
       .sort()
   : [];
 
@@ -99,15 +99,15 @@ const lines = [
   '',
   ...contentFiles.map((f) => `- \`${f}\``),
   '',
-  '### Server modules (`server/*.js`)',
+  '### Server modules (`platform/server/*.js`)',
   '',
   ...serverFiles.map((f) => `- \`${f}\``),
   '',
   'When making recommendations, **treat new or unexpected paths above as signals of recent implementation work** that may not yet be described in the narrative primer section.'
 ];
 
-const autoMdPath = path.join(root, 'server', 'playshare-extension-primer.auto.md');
-const metaPath = path.join(root, 'server', 'playshare-extension-primer.meta.json');
+const autoMdPath = path.join(root, 'platform', 'server', 'playshare-extension-primer.auto.md');
+const metaPath = path.join(root, 'platform', 'server', 'playshare-extension-primer.meta.json');
 
 fs.writeFileSync(autoMdPath, `${lines.join('\n')}\n`, 'utf8');
 fs.writeFileSync(metaPath, `${JSON.stringify(meta, null, 2)}\n`, 'utf8');

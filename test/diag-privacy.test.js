@@ -8,9 +8,9 @@ const {
   assertHashSaltPolicy,
   enforceUnifiedDiagnosticPrivacy,
   ALLOWED_DIAGNOSTIC_SCHEMAS
-} = require('../server/diag-privacy-enforce');
-const { normalizeDiagnosticReport } = require('../server/diag-normalize');
-const { ingestDiagnosticBundle, ENVELOPE_SCHEMA } = require('../server/diag-upload');
+} = require('../platform/server/diag-privacy-enforce');
+const { normalizeDiagnosticReport } = require('../platform/server/diag-normalize');
+const { ingestDiagnosticBundle, ENVELOPE_SCHEMA } = require('../platform/server/diag-upload');
 
 function envSnapshot() {
   return {

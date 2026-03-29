@@ -7,8 +7,8 @@ try {
   /* same pattern as server.js */
 }
 
-const { getSupabaseAdmin } = require('../server/diag-upload');
-const { runCliWorker } = require('../server/diag-ai-worker');
+const { getSupabaseAdmin } = require('../platform/server/diag-upload');
+const { runCliWorker } = require('../platform/server/diag-ai-worker');
 
 runCliWorker(getSupabaseAdmin).catch((err) => {
   console.error('[PlayShare/diag-ai-worker] fatal', err && err.stack ? err.stack : err);

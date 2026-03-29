@@ -5,7 +5,7 @@
       __defProp(target, name, { get: all[name], enumerable: true });
   };
 
-  // shared/playshare/extension-messages.js
+  // shared/core/extension-messages.js
   var extension_messages_exports = {};
   __export(extension_messages_exports, {
     PLAYS_SHARE_CONTENT_SOURCE: () => PLAYS_SHARE_CONTENT_SOURCE,
@@ -41,7 +41,7 @@
     bgUpdateCountdownOnPlay: () => bgUpdateCountdownOnPlay
   });
 
-  // shared/playshare/signaling-client.js
+  // shared/core/signaling-client.js
   var PlayShareSignalingClientType = Object.freeze({
     CREATE_ROOM: "CREATE_ROOM",
     JOIN_ROOM: "JOIN_ROOM",
@@ -67,7 +67,7 @@
     REACTION: "REACTION"
   });
 
-  // shared/playshare/extension-messages.js
+  // shared/core/extension-messages.js
   var PLAYS_SHARE_CONTENT_SOURCE = (
     /** @type {PlayShareContentSource} */
     "playshare"
@@ -182,6 +182,6 @@
     });
   }
 
-  // shared/playshare/extension-messages-global-entry.js
+  // shared/core/extension-messages-global-entry.js
   globalThis.PlayShareExtensionMessages = extension_messages_exports;
 })();

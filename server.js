@@ -17,9 +17,9 @@ const fs = require('fs');
 const os = require('os');
 const { WebSocketServer, WebSocket } = require('ws');
 const { v4: uuidv4 } = require('uuid');
-const { handleDiagUpload, getSupabaseAdmin } = require('./server/diag-upload');
-const { handleDiagIntel } = require('./server/diag-intel-http');
-const { startDiagAiWorkerLoop } = require('./server/diag-ai-worker');
+const { handleDiagUpload, getSupabaseAdmin } = require('./platform/server/diag-upload');
+const { handleDiagIntel } = require('./platform/server/diag-intel-http');
+const { startDiagAiWorkerLoop } = require('./platform/server/diag-ai-worker');
 
 const rawPort = String(process.env.PORT ?? '').trim();
 const parsedPort = Number.parseInt(rawPort, 10);

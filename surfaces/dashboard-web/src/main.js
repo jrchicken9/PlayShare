@@ -2,7 +2,7 @@
  * PlayShare web lobby — CREATE_ROOM / JOIN_ROOM / CHAT via same signaling server as the extension.
  */
 
-import { PlayShareSignalingClientType } from '../../shared/playshare/signaling-client.js';
+import { PlayShareSignalingClientType } from '../../../shared/core/signaling-client.js';
 
 const LS = {
   WSS: 'playshare_web_wss_url',

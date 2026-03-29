@@ -11,7 +11,7 @@ const {
   enforceSessionCsrf,
   createScopedUploadToken,
   authenticateUploadRequest
-} = require('../server/diag-auth');
+} = require('../platform/server/diag-auth');
 
 function envSnapshot() {
   return {

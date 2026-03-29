@@ -4,7 +4,7 @@
  */
 
 const assert = require('assert');
-const { normalizeDiagnosticReport, profilerEventTypeHistogram } = require('../server/diag-normalize');
+const { normalizeDiagnosticReport, profilerEventTypeHistogram } = require('../platform/server/diag-normalize');
 
 function run() {
   const hist = profilerEventTypeHistogram([

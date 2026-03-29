@@ -1,4 +1,4 @@
-// shared/playshare/signaling-client.js
+// shared/core/signaling-client.js
 var PlayShareSignalingClientType = Object.freeze({
   CREATE_ROOM: "CREATE_ROOM",
   JOIN_ROOM: "JOIN_ROOM",
@@ -24,7 +24,7 @@ var PlayShareSignalingClientType = Object.freeze({
   REACTION: "REACTION"
 });
 
-// web/src/main.js
+// surfaces/dashboard-web/src/main.js
 var LS = {
   WSS: "playshare_web_wss_url",
   NAME: "playshare_web_display_name"

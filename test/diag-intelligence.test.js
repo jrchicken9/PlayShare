@@ -11,7 +11,7 @@ const {
   explainCase,
   buildRecommendationsFromCases,
   regressionCompare
-} = require('../server/diag-intelligence');
+} = require('../platform/server/diag-intelligence');
 
 function baseSummary(over = {}) {
   return {

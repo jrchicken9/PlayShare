@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const root = path.join(__dirname, '..');
+const root = path.join(__dirname, '..', '..');
 const autoPath = path.join(__dirname, 'playshare-extension-primer.auto.md');
 const staticPath = path.join(__dirname, 'playshare-extension-primer.static.md');
 const metaPath = path.join(__dirname, 'playshare-extension-primer.meta.json');
