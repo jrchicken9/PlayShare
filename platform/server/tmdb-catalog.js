@@ -82,25 +82,34 @@ const ATTRIBUTION =
   'This product uses the TMDB API but is not endorsed or certified by TMDB.';
 
 /**
- * Trending TV (weekly) for dashboard spotlight — normalized for clients.
+ * Trending movies or TV (weekly) for dashboard spotlight — normalized for clients.
  * @param {string} apiKey
+ * @param {'movie'|'tv'} media
  */
-async function getSpotlightTvWeek(apiKey) {
-  const cacheKey = 'spotlight:tv:week:v1';
+async function getSpotlightTrendingWeek(apiKey, media) {
+  const m = media === 'movie' ? 'movie' : 'tv';
+  const cacheKey = `spotlight:${m}:week:v1`;
   const hit = cacheGet(cache, cacheKey, SPOTLIGHT_CACHE_MS);
   if (hit) return hit;
 
-  const data = await tmdbFetchJson('/trending/tv/week', apiKey);
+  const data = await tmdbFetchJson(`/trending/${m}/week`, apiKey);
   const raw = Array.isArray(data.results) ? data.results : [];
-  const results = raw.slice(0, 12).map((row) => normalizeTvRow(row));
+  const norm = m === 'movie' ? normalizeMovieRow : normalizeTvRow;
+  const results = raw.slice(0, 12).map((row) => norm(row));
 
   const payload = {
     source: 'tmdb',
     attribution: ATTRIBUTION,
-    results
+    results,
+    media: m
   };
   cacheSet(cache, cacheKey, payload);
   return payload;
+}
+
+/** @param {string} apiKey */
+async function getSpotlightTvWeek(apiKey) {
+  return getSpotlightTrendingWeek(apiKey, 'tv');
 }
 
 /**
@@ -182,6 +191,7 @@ async function discoverByGenre(apiKey, opts) {
 }
 
 module.exports = {
+  getSpotlightTrendingWeek,
   getSpotlightTvWeek,
   searchMulti,
   getGenreList,

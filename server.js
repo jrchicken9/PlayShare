@@ -21,7 +21,7 @@ const { handleDiagUpload, getSupabaseAdmin } = require('./platform/server/diag-u
 const { handleDiagIntel } = require('./platform/server/diag-intel-http');
 const { startDiagAiWorkerLoop } = require('./platform/server/diag-ai-worker');
 const {
-  getSpotlightTvWeek,
+  getSpotlightTrendingWeek,
   searchMulti,
   getGenreList,
   discoverByGenre
@@ -1021,7 +1021,9 @@ function openSite(u){window.open(u,'_blank');}
       );
       return;
     }
-    getSpotlightTvWeek(apiKey)
+    const mediaRaw = (url.searchParams.get('media') || 'tv').toLowerCase();
+    const media = mediaRaw === 'movie' ? 'movie' : 'tv';
+    getSpotlightTrendingWeek(apiKey, media)
       .then((payload) => {
         res.writeHead(200, {
           ...headers,
