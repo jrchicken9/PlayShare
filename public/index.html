@@ -165,6 +165,13 @@
       text-decoration: none;
     }
     .nav-links a:not(.btn-install):hover { color: #fff; text-decoration: none; }
+    .nav-links a.nav-account {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      font-weight: 500;
+      text-decoration: none;
+    }
+    .nav-links a.nav-account:hover { color: #fff; text-decoration: none; }
     .btn-install {
       display: inline-flex;
       align-items: center;
@@ -1237,6 +1244,7 @@
   </style>
 </head>
 <body{{BODY_ATTRS}}>
+  {{HOME_SUPABASE_BOOT}}
   <a class="skip" href="#main">Skip to content</a>
   <header class="nav">
     <a class="nav-brand" href="/">
@@ -1247,6 +1255,7 @@
       <a href="#platforms">Platforms</a>
       <a href="#how-it-works">How it works</a>
       <a href="/privacy">Privacy Policy</a>
+      <a class="nav-account" href="/dashboard" id="navAccountLink"><span class="nav-account-label">Sign in</span></a>
       <a class="btn-install" href="#get-extension">Get extension</a>
     </nav>
   </header>
@@ -1532,6 +1541,36 @@
           soon.hidden = !!(zipUrl || storeUrl);
         }
       });
+    })();
+  </script>
+  <script type="module">
+    (async () => {
+      const boot = window.__PLAYSHARE_BOOT__;
+      const link = document.getElementById('navAccountLink');
+      const label = link && link.querySelector('.nav-account-label');
+      if (!boot || !boot.supabaseUrl || !boot.supabaseAnon) return;
+      try {
+        const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
+        const supabase = createClient(boot.supabaseUrl, boot.supabaseAnon);
+        async function sync() {
+          const {
+            data: { session }
+          } = await supabase.auth.getSession();
+          if (label) label.textContent = session ? 'Dashboard' : 'Sign in';
+          if (link) {
+            link.setAttribute(
+              'aria-label',
+              session ? 'Open your PlayShare dashboard' : 'Sign in to PlayShare'
+            );
+          }
+        }
+        await sync();
+        supabase.auth.onAuthStateChange(() => {
+          sync();
+        });
+      } catch {
+        /* ignore */
+      }
     })();
   </script>
 </body>

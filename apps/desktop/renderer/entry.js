@@ -1,6 +1,7 @@
 /**
  * PlayShare desktop renderer — Supabase auth, auto signaling, dashboard + room flow.
  */
+import { ensureWebPlayshareDesktop } from './web-signal-bridge.js';
 import { createClient } from '@supabase/supabase-js';
 import { PlayShareSignalingClientType } from '../../../shared/core/signaling-client.js';
 import { PLAYS_SHARE_DEFAULT_PUBLIC_WSS } from '../../../shared/core/product.js';
@@ -11,6 +12,8 @@ import {
 } from '../../../shared/core/supabase-public-config.js';
 import { SPOTLIGHT_PICKS } from './spotlight-data.js';
 import { createLobbyOperativeEl } from '../../../shared/ui/lobby-operative.js';
+
+ensureWebPlayshareDesktop();
 
 function desktop() {
   return window.playshareDesktop;
@@ -1540,21 +1543,21 @@ async function openTmdbWatchProvidersModal(row) {
   }
 }
 
-function wireTitleOpenWatch(h, rowOrItem, mode) {
-  h.classList.add('spotlight-show--action');
-  h.tabIndex = 0;
-  h.setAttribute('role', 'button');
+function wireSpotlightCardOpenWatch(art, rowOrItem, mode) {
+  art.classList.add('spotlight-card--opens-watch');
+  art.tabIndex = 0;
   const t = (rowOrItem.title || '').trim() || 'this title';
-  h.setAttribute('aria-label', `Where to watch: ${t}`);
+  art.setAttribute('aria-label', `Where to watch: ${t}. Press Enter to open.`);
   const open =
     mode === 'editorial'
       ? () => openEditorialWatchModal(rowOrItem)
       : () => void openTmdbWatchProvidersModal(rowOrItem);
-  h.addEventListener('click', (ev) => {
-    ev.preventDefault();
+  art.addEventListener('click', (ev) => {
+    const el = ev.target;
+    if (el && typeof el.closest === 'function' && el.closest('button, a')) return;
     open();
   });
-  h.addEventListener('keydown', (ev) => {
+  art.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' || ev.key === ' ') {
       ev.preventDefault();
       open();
@@ -1581,7 +1584,6 @@ function buildEditorialSpotlightCard(item) {
   const h = document.createElement('h4');
   h.className = 'spotlight-show';
   h.textContent = item.title;
-  wireTitleOpenWatch(h, item, 'editorial');
 
   const kind = document.createElement('p');
   kind.className = 'spotlight-kind';
@@ -1593,6 +1595,7 @@ function buildEditorialSpotlightCard(item) {
 
   body.append(svc, h, kind, tag);
   art.append(vis, body);
+  wireSpotlightCardOpenWatch(art, item, 'editorial');
   return art;
 }
 
@@ -1637,7 +1640,6 @@ function buildTmdbSpotlightCard(row, opts) {
   const h = document.createElement('h4');
   h.className = 'spotlight-show';
   h.textContent = row.title || '—';
-  wireTitleOpenWatch(h, row, 'tmdb');
 
   const kind = document.createElement('p');
   kind.className = 'spotlight-kind';
@@ -1670,6 +1672,7 @@ function buildTmdbSpotlightCard(row, opts) {
   actions.appendChild(suggestBtn);
   body.append(svc, h, kind, tag, actions);
   art.append(vis, body);
+  wireSpotlightCardOpenWatch(art, row, 'tmdb');
   return art;
 }
 
@@ -2245,7 +2248,8 @@ function wireAuthForms() {
 function wireRoomActions() {
   const api = desktop();
   if (!api?.signalConnect) {
-    $('lastError').textContent = 'Preload bridge missing. Run the app with Electron.';
+    $('lastError').textContent =
+      'PlayShare client bridge missing. Use the desktop app or open this site’s /dashboard in a supported browser.';
     $('lastError').hidden = false;
     return;
   }

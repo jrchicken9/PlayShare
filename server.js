@@ -800,6 +800,22 @@ function tmdbApiKeyFromEnv() {
   return k && String(k).trim() ? String(k).trim() : '';
 }
 
+/** Read public Supabase URL + anon key from shared config (for homepage session hint). */
+function readSupabasePublicConfigFromFile() {
+  try {
+    const p = path.join(__dirname, 'shared', 'core', 'supabase-public-config.js');
+    const raw = fs.readFileSync(p, 'utf8');
+    const urlMatch = raw.match(/PLAYSUP_SHARE_SUPABASE_URL\s*=\s*'([^']+)'/);
+    const anonMatch = raw.match(/PLAYSUP_SHARE_SUPABASE_ANON_KEY\s*=\s*[\r\n\s]*'([^']+)'/);
+    return {
+      url: urlMatch ? urlMatch[1] : '',
+      anon: anonMatch ? anonMatch[1] : ''
+    };
+  } catch {
+    return { url: '', anon: '' };
+  }
+}
+
 function renderHomepageHtml() {
   if (!homepageTemplate) return null;
   const storeUrl = String(process.env.PLAYSHARE_CHROME_STORE_URL || '').trim();
@@ -811,7 +827,14 @@ function renderHomepageHtml() {
     if (ver) attrs.push(`data-extension-zip-version="${escapeHtmlAttr(ver)}"`);
   }
   const bodyAttrs = attrs.length ? ` ${attrs.join(' ')}` : '';
-  return homepageTemplate.replace('{{BODY_ATTRS}}', bodyAttrs);
+  const { url: sbUrl, anon: sbAnon } = readSupabasePublicConfigFromFile();
+  const homeBoot =
+    sbUrl && sbAnon
+      ? `<script>window.__PLAYSHARE_BOOT__=${JSON.stringify({ supabaseUrl: sbUrl, supabaseAnon: sbAnon })};</script>`
+      : '';
+  return homepageTemplate
+    .replace('{{BODY_ATTRS}}', bodyAttrs)
+    .replace('{{HOME_SUPABASE_BOOT}}', homeBoot);
 }
 
 const httpServer = http.createServer((req, res) => {
@@ -898,14 +921,31 @@ const httpServer = http.createServer((req, res) => {
     }
     return;
   }
-  // PlayShare web app shell (static; run `npm run build:web` to generate `public/app/*`)
+  // Legacy /app URLs → /dashboard (same shell as the desktop app)
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    if (url.pathname === '/app' || url.pathname === '/app/' || url.pathname.startsWith('/app/')) {
+      let loc = '/dashboard';
+      if (url.pathname.startsWith('/app/') && url.pathname.length > 5) {
+        loc += url.pathname.slice(4);
+      }
+      loc += url.search || '';
+      res.writeHead(302, { Location: loc });
+      res.end(req.method === 'HEAD' ? undefined : '');
+      return;
+    }
+  }
+
+  // Dashboard (static; run `npm run build:web`)
   if (
-    (url.pathname === '/app' || url.pathname === '/app/') &&
+    (url.pathname === '/dashboard' ||
+      url.pathname === '/dashboard/' ||
+      url.pathname === '/dashboard/index.html' ||
+      url.pathname === '/dashboard/index.html/') &&
     (req.method === 'GET' || req.method === 'HEAD')
   ) {
-    const appIndex = path.join(__dirname, 'public', 'app', 'index.html');
+    const dashIndex = path.join(__dirname, 'public', 'dashboard', 'index.html');
     try {
-      const html = fs.readFileSync(appIndex, 'utf8');
+      const html = fs.readFileSync(dashIndex, 'utf8');
       res.writeHead(200, {
         'Content-Type': 'text/html; charset=utf-8',
         'Cache-Control': 'no-cache'
@@ -916,31 +956,13 @@ const httpServer = http.createServer((req, res) => {
       res.end(
         req.method === 'HEAD'
           ? undefined
-          : 'Web app not built. Run: npm run build:web\n'
+          : 'Dashboard not built. Run: npm run build:web\n'
       );
     }
     return;
   }
-  if (
-    (url.pathname === '/app/index.html' || url.pathname === '/app/index.html/') &&
-    (req.method === 'GET' || req.method === 'HEAD')
-  ) {
-    const appIndex = path.join(__dirname, 'public', 'app', 'index.html');
-    try {
-      const html = fs.readFileSync(appIndex, 'utf8');
-      res.writeHead(200, {
-        'Content-Type': 'text/html; charset=utf-8',
-        'Cache-Control': 'no-cache'
-      });
-      res.end(req.method === 'HEAD' ? undefined : html);
-    } catch {
-      res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end(req.method === 'HEAD' ? undefined : 'Web app not built. Run: npm run build:web\n');
-    }
-    return;
-  }
-  if (url.pathname === '/app/bundle.js' && req.method === 'GET') {
-    const bundlePath = path.join(__dirname, 'public', 'app', 'bundle.js');
+  if (url.pathname === '/dashboard/bundle.js' && req.method === 'GET') {
+    const bundlePath = path.join(__dirname, 'public', 'dashboard', 'bundle.js');
     try {
       const buf = fs.readFileSync(bundlePath, 'utf8');
       res.writeHead(200, {
@@ -950,12 +972,12 @@ const httpServer = http.createServer((req, res) => {
       res.end(buf);
     } catch {
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('Web app bundle missing. Run: npm run build:web\n');
+      res.end('Dashboard bundle missing. Run: npm run build:web\n');
     }
     return;
   }
-  if (url.pathname === '/app/app.css' && (req.method === 'GET' || req.method === 'HEAD')) {
-    const cssPath = path.join(__dirname, 'public', 'app', 'app.css');
+  if (url.pathname === '/dashboard/styles.css' && (req.method === 'GET' || req.method === 'HEAD')) {
+    const cssPath = path.join(__dirname, 'public', 'dashboard', 'styles.css');
     try {
       const buf = fs.readFileSync(cssPath, 'utf8');
       res.writeHead(200, {
@@ -965,7 +987,7 @@ const httpServer = http.createServer((req, res) => {
       res.end(req.method === 'HEAD' ? undefined : buf);
     } catch {
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end(req.method === 'HEAD' ? undefined : 'Web app CSS missing. Run: npm run build:web\n');
+      res.end(req.method === 'HEAD' ? undefined : 'Dashboard CSS missing. Run: npm run build:web\n');
     }
     return;
   }
@@ -2049,11 +2071,11 @@ function logStartupBanner() {
     console.log(`   Privacy policy: ${getHttpJoinUrl()}/privacy`);
   }
   try {
-    const appShell = path.join(__dirname, 'public', 'app', 'index.html');
-    fs.statSync(appShell);
-    console.log(`   Web app shell: ${getHttpJoinUrl()}/app`);
+    const dashShell = path.join(__dirname, 'public', 'dashboard', 'index.html');
+    fs.statSync(dashShell);
+    console.log(`   Web dashboard: ${getHttpJoinUrl()}/dashboard`);
   } catch {
-    console.log('   Web app shell: (not built — run npm run build:web)');
+    console.log('   Web dashboard: (not built — run npm run build:web)');
   }
   if (homepageTemplate) {
     console.log(`   Homepage: ${getHttpJoinUrl()}/`);
