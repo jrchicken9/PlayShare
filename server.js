@@ -20,7 +20,12 @@ const { v4: uuidv4 } = require('uuid');
 const { handleDiagUpload, getSupabaseAdmin } = require('./platform/server/diag-upload');
 const { handleDiagIntel } = require('./platform/server/diag-intel-http');
 const { startDiagAiWorkerLoop } = require('./platform/server/diag-ai-worker');
-const { getSpotlightTvWeek } = require('./platform/server/tmdb-catalog');
+const {
+  getSpotlightTvWeek,
+  searchMulti,
+  getGenreList,
+  discoverByGenre
+} = require('./platform/server/tmdb-catalog');
 
 const rawPort = String(process.env.PORT ?? '').trim();
 const parsedPort = Number.parseInt(rawPort, 10);
@@ -991,7 +996,7 @@ function openSite(u){window.open(u,'_blank');}
     res.end(req.method === 'HEAD' ? undefined : 'PlayShare signaling OK\n');
     return;
   }
-  // TMDB proxy: desktop / web clients fetch catalog here (key never shipped to browsers).
+  // TMDB proxy: PlayShare desktop app fetches catalog here (API key stays server-side; extension + web app omit this).
   if (url.pathname === '/api/catalog/spotlight' || url.pathname === '/api/catalog/spotlight/') {
     const headers = { 'Content-Type': 'application/json; charset=utf-8', ...catalogCorsHeaders() };
     if (req.method === 'OPTIONS') {
@@ -1026,6 +1031,136 @@ function openSite(u){window.open(u,'_blank');}
       })
       .catch((e) => {
         console.error('[PlayShare/api/catalog/spotlight]', e && e.message ? e.message : e);
+        res.writeHead(502, headers);
+        res.end(JSON.stringify({ ok: false, error: 'tmdb_upstream' }));
+      });
+    return;
+  }
+  if (url.pathname === '/api/catalog/search' || url.pathname === '/api/catalog/search/') {
+    const headers = { 'Content-Type': 'application/json; charset=utf-8', ...catalogCorsHeaders() };
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, headers);
+      res.end();
+      return;
+    }
+    if (req.method !== 'GET') {
+      res.writeHead(405, headers);
+      res.end(JSON.stringify({ ok: false, error: 'method_not_allowed' }));
+      return;
+    }
+    const apiKey = tmdbApiKeyFromEnv();
+    if (!apiKey) {
+      res.writeHead(503, headers);
+      res.end(
+        JSON.stringify({
+          ok: false,
+          error: 'tmdb_not_configured',
+          message: 'Set TMDB_API_KEY (or PLAYSHARE_TMDB_API_KEY) on the server.'
+        })
+      );
+      return;
+    }
+    const q = url.searchParams.get('q') || '';
+    const page = url.searchParams.get('page') || '1';
+    searchMulti(apiKey, q, page)
+      .then((payload) => {
+        res.writeHead(200, { ...headers, 'Cache-Control': 'public, max-age=120' });
+        res.end(JSON.stringify({ ok: true, ...payload }));
+      })
+      .catch((e) => {
+        console.error('[PlayShare/api/catalog/search]', e && e.message ? e.message : e);
+        res.writeHead(502, headers);
+        res.end(JSON.stringify({ ok: false, error: 'tmdb_upstream' }));
+      });
+    return;
+  }
+  if (url.pathname === '/api/catalog/genres' || url.pathname === '/api/catalog/genres/') {
+    const headers = { 'Content-Type': 'application/json; charset=utf-8', ...catalogCorsHeaders() };
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, headers);
+      res.end();
+      return;
+    }
+    if (req.method !== 'GET') {
+      res.writeHead(405, headers);
+      res.end(JSON.stringify({ ok: false, error: 'method_not_allowed' }));
+      return;
+    }
+    const apiKey = tmdbApiKeyFromEnv();
+    if (!apiKey) {
+      res.writeHead(503, headers);
+      res.end(
+        JSON.stringify({
+          ok: false,
+          error: 'tmdb_not_configured',
+          message: 'Set TMDB_API_KEY (or PLAYSHARE_TMDB_API_KEY) on the server.'
+        })
+      );
+      return;
+    }
+    const media = (url.searchParams.get('media') || 'tv').toLowerCase();
+    if (media !== 'movie' && media !== 'tv') {
+      res.writeHead(400, headers);
+      res.end(JSON.stringify({ ok: false, error: 'invalid_media' }));
+      return;
+    }
+    getGenreList(apiKey, media)
+      .then((payload) => {
+        res.writeHead(200, { ...headers, 'Cache-Control': 'public, max-age=3600' });
+        res.end(JSON.stringify({ ok: true, ...payload }));
+      })
+      .catch((e) => {
+        console.error('[PlayShare/api/catalog/genres]', e && e.message ? e.message : e);
+        res.writeHead(502, headers);
+        res.end(JSON.stringify({ ok: false, error: 'tmdb_upstream' }));
+      });
+    return;
+  }
+  if (url.pathname === '/api/catalog/discover' || url.pathname === '/api/catalog/discover/') {
+    const headers = { 'Content-Type': 'application/json; charset=utf-8', ...catalogCorsHeaders() };
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, headers);
+      res.end();
+      return;
+    }
+    if (req.method !== 'GET') {
+      res.writeHead(405, headers);
+      res.end(JSON.stringify({ ok: false, error: 'method_not_allowed' }));
+      return;
+    }
+    const apiKey = tmdbApiKeyFromEnv();
+    if (!apiKey) {
+      res.writeHead(503, headers);
+      res.end(
+        JSON.stringify({
+          ok: false,
+          error: 'tmdb_not_configured',
+          message: 'Set TMDB_API_KEY (or PLAYSHARE_TMDB_API_KEY) on the server.'
+        })
+      );
+      return;
+    }
+    const media = (url.searchParams.get('media') || 'tv').toLowerCase();
+    if (media !== 'movie' && media !== 'tv') {
+      res.writeHead(400, headers);
+      res.end(JSON.stringify({ ok: false, error: 'invalid_media' }));
+      return;
+    }
+    const genreRaw = url.searchParams.get('genre') || '';
+    const genreId = parseInt(genreRaw, 10);
+    if (!Number.isFinite(genreId) || genreId < 1) {
+      res.writeHead(400, headers);
+      res.end(JSON.stringify({ ok: false, error: 'invalid_genre' }));
+      return;
+    }
+    const page = url.searchParams.get('page') || '1';
+    discoverByGenre(apiKey, { media, genreId, page })
+      .then((payload) => {
+        res.writeHead(200, { ...headers, 'Cache-Control': 'public, max-age=300' });
+        res.end(JSON.stringify({ ok: true, ...payload }));
+      })
+      .catch((e) => {
+        console.error('[PlayShare/api/catalog/discover]', e && e.message ? e.message : e);
         res.writeHead(502, headers);
         res.end(JSON.stringify({ ok: false, error: 'tmdb_upstream' }));
       });
