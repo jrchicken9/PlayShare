@@ -70,7 +70,8 @@ function getServerUrl() {
   return `ws://localhost:${PORT}`;
 }
 
-// rooms: Map<roomCode, { host, members, state, titleSuggestions?: Map<string, { suggestedBy }>, … }>
+// rooms: Map<roomCode, { host, members, state, titleSuggestions?: Map<string, suggestionMeta>, … }>
+// suggestionMeta: suggestedBy, suggesterUsername, votes (Map), title, media, tmdbId, posterUrl, year, overview, timestamp
 const rooms = new Map();
 
 /** Recent playback events per room (diagnostics / correlation). Capped; cleared when room empties. */
@@ -324,6 +325,36 @@ function tallyTitleVotes(votes) {
 function titleVotePayloadFromMeta(meta) {
   const t = tallyTitleVotes(meta && meta.votes);
   return { score: t.score, up: t.up, down: t.down, by: t.by };
+}
+
+/** Snapshot for ROOM_JOINED / ROOM_CREATED so clients can hydrate picks after reconnecting. */
+function serializeTitleSuggestionsForClient(room) {
+  ensureRoomSyncPolicyFields(room);
+  const out = [];
+  for (const [, meta] of room.titleSuggestions.entries()) {
+    if (!meta || typeof meta !== 'object') continue;
+    if (!meta.title || (meta.media !== 'movie' && meta.media !== 'tv')) continue;
+    const tid =
+      typeof meta.tmdbId === 'number' && Number.isFinite(meta.tmdbId)
+        ? meta.tmdbId
+        : parseInt(String(meta.tmdbId || ''), 10);
+    if (!Number.isFinite(tid) || tid <= 0) continue;
+    const votes = titleVotePayloadFromMeta(meta);
+    out.push({
+      media: meta.media,
+      tmdbId: tid,
+      title: String(meta.title).slice(0, 200),
+      posterUrl: meta.posterUrl || null,
+      year: meta.year || null,
+      overview: typeof meta.overview === 'string' ? meta.overview.slice(0, 280) : '',
+      clientId: meta.suggestedBy || '',
+      username: String(meta.suggesterUsername || 'Someone').slice(0, 48),
+      votes,
+      timestamp: typeof meta.timestamp === 'number' ? meta.timestamp : Date.now()
+    });
+  }
+  out.sort((a, b) => (b.votes.score - a.votes.score) || (b.timestamp - a.timestamp));
+  return out;
 }
 
 /**
@@ -1294,7 +1325,8 @@ wss.on('connection', (ws) => {
           hostOnlyControl,
           countdownOnPlay,
           members: getMemberList(roomCode),
-          activeAdBreaks: []
+          activeAdBreaks: [],
+          titleSuggestions: serializeTitleSuggestionsForClient(rooms.get(roomCode))
         });
         console.log(`[ROOM] Created: ${roomCode} by ${username} (hostOnly: ${hostOnlyControl}, countdown: ${countdownOnPlay})`);
         break;
@@ -1362,7 +1394,8 @@ wss.on('connection', (ws) => {
           countdownOnPlay: room.countdownOnPlay,
           state: joinState,
           members: getMemberList(roomCode),
-          activeAdBreaks: activeAdBreaksList(room)
+          activeAdBreaks: activeAdBreaksList(room),
+          titleSuggestions: serializeTitleSuggestionsForClient(room)
         });
 
         // Notify existing members (include activeAdBreaks so clients can resync if they missed AD_BREAK_*)
@@ -1680,7 +1713,18 @@ wss.on('connection', (ws) => {
         if (roomRef) {
           ensureRoomSyncPolicyFields(roomRef);
           const sk = `${media}:${tmdbId}`;
-          roomRef.titleSuggestions.set(sk, { suggestedBy: clientId, votes: new Map() });
+          roomRef.titleSuggestions.set(sk, {
+            suggestedBy: clientId,
+            suggesterUsername: (client.username || 'Someone').slice(0, 24),
+            votes: new Map(),
+            title: title.slice(0, 200),
+            media,
+            tmdbId,
+            posterUrl: posterUrl || null,
+            year: year || null,
+            overview: overview.slice(0, 280),
+            timestamp: Date.now()
+          });
         }
         const metaOut = roomRef ? roomRef.titleSuggestions.get(`${media}:${tmdbId}`) : null;
         const votesPayload = titleVotePayloadFromMeta(metaOut);
