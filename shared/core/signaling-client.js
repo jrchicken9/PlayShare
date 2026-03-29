@@ -29,5 +29,7 @@ export const PlayShareSignalingClientType = Object.freeze({
   CHAT: 'CHAT',
   /** Share a TMDB title from Discover with everyone in the room (desktop lobby). */
   TITLE_SUGGEST: 'TITLE_SUGGEST',
+  /** Remove a title suggestion (suggester or host only; validated on server). */
+  TITLE_SUGGEST_REMOVE: 'TITLE_SUGGEST_REMOVE',
   REACTION: 'REACTION'
 });

@@ -14,3 +14,9 @@ export const PLAYS_SHARE_INVITE_QUERY_SERVER = 'ps_srv';
 
 /** Default local signaling port (matches `server.js` when PORT is unset). */
 export const PLAYS_SHARE_DEFAULT_LOCAL_SIGNAL_PORT = 8765;
+
+/**
+ * Default public signaling WebSocket (Railway production).
+ * Same hostname as the marketing site — use `wss://`, not `https://`, and do not use a `ws.` subdomain prefix.
+ */
+export const PLAYS_SHARE_DEFAULT_PUBLIC_WSS = 'wss://playshare-production.up.railway.app';

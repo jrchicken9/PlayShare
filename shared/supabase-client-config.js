@@ -1,5 +1,6 @@
 /**
  * Single source for the Supabase project used by PlayShare (auth in popup + optional background use).
+ * Bundled ESM clients also read the same values from `shared/core/supabase-public-config.js` — update both if the project changes.
  *
  * Railway / Node (same project):
  *   SUPABASE_URL         = same URL as below (Settings → API → Project URL)

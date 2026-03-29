@@ -314,12 +314,6 @@ body {
   background: var(--bg-surface);
   border: 1px solid var(--border);
 }
-.ws-member-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
 .ws-member-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-member-tag { font-size: 10px; color: var(--accent); font-weight: 600; }
 
@@ -346,20 +340,92 @@ body {
 .ws-messages::-webkit-scrollbar { width: 6px; }
 .ws-messages::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 3px; }
 
-.ws-msg { display: flex; gap: 8px; padding: 6px 8px; border-radius: 10px; }
+.ws-msg { display: flex; gap: 8px; padding: 6px 8px; border-radius: 10px; align-items: flex-start; }
 .ws-msg:hover { background: rgba(255, 255, 255, 0.03); }
-.ws-msg-avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
+
+/* Tactical lobby tiles — matches desktop + extension */
+.ps-operative {
+  --op-accent: var(--teal);
+  position: relative;
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+  border-radius: 10px;
+}
+.ps-operative--sm {
+  width: 1.55rem;
+  height: 1.55rem;
+  border-radius: 8px;
+}
+.ps-operative--sm .ps-operative__spin {
+  inset: -1px;
+  border-radius: 9px;
+}
+.ps-operative--sm .ps-operative__inner {
+  inset: 1px;
+  border-radius: 6px;
+  font-size: 0.5rem;
+}
+.ps-operative__spin {
+  position: absolute;
+  inset: -2px;
+  border-radius: 12px;
+  background: conic-gradient(
+    from 0deg,
+    rgba(255, 255, 255, 0.06),
+    var(--op-accent),
+    rgba(255, 255, 255, 0.08),
+    transparent 62%
+  );
+  animation: ps-op-spin 4.2s linear infinite;
+  opacity: 0.95;
+}
+.ps-operative__inner {
+  position: absolute;
+  inset: 2px;
+  border-radius: 8px;
+  background: linear-gradient(155deg, rgba(12, 14, 18, 0.97) 0%, rgba(22, 24, 32, 0.98) 100%);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
-  font-weight: 700;
-  flex-shrink: 0;
-  color: #111;
+  font-size: 0.5rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--op-accent);
+  text-shadow: 0 0 14px rgba(255, 255, 255, 0.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -6px 16px rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
+.ps-operative__inner::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    105deg,
+    transparent 38%,
+    rgba(255, 255, 255, 0.14) 50%,
+    transparent 62%
+  );
+  background-size: 200% 100%;
+  animation: ps-op-scan 3.6s ease-in-out infinite;
+  pointer-events: none;
+  opacity: 0.32;
+}
+@keyframes ps-op-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes ps-op-scan {
+  0%, 100% { background-position: 130% 0; }
+  50% { background-position: -30% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ps-operative__spin { animation: none; opacity: 0.55; }
+  .ps-operative__inner::after { animation: none; opacity: 0.12; }
+}
+
 .ws-msg-body { flex: 1; min-width: 0; }
 .ws-msg-name { font-size: 12px; font-weight: 600; }
 .ws-msg-text { font-size: 13px; color: var(--text-pri); word-break: break-word; margin-top: 2px; }

@@ -24,6 +24,40 @@ var PlayShareSignalingClientType = Object.freeze({
   REACTION: "REACTION"
 });
 
+// shared/ui/lobby-operative.js
+function createLobbyOperativeEl(opts = {}) {
+  const raw = opts.color && String(opts.color).trim();
+  const accent = raw && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(raw) ? normalizeHex(raw) : defaultAccentFromSeed(`${opts.clientId || ""}|${opts.username || ""}`);
+  const initials = (opts.username || "?").trim().slice(0, 2).toUpperCase() || "?";
+  const wrap = document.createElement("div");
+  wrap.className = opts.size === "sm" ? "ps-operative ps-operative--sm" : "ps-operative";
+  wrap.style.setProperty("--op-accent", accent);
+  wrap.setAttribute("aria-hidden", "true");
+  const spin = document.createElement("div");
+  spin.className = "ps-operative__spin";
+  const inner = document.createElement("div");
+  inner.className = "ps-operative__inner";
+  inner.textContent = initials;
+  wrap.append(spin, inner);
+  return wrap;
+}
+function normalizeHex(c) {
+  let s = c.trim();
+  if (s.length === 4 && s[0] === "#") {
+    s = "#" + s[1] + s[1] + s[2] + s[2] + s[3] + s[3];
+  }
+  return s.toLowerCase();
+}
+function defaultAccentFromSeed(seed) {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const hue = Math.abs(h) % 360;
+  return `hsl(${hue} 58% 58%)`;
+}
+
 // surfaces/dashboard-web/src/main.js
 var LS = {
   WSS: "playshare_web_wss_url",
@@ -281,13 +315,16 @@ function renderMembers() {
   for (const m of state.members) {
     const li = document.createElement("li");
     li.className = "ws-member";
-    const dot = document.createElement("span");
-    dot.className = "ws-member-dot";
-    dot.style.background = m.color || "#888";
+    const tile = createLobbyOperativeEl({
+      color: m.color,
+      clientId: m.clientId,
+      username: m.username,
+      size: "sm"
+    });
     const name = document.createElement("span");
     name.className = "ws-member-name";
     name.textContent = m.username || "—";
-    li.appendChild(dot);
+    li.appendChild(tile);
     li.appendChild(name);
     if (m.isHost) {
       const tag = document.createElement("span");
@@ -308,10 +345,11 @@ function appendSystem(text) {
 function appendChatMsg(msg) {
   const row = document.createElement("div");
   row.className = "ws-msg";
-  const av = document.createElement("div");
-  av.className = "ws-msg-avatar";
-  av.style.background = msg.color || "#4ecdc4";
-  av.textContent = String(msg.username || "?").slice(0, 1).toUpperCase();
+  const tile = createLobbyOperativeEl({
+    color: msg.color,
+    clientId: msg.clientId,
+    username: msg.username
+  });
   const body = document.createElement("div");
   body.className = "ws-msg-body";
   const name = document.createElement("div");
@@ -323,7 +361,7 @@ function appendChatMsg(msg) {
   text.textContent = msg.text || "";
   body.appendChild(name);
   body.appendChild(text);
-  row.appendChild(av);
+  row.appendChild(tile);
   row.appendChild(body);
   $("msgList").appendChild(row);
   scrollChat();

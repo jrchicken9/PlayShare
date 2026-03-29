@@ -70,7 +70,7 @@ function getServerUrl() {
   return `ws://localhost:${PORT}`;
 }
 
-// rooms: Map<roomCode, { host: clientId, members: Map<clientId, { ws, username, color }>, state: PlaybackState }>
+// rooms: Map<roomCode, { host, members, state, titleSuggestions?: Map<string, { suggestedBy }>, … }>
 const rooms = new Map();
 
 /** Recent playback events per room (diagnostics / correlation). Capped; cleared when room empties. */
@@ -295,6 +295,7 @@ function ensureRoomSyncPolicyFields(room) {
   if (room.lastHardCorrectionAt == null) room.lastHardCorrectionAt = 0;
   if (room.reconnectSettleUntil == null) room.reconnectSettleUntil = 0;
   if (room.lastObservedSpreadSec === undefined) room.lastObservedSpreadSec = null;
+  if (!room.titleSuggestions) room.titleSuggestions = new Map();
 }
 
 /**
@@ -1248,7 +1249,8 @@ wss.on('connection', (ws) => {
           adModeReason: null,
           lastHostSeekAt: 0,
           lastHardCorrectionAt: 0,
-          reconnectSettleUntil: 0
+          reconnectSettleUntil: 0,
+          titleSuggestions: new Map()
         });
         startRoomSyncBroadcast(roomCode);
         client.roomCode = roomCode;
@@ -1646,6 +1648,12 @@ wss.on('connection', (ws) => {
         if (posterUrl && !/^https:\/\//i.test(posterUrl)) posterUrl = '';
         const overview = (msg.overview || '').replace(/\s+/g, ' ').trim().slice(0, 280);
         const year = (msg.year != null ? String(msg.year) : '').replace(/[^\d]/g, '').slice(0, 4);
+        const roomRef = rooms.get(client.roomCode);
+        if (roomRef) {
+          ensureRoomSyncPolicyFields(roomRef);
+          const sk = `${media}:${tmdbId}`;
+          roomRef.titleSuggestions.set(sk, { suggestedBy: clientId });
+        }
         broadcastAll(client.roomCode, {
           type: 'TITLE_SUGGEST',
           clientId,
@@ -1657,6 +1665,62 @@ wss.on('connection', (ws) => {
           overview,
           posterUrl: posterUrl || null,
           year: year || null,
+          timestamp: Date.now()
+        });
+        break;
+      }
+
+      case 'TITLE_SUGGEST_REMOVE': {
+        if (!client.roomCode) return;
+        const roomRm = rooms.get(client.roomCode);
+        if (!roomRm) return;
+        ensureRoomSyncPolicyFields(roomRm);
+        const mediaRm = msg.media === 'movie' || msg.media === 'tv' ? msg.media : null;
+        if (!mediaRm) {
+          try {
+            sendTo(ws, { type: 'ERROR', code: 'BAD_REQUEST', message: 'Invalid media type.' });
+          } catch {}
+          return;
+        }
+        const rawIdRm = msg.tmdbId;
+        const tmdbIdRm =
+          typeof rawIdRm === 'number' && Number.isFinite(rawIdRm)
+            ? rawIdRm
+            : parseInt(String(rawIdRm || ''), 10);
+        if (!Number.isFinite(tmdbIdRm) || tmdbIdRm <= 0) {
+          try {
+            sendTo(ws, { type: 'ERROR', code: 'BAD_REQUEST', message: 'Invalid title id.' });
+          } catch {}
+          return;
+        }
+        const skRm = `${mediaRm}:${tmdbIdRm}`;
+        const metaRm = roomRm.titleSuggestions.get(skRm);
+        if (!metaRm) {
+          try {
+            sendTo(ws, {
+              type: 'ERROR',
+              code: 'NOT_FOUND',
+              message: 'That suggestion is not in this room anymore.'
+            });
+          } catch {}
+          return;
+        }
+        if (clientId !== roomRm.host && clientId !== metaRm.suggestedBy) {
+          try {
+            sendTo(ws, {
+              type: 'ERROR',
+              code: 'FORBIDDEN',
+              message: 'Only the host or the person who suggested it can remove this title.'
+            });
+          } catch {}
+          return;
+        }
+        roomRm.titleSuggestions.delete(skRm);
+        broadcastAll(client.roomCode, {
+          type: 'TITLE_SUGGEST_REMOVED',
+          media: mediaRm,
+          tmdbId: tmdbIdRm,
+          removedByClientId: clientId,
           timestamp: Date.now()
         });
         break;

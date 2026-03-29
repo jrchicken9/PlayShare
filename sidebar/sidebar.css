@@ -704,10 +704,87 @@ html, body {
 }
 .ws-msg:hover { background: var(--bg-surface); }
 
-.ws-msg-avatar {
-  width: 32px; height: 32px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 12px; font-weight: 600; flex-shrink: 0;
+/* Tactical lobby tile (Warzone-style rim); matches desktop app */
+.ps-operative {
+  --op-accent: var(--teal);
+  position: relative;
+  width: 2.1rem;
+  height: 2.1rem;
+  flex-shrink: 0;
+  border-radius: 10px;
+}
+.ps-operative--sm {
+  width: 1.65rem;
+  height: 1.65rem;
+  border-radius: 8px;
+}
+.ps-operative--sm .ps-operative__spin {
+  inset: -1px;
+  border-radius: 9px;
+}
+.ps-operative--sm .ps-operative__inner {
+  inset: 1px;
+  border-radius: 6px;
+  font-size: 0.5rem;
+}
+.ps-operative__spin {
+  position: absolute;
+  inset: -2px;
+  border-radius: 12px;
+  background: conic-gradient(
+    from 0deg,
+    rgba(255, 255, 255, 0.06),
+    var(--op-accent),
+    rgba(255, 255, 255, 0.08),
+    transparent 62%
+  );
+  animation: ps-op-spin 4.2s linear infinite;
+  opacity: 0.95;
+}
+.ps-operative__inner {
+  position: absolute;
+  inset: 2px;
+  border-radius: 8px;
+  background: linear-gradient(155deg, rgba(12, 14, 18, 0.97) 0%, rgba(22, 24, 32, 0.98) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.5625rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--op-accent);
+  text-shadow: 0 0 14px rgba(255, 255, 255, 0.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -6px 16px rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.ps-operative__inner::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    105deg,
+    transparent 38%,
+    rgba(255, 255, 255, 0.14) 50%,
+    transparent 62%
+  );
+  background-size: 200% 100%;
+  animation: ps-op-scan 3.6s ease-in-out infinite;
+  pointer-events: none;
+  opacity: 0.32;
+}
+@keyframes ps-op-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes ps-op-scan {
+  0%, 100% { background-position: 130% 0; }
+  50% { background-position: -30% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ps-operative__spin { animation: none; opacity: 0.55; }
+  .ps-operative__inner::after { animation: none; opacity: 0.12; }
 }
 
 .ws-msg-body { flex: 1; min-width: 0; }
@@ -788,11 +865,6 @@ html, body {
 }
 .ws-member-card:hover { background: var(--bg-hover); }
 
-.ws-member-card-avatar {
-  width: 40px; height: 40px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 14px; font-weight: 600; flex-shrink: 0;
-}
 .ws-member-card-info { flex: 1; }
 .ws-member-card-name { font-size: 14px; font-weight: 600; color: var(--text-pri); }
 .ws-member-card-role { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
@@ -881,7 +953,8 @@ html, body {
 .ws-sidebar.ws-compact .ws-welcome-text { font-size: 13px; }
 .ws-sidebar.ws-compact .ws-welcome-sub { font-size: 12px; }
 .ws-sidebar.ws-compact .ws-msg { padding: 6px 8px; gap: 8px; }
-.ws-sidebar.ws-compact .ws-msg-avatar { width: 26px; height: 26px; font-size: 11px; }
+.ws-sidebar.ws-compact .ps-operative { width: 1.85rem; height: 1.85rem; border-radius: 9px; }
+.ws-sidebar.ws-compact .ps-operative__inner { font-size: 0.5rem; }
 .ws-sidebar.ws-compact .ws-msg-name { font-size: 12px; }
 .ws-sidebar.ws-compact .ws-msg-time { font-size: 10px; }
 .ws-sidebar.ws-compact .ws-msg-text { font-size: 13px; }
@@ -896,7 +969,7 @@ html, body {
 .ws-sidebar.ws-compact .ws-send-btn svg { width: 14px; height: 14px; }
 .ws-sidebar.ws-compact .ws-members-panel { padding: 10px; gap: 6px; }
 .ws-sidebar.ws-compact .ws-member-card { padding: 10px 12px; gap: 10px; }
-.ws-sidebar.ws-compact .ws-member-card-avatar { width: 32px; height: 32px; font-size: 12px; }
+.ws-sidebar.ws-compact .ps-operative--sm { width: 1.45rem; height: 1.45rem; }
 .ws-sidebar.ws-compact .ws-member-card-name { font-size: 13px; }
 .ws-sidebar.ws-compact .ws-member-card-role { font-size: 10px; }
 .ws-sidebar.ws-compact .ws-sync-card { margin: 10px; padding: 12px 14px; }

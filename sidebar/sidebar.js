@@ -399,6 +399,43 @@
   });
 
   // ── Message rendering ──────────────────────────────────────────────────────
+  /** Tactical lobby tile; keep in sync with shared/ui/lobby-operative.js */
+  function createLobbyOperativeEl(opts) {
+    opts = opts || {};
+    const raw = opts.color && String(opts.color).trim();
+    const accent =
+      raw && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(raw)
+        ? (function normalizeHex(c) {
+            var s = c.trim();
+            if (s.length === 4 && s[0] === '#') {
+              s = '#' + s[1] + s[1] + s[2] + s[2] + s[3] + s[3];
+            }
+            return s.toLowerCase();
+          })(raw)
+        : (function defaultAccentFromSeed(seed) {
+            var h = 2166136261;
+            for (var i = 0; i < seed.length; i++) {
+              h ^= seed.charCodeAt(i);
+              h = Math.imul(h, 16777619);
+            }
+            var hue = Math.abs(h) % 360;
+            return 'hsl(' + hue + ' 58% 58%)';
+          })((opts.clientId || '') + '|' + (opts.username || ''));
+    var initials = (opts.username || '?').trim().slice(0, 2).toUpperCase() || '?';
+    var wrap = document.createElement('div');
+    wrap.className = opts.size === 'sm' ? 'ps-operative ps-operative--sm' : 'ps-operative';
+    wrap.style.setProperty('--op-accent', accent);
+    wrap.setAttribute('aria-hidden', 'true');
+    var spin = document.createElement('div');
+    spin.className = 'ps-operative__spin';
+    var inner = document.createElement('div');
+    inner.className = 'ps-operative__inner';
+    inner.textContent = initials;
+    wrap.appendChild(spin);
+    wrap.appendChild(inner);
+    return wrap;
+  }
+
   function removeWelcome() {
     if (welcomeRemoved) return;
     const w = sMessages.querySelector('.ws-welcome');
@@ -410,18 +447,32 @@
     removeWelcome();
     const div = document.createElement('div');
     div.className = 'ws-msg';
-    const initials = (msg.username || '?').slice(0, 2).toUpperCase();
     const color = msg.color || '#4ECDC4';
-    div.innerHTML = `
-      <div class="ws-msg-avatar" style="background:${color}22;color:${color};border:1px solid ${color}44">${initials}</div>
-      <div class="ws-msg-body">
-        <div class="ws-msg-meta">
-          <span class="ws-msg-name" style="color:${color}">${escHtml(msg.username)}</span>
-          <span class="ws-msg-time">${formatTime(msg.timestamp)}</span>
-        </div>
-        <div class="ws-msg-text">${escHtml(msg.text)}</div>
-      </div>
-    `;
+    const tile = createLobbyOperativeEl({
+      color: msg.color,
+      clientId: msg.clientId,
+      username: msg.username
+    });
+    const body = document.createElement('div');
+    body.className = 'ws-msg-body';
+    const meta = document.createElement('div');
+    meta.className = 'ws-msg-meta';
+    const nameEl = document.createElement('span');
+    nameEl.className = 'ws-msg-name';
+    nameEl.style.color = color;
+    nameEl.textContent = msg.username || '';
+    const timeEl = document.createElement('span');
+    timeEl.className = 'ws-msg-time';
+    timeEl.textContent = formatTime(msg.timestamp);
+    meta.appendChild(nameEl);
+    meta.appendChild(timeEl);
+    const textEl = document.createElement('div');
+    textEl.className = 'ws-msg-text';
+    textEl.textContent = msg.text || '';
+    body.appendChild(meta);
+    body.appendChild(textEl);
+    div.appendChild(tile);
+    div.appendChild(body);
     sMessages.appendChild(div);
     trimChatDom();
     scrollToBottom();
@@ -512,17 +563,31 @@
     members.forEach(m => {
       const div = document.createElement('div');
       div.className = 'ws-member-card';
-      const initials = (m.username || '?').slice(0, 2).toUpperCase();
-      const color = m.color || '#4ECDC4';
       const isMe = m.clientId === myClientId;
-      div.innerHTML = `
-        <div class="ws-member-card-avatar" style="background:${color}22;color:${color};border:1px solid ${color}44">${initials}</div>
-        <div class="ws-member-card-info">
-          <div class="ws-member-card-name">${escHtml(m.username)}</div>
-          <div class="ws-member-card-role">${m.isHost ? '👑 Host' : 'Viewer'}</div>
-        </div>
-        ${isMe ? '<span class="ws-member-card-you">you</span>' : ''}
-      `;
+      const face = createLobbyOperativeEl({
+        color: m.color,
+        clientId: m.clientId,
+        username: m.username,
+        size: 'sm'
+      });
+      const info = document.createElement('div');
+      info.className = 'ws-member-card-info';
+      const nameRow = document.createElement('div');
+      nameRow.className = 'ws-member-card-name';
+      nameRow.textContent = m.username || '';
+      const roleRow = document.createElement('div');
+      roleRow.className = 'ws-member-card-role';
+      roleRow.textContent = m.isHost ? '👑 Host' : 'Viewer';
+      info.appendChild(nameRow);
+      info.appendChild(roleRow);
+      div.appendChild(face);
+      div.appendChild(info);
+      if (isMe) {
+        const you = document.createElement('span');
+        you.className = 'ws-member-card-you';
+        you.textContent = 'you';
+        div.appendChild(you);
+      }
       sMembersList.appendChild(div);
     });
   }

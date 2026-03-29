@@ -3,6 +3,7 @@
  */
 
 import { PlayShareSignalingClientType } from '../../../shared/core/signaling-client.js';
+import { createLobbyOperativeEl } from '../../../shared/ui/lobby-operative.js';
 
 const LS = {
   WSS: 'playshare_web_wss_url',
@@ -299,13 +300,16 @@ function renderMembers() {
   for (const m of state.members) {
     const li = document.createElement('li');
     li.className = 'ws-member';
-    const dot = document.createElement('span');
-    dot.className = 'ws-member-dot';
-    dot.style.background = m.color || '#888';
+    const tile = createLobbyOperativeEl({
+      color: m.color,
+      clientId: m.clientId,
+      username: m.username,
+      size: 'sm'
+    });
     const name = document.createElement('span');
     name.className = 'ws-member-name';
     name.textContent = m.username || '—';
-    li.appendChild(dot);
+    li.appendChild(tile);
     li.appendChild(name);
     if (m.isHost) {
       const tag = document.createElement('span');
@@ -330,12 +334,11 @@ function appendSystem(text) {
 function appendChatMsg(msg) {
   const row = document.createElement('div');
   row.className = 'ws-msg';
-  const av = document.createElement('div');
-  av.className = 'ws-msg-avatar';
-  av.style.background = msg.color || '#4ecdc4';
-  av.textContent = String(msg.username || '?')
-    .slice(0, 1)
-    .toUpperCase();
+  const tile = createLobbyOperativeEl({
+    color: msg.color,
+    clientId: msg.clientId,
+    username: msg.username
+  });
   const body = document.createElement('div');
   body.className = 'ws-msg-body';
   const name = document.createElement('div');
@@ -347,7 +350,7 @@ function appendChatMsg(msg) {
   text.textContent = msg.text || '';
   body.appendChild(name);
   body.appendChild(text);
-  row.appendChild(av);
+  row.appendChild(tile);
   row.appendChild(body);
   $('msgList').appendChild(row);
   scrollChat();

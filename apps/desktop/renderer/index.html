@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https://image.tmdb.org; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://playshare-production.up.railway.app wss://playshare-production.up.railway.app ws://127.0.0.1:* ws://localhost:* http://127.0.0.1:* http://localhost:*;" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PlayShare</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="shell shell-wide">
+    <header class="top">
+      <div class="top-brand">
+        <div class="top-titles">
+          <div class="brand-mark" aria-label="PlayShare"><span class="brand-play">Play</span><span class="brand-share">Share</span></div>
+          <div class="sub">Same scene. Same second. Together on the apps you love.</div>
+        </div>
+      </div>
+      <nav class="app-surface-nav" id="appSurfaceNav" hidden aria-label="Primary sections">
+        <div class="app-surface-seg" role="tablist" aria-label="Discover or watch party">
+          <button
+            type="button"
+            class="app-surface-tab"
+            role="tab"
+            id="tabSurfaceDiscover"
+            aria-controls="viewDashboard"
+            aria-selected="false"
+          >
+            <span class="app-surface-tab-label">Discover</span>
+            <span class="app-surface-tab-hint">Movies &amp; shows</span>
+          </button>
+          <button
+            type="button"
+            class="app-surface-tab app-surface-tab--room"
+            role="tab"
+            id="tabSurfaceRoom"
+            aria-controls="viewRoom"
+            aria-selected="false"
+          >
+            <span class="app-surface-tab-top">
+              <span class="app-surface-pulse" aria-hidden="true"></span>
+              <span class="app-surface-tab-label">Room</span>
+            </span>
+            <span class="app-surface-tab-hint"><span id="surfaceRoomSubline">Create or join a room</span></span>
+          </button>
+        </div>
+      </nav>
+      <div class="top-actions">
+        <button type="button" id="btnSignOut" class="btn btn-ghost" hidden>Sign out</button>
+      </div>
+    </header>
+
+    <p id="lastError" class="last-error" hidden role="alert"></p>
+    <p id="authHint" class="auth-hint" hidden role="status"></p>
+
+    <div class="view-stage">
+    <section id="viewAuth" class="auth-layout">
+      <div class="auth-card panel-elevated">
+        <h1 class="auth-title">Welcome</h1>
+        <p class="auth-lead muted">Sign in to open your dashboard and start or join watch rooms.</p>
+        <div class="auth-tabs" role="tablist" aria-label="Account access">
+          <button type="button" class="auth-tab active" data-auth-tab="signin" role="tab" aria-selected="true" aria-controls="auth-panel-signin" id="tab-signin">Sign in</button>
+          <button type="button" class="auth-tab" data-auth-tab="signup" role="tab" aria-selected="false" aria-controls="auth-panel-signup" id="tab-signup">Get started</button>
+        </div>
+        <form id="formSignIn" class="auth-form auth-form-active" autocomplete="on" aria-hidden="false" role="tabpanel" id="auth-panel-signin" aria-labelledby="tab-signin">
+          <label class="field"><span>Email</span><input type="email" id="inSignInEmail" required name="email" autocomplete="username" /></label>
+          <label class="field"><span>Password</span><input type="password" id="inSignInPassword" required name="password" autocomplete="current-password" /></label>
+          <button type="submit" class="btn primary auth-submit" id="btnSignInSubmit">Sign in</button>
+        </form>
+        <form id="formSignUp" class="auth-form" autocomplete="on" aria-hidden="true" role="tabpanel" id="auth-panel-signup" aria-labelledby="tab-signup">
+          <label class="field"><span>Display name</span><input type="text" id="inSignUpName" maxlength="24" autocomplete="name" placeholder="How others see you" /></label>
+          <label class="field"><span>Email</span><input type="email" id="inSignUpEmail" required name="email" autocomplete="email" /></label>
+          <label class="field"><span>Password</span><input type="password" id="inSignUpPassword" required name="new-password" autocomplete="new-password" minlength="6" /></label>
+          <button type="submit" class="btn primary auth-submit" id="btnSignUpSubmit">Create account</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="viewDashboard" class="dash view-dashboard surface-view" hidden>
+      <div class="dash-hero panel-elevated">
+        <div class="dash-hello">
+          <p class="dash-kicker">Discover</p>
+          <h2 class="dash-h2" id="dashGreeting">Dashboard</h2>
+          <p class="muted dash-tagline" id="dashTagline">
+            Browse what’s trending from your server catalog—posters, descriptions, and picks updated from TMDB.
+          </p>
+          <p class="muted dash-sub" id="dashEmail"></p>
+        </div>
+        <p class="dash-status muted" id="dashConnLine">Connecting to PlayShare…</p>
+      </div>
+
+      <section
+        id="spotlightSection"
+        class="spotlight spotlight--home panel-elevated"
+        aria-labelledby="spotlight-heading"
+      >
+        <div class="spotlight-head">
+          <div class="spotlight-head-main">
+            <p class="spotlight-eyebrow">Discover</p>
+            <h3 id="spotlight-heading" class="spotlight-title">Trending this week</h3>
+            <p class="muted spotlight-lead">
+              What’s on everyone’s lists this week—trailers, posters, and picks straight from your catalog. People still press play in <strong>their own apps</strong>; PlayShare keeps the room in sync.
+            </p>
+          </div>
+          <div class="spotlight-head-aside">
+            <span class="spotlight-pill" id="spotlightCatalogPill" hidden>Live catalog</span>
+          </div>
+        </div>
+
+        <div class="catalog-toolbar" id="catalogToolbar" hidden>
+          <div class="catalog-search-row" role="search">
+            <label class="catalog-search-label" for="inCatalogSearch">Search movies and TV</label>
+            <input
+              type="search"
+              id="inCatalogSearch"
+              class="catalog-search-input"
+              placeholder="Search a movie or TV show…"
+              autocomplete="off"
+              maxlength="200"
+            />
+            <button type="button" id="btnCatalogSearch" class="btn primary catalog-search-btn">Search</button>
+            <button type="button" id="btnCatalogReset" class="btn btn-ghost catalog-reset-btn" hidden>
+              Trending
+            </button>
+          </div>
+          <div class="catalog-genre-block">
+            <div class="catalog-genre-block-head">
+              <span class="catalog-genre-heading-text">Browse by genre</span>
+              <span class="catalog-genre-hint muted">Scroll sideways for more</span>
+            </div>
+            <div class="catalog-genre-seg" role="tablist" aria-label="TV or movies">
+              <button
+                type="button"
+                role="tab"
+                id="tabGenreTv"
+                class="catalog-genre-seg-btn is-active"
+                aria-selected="true"
+              >
+                TV shows
+              </button>
+              <button
+                type="button"
+                role="tab"
+                id="tabGenreMovie"
+                class="catalog-genre-seg-btn"
+                aria-selected="false"
+              >
+                Movies
+              </button>
+            </div>
+            <div class="catalog-genre-strip">
+              <div class="catalog-genre-strip-edge catalog-genre-strip-edge--start" aria-hidden="true"></div>
+              <div class="catalog-genre-strip-edge catalog-genre-strip-edge--end" aria-hidden="true"></div>
+              <div class="catalog-genre-scroller" id="genreScroller">
+                <div
+                  class="catalog-genre-chips catalog-genre-chips--row"
+                  id="genreChipsActive"
+                  role="tabpanel"
+                  aria-label="TV genres"
+                ></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="spotlight-grid-outer">
+          <div class="spotlight-grid" id="spotlightGrid" role="list"></div>
+        </div>
+        <p class="spotlight-foot muted" id="spotlightFoot">Loading picks…</p>
+      </section>
+
+      <div class="dash-grid">
+        <article class="dash-card panel-elevated">
+          <h3 class="dash-card-title">Host a room</h3>
+          <p class="muted dash-card-desc">Create a code and share it so friends can sync on the same title.</p>
+          <button type="button" id="btnCreate" class="btn primary dash-card-cta">Create room</button>
+        </article>
+        <article class="dash-card panel-elevated">
+          <h3 class="dash-card-title">Join a room</h3>
+          <p class="muted dash-card-desc">Enter the code from your host to jump into their session.</p>
+          <label class="field dash-join-field"><span>Room code</span><input type="text" id="inJoinCode" maxlength="8" placeholder="ABCD12" autocomplete="off" /></label>
+          <button type="button" id="btnJoin" class="btn primary dash-card-cta">Join room</button>
+        </article>
+      </div>
+    </section>
+    </div>
+
+    <section id="viewRoom" class="room-view surface-view" hidden>
+      <header class="room-header">
+        <div class="room-header-text">
+          <p class="room-eyebrow">Watch party</p>
+          <div class="room-title-row">
+            <h2 class="room-heading"><span class="room-code" id="roomCodeDisplay">------</span></h2>
+            <span id="hostBadge" class="room-host-pill" hidden>Host</span>
+          </div>
+          <p class="room-sub muted">Friends enter this code in PlayShare to join you. Switch to <strong>Discover</strong> anytime to browse titles—your session stays open.</p>
+        </div>
+        <div class="room-header-actions">
+          <button type="button" id="btnLeaveRoom" class="btn room-leave room-leave--solid">Leave room</button>
+        </div>
+      </header>
+
+      <div class="room-layout">
+        <div class="room-column room-column--main">
+          <section class="room-holo room-holo--future panel-elevated" aria-labelledby="room-holo-title">
+            <div class="room-holo-scan" aria-hidden="true"></div>
+            <header class="room-holo-head">
+              <div class="room-holo-head-text">
+                <div class="room-holo-title-row">
+                  <h3 id="room-holo-title" class="room-holo-title">
+                    <span class="room-holo-title-accent">Lobby</span> chat
+                  </h3>
+                  <span class="room-holo-net-badge">Connected</span>
+                </div>
+                <p class="room-holo-meta muted" id="lobbySquadMeta">—</p>
+              </div>
+              <span class="room-holo-pulse-wrap" title="You’re online">
+                <span class="room-holo-pulse" aria-hidden="true"></span>
+              </span>
+            </header>
+            <div class="room-holo-body">
+              <div class="room-holo-orbit" aria-hidden="true">
+                <span class="room-holo-ring room-holo-ring--a"></span>
+                <span class="room-holo-ring room-holo-ring--b"></span>
+                <span class="room-holo-beam" aria-hidden="true"></span>
+              </div>
+              <div
+                id="lobbySquad"
+                class="lobby-squad lobby-squad--holo"
+                role="list"
+                aria-label="People in this room"
+              ></div>
+              <div
+                id="lobbySuggestedWrap"
+                class="lobby-suggestions-wrap"
+                hidden
+                aria-label="Titles suggested from Discover"
+              >
+                <p class="lobby-suggestions-heading">Suggested from Discover</p>
+                <div id="lobbySuggestedList" class="lobby-suggestions-list" role="list"></div>
+              </div>
+              <div class="room-holo-datastream" aria-hidden="true">
+                <span class="room-holo-datastream-tag">Messages</span>
+                <span class="room-holo-datastream-track">
+                  <span class="room-holo-datastream-trace"></span>
+                </span>
+                <span class="room-holo-datastream-rx">
+                  Live<span class="room-holo-cursor" aria-hidden="true"></span>
+                </span>
+              </div>
+              <div class="room-holo-transcript">
+                <div class="room-holo-transcript-inner">
+                  <div
+                    id="lobbyChatLog"
+                    class="lobby-chat-log lobby-chat-log--holo"
+                    role="log"
+                    aria-live="polite"
+                    aria-relevant="additions"
+                  >
+                    <p id="lobbyChatPlaceholder" class="lobby-chat-placeholder muted">
+                      No messages yet.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="room-holo-composer lobby-chat-composer">
+              <label class="room-holo-tx-label" for="inLobbyChat">Message</label>
+              <input
+                type="text"
+                id="inLobbyChat"
+                class="lobby-chat-input lobby-chat-input--future"
+                maxlength="500"
+                placeholder="Write something to the room…"
+                autocomplete="off"
+              />
+              <button type="button" id="btnLobbyChatSend" class="btn primary lobby-chat-send lobby-chat-send--future">
+                Send
+              </button>
+            </div>
+          </section>
+
+          <section class="room-card room-card--watch watch-share panel-elevated" aria-labelledby="room-watch-title">
+            <header class="watch-share-header">
+              <div class="watch-share-accent" aria-hidden="true"></div>
+              <div class="watch-share-intro">
+                <h3 id="room-watch-title" class="watch-share-title">Same show for everyone</h3>
+                <p class="watch-share-lead muted">Paste the URL from the episode or movie page in your streaming app. Each person opens it with their own account—PlayShare syncs the room; it doesn’t play video.</p>
+              </div>
+            </header>
+
+            <ol class="watch-share-steps" aria-label="Steps">
+              <li class="watch-share-step"><span class="watch-share-step-badge">1</span><span class="watch-share-step-label">Where you’re watching</span></li>
+              <li class="watch-share-step"><span class="watch-share-step-badge">2</span><span class="watch-share-step-label">Quick note</span></li>
+              <li class="watch-share-step"><span class="watch-share-step-badge">3</span><span class="watch-share-step-label">Share link</span></li>
+            </ol>
+
+            <div class="watch-share-form-shell">
+              <div class="watch-share-fields">
+                <label class="field watch-field"><span class="watch-field-label">Streaming service</span>
+                  <select id="selProvider" class="watch-select">
+                    <option value="">Select…</option>
+                    <option value="netflix">Netflix</option>
+                    <option value="primevideo">Prime Video</option>
+                    <option value="disneyplus">Disney+</option>
+                    <option value="hulu">Hulu</option>
+                    <option value="youtube">YouTube</option>
+                    <option value="max">Max</option>
+                    <option value="paramount">Paramount+</option>
+                    <option value="apple">Apple TV+</option>
+                    <option value="other">Other</option>
+                  </select>
+                </label>
+                <label class="field watch-field"><span class="watch-field-label">Episode or title note <span class="field-opt">optional</span></span><input type="text" id="inTitleNote" class="watch-input" maxlength="200" placeholder="Helps everyone match the same episode" autocomplete="off" /></label>
+                <label class="field watch-field watch-field--link"><span class="watch-field-label">Page link</span><input type="url" id="inWatchUrl" class="watch-input watch-input--url" placeholder="https://…" spellcheck="false" autocomplete="off" /></label>
+              </div>
+            </div>
+
+            <footer class="watch-share-footer">
+              <button type="button" id="btnSaveWatch" class="btn watch-foot-save">Save details</button>
+              <div class="watch-share-cta-row">
+                <button type="button" id="btnCopyDeep" class="btn primary watch-cta-primary" disabled>Copy invite link</button>
+                <button type="button" id="btnOpenWatch" class="btn watch-cta-secondary" disabled>Open in browser</button>
+                <button type="button" id="btnAnnounce" class="btn btn-soft watch-cta-soft" disabled>Tell chat</button>
+              </div>
+            </footer>
+          </section>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script src="./bundle.js"></script>
+</body>
+</html>
