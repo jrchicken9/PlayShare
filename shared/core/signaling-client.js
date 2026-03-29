@@ -27,5 +27,7 @@ export const PlayShareSignalingClientType = Object.freeze({
   DIAG_PROFILER_COLLECTION: 'DIAG_PROFILER_COLLECTION',
   DIAG_PEER_RECORDING_SAMPLE: 'DIAG_PEER_RECORDING_SAMPLE',
   CHAT: 'CHAT',
+  /** Share a TMDB title from Discover with everyone in the room (desktop lobby). */
+  TITLE_SUGGEST: 'TITLE_SUGGEST',
   REACTION: 'REACTION'
 });

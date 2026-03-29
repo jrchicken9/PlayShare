@@ -1630,6 +1630,38 @@ wss.on('connection', (ws) => {
         break;
       }
 
+      case 'TITLE_SUGGEST': {
+        if (!client.roomCode) return;
+        const title = (msg.title || '').trim().slice(0, 200);
+        if (!title) return;
+        const media = msg.media === 'movie' || msg.media === 'tv' ? msg.media : null;
+        if (!media) return;
+        const rawId = msg.tmdbId;
+        const tmdbId =
+          typeof rawId === 'number' && Number.isFinite(rawId)
+            ? rawId
+            : parseInt(String(rawId || ''), 10);
+        if (!Number.isFinite(tmdbId) || tmdbId <= 0) return;
+        let posterUrl = typeof msg.posterUrl === 'string' ? msg.posterUrl.trim().slice(0, 500) : '';
+        if (posterUrl && !/^https:\/\//i.test(posterUrl)) posterUrl = '';
+        const overview = (msg.overview || '').replace(/\s+/g, ' ').trim().slice(0, 280);
+        const year = (msg.year != null ? String(msg.year) : '').replace(/[^\d]/g, '').slice(0, 4);
+        broadcastAll(client.roomCode, {
+          type: 'TITLE_SUGGEST',
+          clientId,
+          username: client.username,
+          color: client.color,
+          title,
+          media,
+          tmdbId,
+          overview,
+          posterUrl: posterUrl || null,
+          year: year || null,
+          timestamp: Date.now()
+        });
+        break;
+      }
+
       // ── Reactions ────────────────────────────────────────────────────────
       case 'REACTION': {
         if (!client.roomCode) return;

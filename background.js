@@ -439,6 +439,7 @@ function handleServerMessage(msg) {
 
     case 'CHAT':
     case 'REACTION':
+    case 'TITLE_SUGGEST':
       broadcastToTabs(msg);
       break;
 
