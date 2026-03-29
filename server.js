@@ -20,6 +20,7 @@ const { v4: uuidv4 } = require('uuid');
 const { handleDiagUpload, getSupabaseAdmin } = require('./platform/server/diag-upload');
 const { handleDiagIntel } = require('./platform/server/diag-intel-http');
 const { startDiagAiWorkerLoop } = require('./platform/server/diag-ai-worker');
+const { getSpotlightTvWeek } = require('./platform/server/tmdb-catalog');
 
 const rawPort = String(process.env.PORT ?? '').trim();
 const parsedPort = Number.parseInt(rawPort, 10);
@@ -707,6 +708,20 @@ function readExtensionZipVersion() {
   }
 }
 
+function catalogCorsHeaders() {
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Max-Age': '86400'
+  };
+}
+
+function tmdbApiKeyFromEnv() {
+  const k = process.env.TMDB_API_KEY || process.env.PLAYSHARE_TMDB_API_KEY;
+  return k && String(k).trim() ? String(k).trim() : '';
+}
+
 function renderHomepageHtml() {
   if (!homepageTemplate) return null;
   const storeUrl = String(process.env.PLAYSHARE_CHROME_STORE_URL || '').trim();
@@ -974,6 +989,46 @@ function openSite(u){window.open(u,'_blank');}
   ) {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end(req.method === 'HEAD' ? undefined : 'PlayShare signaling OK\n');
+    return;
+  }
+  // TMDB proxy: desktop / web clients fetch catalog here (key never shipped to browsers).
+  if (url.pathname === '/api/catalog/spotlight' || url.pathname === '/api/catalog/spotlight/') {
+    const headers = { 'Content-Type': 'application/json; charset=utf-8', ...catalogCorsHeaders() };
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, headers);
+      res.end();
+      return;
+    }
+    if (req.method !== 'GET') {
+      res.writeHead(405, headers);
+      res.end(JSON.stringify({ ok: false, error: 'method_not_allowed' }));
+      return;
+    }
+    const apiKey = tmdbApiKeyFromEnv();
+    if (!apiKey) {
+      res.writeHead(503, headers);
+      res.end(
+        JSON.stringify({
+          ok: false,
+          error: 'tmdb_not_configured',
+          message: 'Set TMDB_API_KEY (or PLAYSHARE_TMDB_API_KEY) on the server.'
+        })
+      );
+      return;
+    }
+    getSpotlightTvWeek(apiKey)
+      .then((payload) => {
+        res.writeHead(200, {
+          ...headers,
+          'Cache-Control': 'public, max-age=300'
+        });
+        res.end(JSON.stringify({ ok: true, ...payload }));
+      })
+      .catch((e) => {
+        console.error('[PlayShare/api/catalog/spotlight]', e && e.message ? e.message : e);
+        res.writeHead(502, headers);
+        res.end(JSON.stringify({ ok: false, error: 'tmdb_upstream' }));
+      });
     return;
   }
   res.writeHead(404);
