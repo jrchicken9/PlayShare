@@ -8,32 +8,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/site-shell.css" />
   <style>
-    :root {
-      --bg: #030303;
-      --bg-card: #0a0a0a;
-      --bg-elevated: #141414;
-      --bg-row: #0e0e0e;
-      --border: rgba(255, 255, 255, 0.08);
-      --border-glow: rgba(78, 205, 196, 0.2);
-      --text: #ececec;
-      --text-muted: #949494;
-      --accent: #e50914;
-      --accent-hover: #ff1a26;
-      --accent-glow: rgba(229, 9, 20, 0.42);
-      --teal: #4ecdc4;
-      --teal-dim: rgba(78, 205, 196, 0.14);
-      --radius: 18px;
-      --radius-sm: 12px;
-      --nav-h: 64px;
-      --max: 78rem;
-      --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-    }
-    *, *::before, *::after { box-sizing: border-box; }
-    html {
-      color-scheme: dark;
-      scroll-behavior: smooth;
-    }
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
       .feature-card, .btn-install, .btn-secondary, .btn-secondary.is-pending:hover { transition: none !important; }
@@ -54,124 +30,9 @@
       .hero-spotlight-marquee,
       .hero-spotlight-badge::before { animation: none !important; }
     }
-    body {
-      margin: 0;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      font-size: 16px;
-      line-height: 1.6;
-      color: var(--text);
-      background: var(--bg);
-      -webkit-font-smoothing: antialiased;
-    }
-    body::before {
-      content: "";
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      z-index: 0;
-      background:
-        /* Softer above-the-fold wash — peak sits a bit lower so the nav isn’t drowning in red */
-        radial-gradient(ellipse 120% 75% at 50% 4%, rgba(229, 9, 20, 0.17) 0%, rgba(229, 9, 20, 0.04) 38%, transparent 55%),
-        radial-gradient(ellipse 90% 60% at 95% 14%, rgba(229, 9, 20, 0.09) 0%, transparent 46%),
-        radial-gradient(ellipse 75% 55% at 5% 28%, rgba(229, 9, 20, 0.11) 0%, transparent 46%),
-        /* Slightly richer toward the bottom so scrolling feels balanced */
-        radial-gradient(ellipse 115% 72% at 50% 108%, rgba(229, 9, 20, 0.17) 0%, rgba(229, 9, 20, 0.05) 45%, transparent 58%),
-        radial-gradient(ellipse 85% 55% at 100% 12%, rgba(78, 205, 196, 0.07) 0%, transparent 45%);
-    }
-    #main, .nav, footer { position: relative; z-index: 1; }
+    /* Body background + mesh: /site-shell.css (matches desktop app) */
     a { color: var(--teal); text-decoration: none; font-weight: 500; }
     a:hover { text-decoration: underline; color: #7ee8de; }
-    .skip {
-      position: absolute;
-      left: -9999px;
-      top: auto;
-      width: 1px;
-      height: 1px;
-      overflow: hidden;
-    }
-    .skip:focus {
-      position: fixed;
-      left: 12px;
-      top: 12px;
-      width: auto;
-      height: auto;
-      padding: 10px 16px;
-      background: var(--accent);
-      color: #fff;
-      z-index: 300;
-      border-radius: 8px;
-      outline: none;
-    }
-    /* Nav — streaming bar */
-    .nav {
-      position: sticky;
-      top: 0;
-      z-index: 100;
-      min-height: var(--nav-h);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0.65rem 1.25rem;
-      max-width: var(--max);
-      margin: 0 auto;
-      border-bottom: 1px solid var(--border);
-      background: rgba(3, 3, 3, 0.78);
-      backdrop-filter: blur(16px) saturate(1.2);
-      -webkit-backdrop-filter: blur(16px) saturate(1.2);
-    }
-    @media (min-width: 768px) {
-      .nav { padding: 0.65rem 2rem; }
-    }
-    .nav-brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      color: inherit;
-      text-decoration: none;
-      font-weight: 700;
-      letter-spacing: -0.03em;
-      font-size: 1.05rem;
-    }
-    .nav-brand:hover { text-decoration: none; color: #fff; }
-    .nav-brand img {
-      width: 38px;
-      height: 38px;
-      border-radius: 11px;
-      object-fit: contain;
-      box-shadow: 0 0 20px rgba(78, 205, 196, 0.12);
-    }
-    .nav-brand .play { color: rgba(255, 255, 255, 0.96); }
-    .nav-brand .share {
-      margin-left: 2px;
-      background: linear-gradient(100deg, #ff6a6a 0%, #e50914 45%, #c40812 100%);
-      -webkit-background-clip: text;
-      background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-    @supports not ((-webkit-background-clip: text) or (background-clip: text)) {
-      .nav-brand .share { -webkit-text-fill-color: unset; color: var(--accent); background: none; }
-    }
-    .nav-links {
-      display: flex;
-      align-items: center;
-      gap: 0.35rem 1rem;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-    }
-    .nav-links a:not(.btn-install) {
-      color: var(--text-muted);
-      font-size: 0.875rem;
-      font-weight: 500;
-      text-decoration: none;
-    }
-    .nav-links a:not(.btn-install):hover { color: #fff; text-decoration: none; }
-    .nav-links a.nav-account {
-      color: var(--text-muted);
-      font-size: 0.875rem;
-      font-weight: 500;
-      text-decoration: none;
-    }
-    .nav-links a.nav-account:hover { color: #fff; text-decoration: none; }
     .btn-install {
       display: inline-flex;
       align-items: center;
@@ -1245,18 +1106,57 @@
 </head>
 <body{{BODY_ATTRS}}>
   {{HOME_SUPABASE_BOOT}}
+  <div class="app-bg-brand" aria-hidden="true">
+    <div class="app-bg-brand__fire-stack">
+      <div class="app-bg-brand__flame-bed" aria-hidden="true"></div>
+      <div class="app-bg-brand__heat-wisps" aria-hidden="true">
+        <div class="app-bg-brand__wisp app-bg-brand__wisp--left"></div>
+        <div class="app-bg-brand__wisp app-bg-brand__wisp--center"></div>
+        <div class="app-bg-brand__wisp app-bg-brand__wisp--right"></div>
+      </div>
+    </div>
+    <div class="app-bg-brand__pulse">
+      <svg class="app-bg-brand__svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none" focusable="false" aria-hidden="true">
+        <defs>
+          <linearGradient id="psSiteBgFace" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#282828" /><stop offset="55%" stop-color="#121212" /><stop offset="100%" stop-color="#0a0a0a" />
+          </linearGradient>
+          <linearGradient id="psSiteBgAccent" x1="0%" y1="100%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#ff5c5c" /><stop offset="45%" stop-color="#E50914" /><stop offset="100%" stop-color="#9e0610" />
+          </linearGradient>
+          <linearGradient id="psSiteBgSheen" x1="50%" y1="0%" x2="50%" y2="65%">
+            <stop offset="0%" stop-color="rgba(255,255,255,0.2)" /><stop offset="55%" stop-color="rgba(255,255,255,0.02)" /><stop offset="100%" stop-color="rgba(255,255,255,0)" />
+          </linearGradient>
+        </defs>
+        <rect x="2" y="2" width="36" height="36" rx="10" fill="url(#psSiteBgFace)" />
+        <rect x="2" y="2" width="36" height="36" rx="10" fill="url(#psSiteBgSheen)" opacity="0.55" />
+        <rect x="2" y="2" width="36" height="36" rx="10" stroke="rgba(255,255,255,0.09)" stroke-width="1" />
+        <rect x="2.5" y="2.5" width="35" height="35" rx="9.5" stroke="url(#psSiteBgAccent)" stroke-width="0.85" opacity="0.5" />
+        <path transform="translate(0.35 2.62)" fill="url(#psSiteBgAccent)" d="M15.5 12.25C15.5 11.56 16.22 11.1 16.85 11.42L26.2 16.67C26.78 16.97 26.78 17.8 26.2 18.1L16.85 23.35C16.22 23.67 15.5 23.21 15.5 22.52V12.25Z" />
+        <circle cx="30" cy="10" r="4" fill="#0a0a0a" stroke="#4ECDC4" stroke-width="1.2" />
+        <circle cx="30" cy="10" r="1.6" fill="#4ECDC4" opacity="0.95" />
+      </svg>
+    </div>
+  </div>
+  <div class="site-content">
   <a class="skip" href="#main">Skip to content</a>
-  <header class="nav">
-    <a class="nav-brand" href="/">
-      <img src="/brand-mark.png" width="36" height="36" alt="" decoding="async" onerror="this.style.display='none'" />
-      <span><span class="play">Play</span><span class="share">Share</span></span>
-    </a>
-    <nav class="nav-links" aria-label="Primary">
-      <a href="#platforms">Platforms</a>
-      <a href="#how-it-works">How it works</a>
-      <a href="/privacy">Privacy Policy</a>
-      <a class="nav-account" href="/dashboard" id="navAccountLink"><span class="nav-account-label">Sign in</span></a>
-      <a class="btn-install" href="#get-extension">Get extension</a>
+  <header class="site-top" role="banner">
+    <div class="site-top-brand">
+      <a class="site-brand-hit" href="/">
+        <img class="site-brand-mark" src="/brand-mark.png" width="36" height="36" alt="" decoding="async" onerror="this.style.display='none'" />
+        <div class="site-brand-text">
+          <div class="site-brand-name" translate="no"><span class="brand-play">Play</span><span class="brand-share">Share</span></div>
+          <span class="site-brand-tagline">Same scene · Same second</span>
+        </div>
+      </a>
+    </div>
+    <nav class="site-top-links" aria-label="Primary">
+      <a class="site-nav-link" href="/" aria-current="page">Home</a>
+      <a class="site-nav-link" href="/#platforms">Platforms</a>
+      <a class="site-nav-link" href="/#how-it-works">How it works</a>
+      <a class="site-nav-link" href="/privacy">Privacy</a>
+      <a class="site-nav-link nav-account" href="/dashboard" id="navAccountLink"><span class="nav-account-label">Sign in</span></a>
+      <a class="site-nav-link btn-install" href="#get-extension">Get extension</a>
     </nav>
   </header>
 
@@ -1447,6 +1347,7 @@
     <div class="footer-col">
       <h4>Resources</h4>
       <ul>
+        <li><a href="/dashboard">Dashboard</a></li>
         <li><a href="/privacy">Privacy Policy</a></li>
         <li><a href="/join">Join helper</a></li>
       </ul>
@@ -1459,6 +1360,7 @@
     </div>
     <p class="footer-copy">© 2026 PlayShare · Independent project; not affiliated with Netflix, YouTube, Prime Video, Disney+, or other listed brands.</p>
   </footer>
+  </div>
 
   <script>
     (function () {

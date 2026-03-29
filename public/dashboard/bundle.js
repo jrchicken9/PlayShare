@@ -22306,7 +22306,19 @@ ${suffix}`;
       render();
     }
   }
+  function injectWebSiteNav() {
+    const api = window.playshareDesktop;
+    if (!api || api.platform !== "web") return;
+    const actions = document.querySelector(".top-actions");
+    if (!actions || actions.querySelector(".top-site-pages")) return;
+    const nav = document.createElement("nav");
+    nav.className = "top-site-pages";
+    nav.setAttribute("aria-label", "Site pages");
+    nav.innerHTML = '<a class="top-site-link" href="/">Home</a><span class="top-site-sep" aria-hidden="true">·</span><a class="top-site-link" href="/privacy">Privacy</a><span class="top-site-sep" aria-hidden="true">·</span><a class="top-site-link" href="/#get-extension">Extension</a>';
+    actions.insertBefore(nav, actions.firstChild);
+  }
   document.addEventListener("DOMContentLoaded", async () => {
+    injectWebSiteNav();
     wireAuthTabs();
     setAuthMode("signin");
     wireAuthForms();

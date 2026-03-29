@@ -906,6 +906,21 @@ const httpServer = http.createServer((req, res) => {
       return;
     }
   }
+  if (url.pathname === '/site-shell.css' && (req.method === 'GET' || req.method === 'HEAD')) {
+    const cssPath = path.join(__dirname, 'public', 'site-shell.css');
+    try {
+      const buf = fs.readFileSync(cssPath, 'utf8');
+      res.writeHead(200, {
+        'Content-Type': 'text/css; charset=utf-8',
+        'Cache-Control': 'public, max-age=600'
+      });
+      res.end(req.method === 'HEAD' ? undefined : buf);
+    } catch {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(req.method === 'HEAD' ? undefined : 'site-shell.css missing\n');
+    }
+    return;
+  }
   if (url.pathname === '/brand-mark.png' && req.method === 'GET') {
     const pngPath = path.join(__dirname, 'public', 'brand-mark.png');
     try {

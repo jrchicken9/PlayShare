@@ -8,39 +8,23 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/site-shell.css" />
   <style>
     :root {
-      --bg-outer: #030303;
-      --bg-base: #0a0a0a;
-      --bg-surface: #121212;
-      --bg-raised: #1a1a1a;
-      --border: rgba(255, 255, 255, 0.08);
-      --border-strong: rgba(255, 255, 255, 0.12);
-      --text-pri: #ececec;
+      --text-pri: var(--text);
       --text-body: rgba(236, 236, 236, 0.94);
       --text-sec: #a8a8a8;
-      --text-muted: #7a7a7a;
-      --accent: #e50914;
+      --bg-base: var(--bg-card);
+      --bg-surface: #121212;
+      --bg-raised: #1a1a1a;
+      --border-strong: rgba(255, 255, 255, 0.12);
       --accent-soft: rgba(229, 9, 20, 0.12);
-      --teal: #4ecdc4;
-      --teal-dim: rgba(78, 205, 196, 0.14);
-      --radius: 18px;
-      --radius-sm: 12px;
       --prose-width: 42rem;
     }
     * { box-sizing: border-box; }
     html {
-      color-scheme: dark;
       font-size: 16px;
       -webkit-text-size-adjust: 100%;
-      background: var(--bg-outer);
-      background-image:
-        radial-gradient(120% 90% at 50% 0%, rgba(229, 9, 20, 0.07) 0%, transparent 55%),
-        radial-gradient(80% 50% at 100% 40%, rgba(78, 205, 196, 0.04) 0%, transparent 45%);
-      min-height: 100%;
-    }
-    @media (prefers-reduced-motion: no-preference) {
-      html { scroll-behavior: smooth; }
     }
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
@@ -49,24 +33,22 @@
       background: rgba(78, 205, 196, 0.28);
       color: #fff;
     }
-    body {
+    body.privacy-page {
       margin: 0;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       font-size: clamp(15px, 0.88rem + 0.35vw, 17px);
       line-height: 1.72;
       letter-spacing: 0.01em;
       font-feature-settings: "kern" 1, "liga" 1;
-      color: var(--text-pri);
-      -webkit-font-smoothing: antialiased;
-      min-height: 100%;
-      padding: 1.5rem 1rem 3.5rem;
     }
-    @media (min-width: 640px) {
-      body { padding: 2.5rem 1.5rem 4.5rem; }
-    }
-    .shell {
+    .privacy-page .site-content .shell {
+      padding: 0 1rem 3.5rem;
       max-width: min(var(--prose-width) + 4rem, calc(100vw - 2rem));
       margin: 0 auto;
+    }
+    @media (min-width: 640px) {
+      .privacy-page .site-content .shell {
+        padding: 0 1.5rem 4.5rem;
+      }
     }
     .card {
       border-radius: var(--radius);
@@ -384,27 +366,61 @@
     }
   </style>
 </head>
-<body>
-  <div class="shell">
-    <nav class="site-nav-top" aria-label="Site pages">
-      <a class="nav-home-btn" href="/">← Back to PlayShare home</a>
-    </nav>
-    <div class="card">
-      <header class="card-header">
-        <a class="card-header-home" href="/" aria-label="PlayShare — go to homepage">
-          <div class="brand-mark-wrap" aria-hidden="true">
-            <img src="/brand-mark.png" width="32" height="32" alt="" decoding="async" />
-          </div>
-          <div class="brand-text">
-            <div class="brand-name">
-              <span class="brand-play">Play</span><span class="brand-share">Share</span>
-            </div>
-            <div class="brand-sub">Privacy policy</div>
+<body class="privacy-page">
+  <div class="app-bg-brand" aria-hidden="true">
+    <div class="app-bg-brand__fire-stack">
+      <div class="app-bg-brand__flame-bed" aria-hidden="true"></div>
+      <div class="app-bg-brand__heat-wisps" aria-hidden="true">
+        <div class="app-bg-brand__wisp app-bg-brand__wisp--left"></div>
+        <div class="app-bg-brand__wisp app-bg-brand__wisp--center"></div>
+        <div class="app-bg-brand__wisp app-bg-brand__wisp--right"></div>
+      </div>
+    </div>
+    <div class="app-bg-brand__pulse">
+      <svg class="app-bg-brand__svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none" focusable="false" aria-hidden="true">
+        <defs>
+          <linearGradient id="psPrivacyBgFace" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#282828" /><stop offset="55%" stop-color="#121212" /><stop offset="100%" stop-color="#0a0a0a" />
+          </linearGradient>
+          <linearGradient id="psPrivacyBgAccent" x1="0%" y1="100%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#ff5c5c" /><stop offset="45%" stop-color="#E50914" /><stop offset="100%" stop-color="#9e0610" />
+          </linearGradient>
+          <linearGradient id="psPrivacyBgSheen" x1="50%" y1="0%" x2="50%" y2="65%">
+            <stop offset="0%" stop-color="rgba(255,255,255,0.2)" /><stop offset="55%" stop-color="rgba(255,255,255,0.02)" /><stop offset="100%" stop-color="rgba(255,255,255,0)" />
+          </linearGradient>
+        </defs>
+        <rect x="2" y="2" width="36" height="36" rx="10" fill="url(#psPrivacyBgFace)" />
+        <rect x="2" y="2" width="36" height="36" rx="10" fill="url(#psPrivacyBgSheen)" opacity="0.55" />
+        <rect x="2" y="2" width="36" height="36" rx="10" stroke="rgba(255,255,255,0.09)" stroke-width="1" />
+        <rect x="2.5" y="2.5" width="35" height="35" rx="9.5" stroke="url(#psPrivacyBgAccent)" stroke-width="0.85" opacity="0.5" />
+        <path transform="translate(0.35 2.62)" fill="url(#psPrivacyBgAccent)" d="M15.5 12.25C15.5 11.56 16.22 11.1 16.85 11.42L26.2 16.67C26.78 16.97 26.78 17.8 26.2 18.1L16.85 23.35C16.22 23.67 15.5 23.21 15.5 22.52V12.25Z" />
+        <circle cx="30" cy="10" r="4" fill="#0a0a0a" stroke="#4ECDC4" stroke-width="1.2" />
+        <circle cx="30" cy="10" r="1.6" fill="#4ECDC4" opacity="0.95" />
+      </svg>
+    </div>
+  </div>
+  <div class="site-content">
+    <a class="skip" href="#policy-main">Skip to policy</a>
+    <header class="site-top" role="banner">
+      <div class="site-top-brand">
+        <a class="site-brand-hit" href="/">
+          <img class="site-brand-mark" src="/brand-mark.png" width="36" height="36" alt="" decoding="async" />
+          <div class="site-brand-text">
+            <div class="site-brand-name" translate="no"><span class="brand-play">Play</span><span class="brand-share">Share</span></div>
+            <span class="site-brand-tagline">Privacy policy</span>
           </div>
         </a>
-      </header>
+      </div>
+      <nav class="site-top-links" aria-label="Primary">
+        <a class="site-nav-link" href="/">Home</a>
+        <a class="site-nav-link" href="/dashboard">Dashboard</a>
+        <a class="site-nav-link" href="/privacy" aria-current="page">Privacy</a>
+      </nav>
+    </header>
+    <div class="shell">
+    <div class="card">
       <div class="card-body">
-        <article class="policy-article">
+        <article class="policy-article" id="policy-main">
           <h1 class="policy-title">Privacy Policy</h1>
           <p class="effective"><strong>Last updated:</strong> March 22, 2026</p>
 
@@ -560,8 +576,9 @@
       </div>
     </div>
     <footer class="page-foot">
-      <a href="/">PlayShare homepage</a> · <span>Privacy Policy</span> · © 2026 Ibrahim Haddad
+      <a href="/">Home</a> · <a href="/dashboard">Dashboard</a> · <span aria-current="page">Privacy</span> · © 2026 Ibrahim Haddad
     </footer>
+    </div>
   </div>
 </body>
 </html>
